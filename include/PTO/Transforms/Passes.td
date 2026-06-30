@@ -913,4 +913,28 @@ def VPTOPtrCastCleanup
                            "mlir::memref::MemRefDialect"];
 }
 
+def PTOClassifyBuffers : Pass<"pto-classify-buffers", "ModuleOp"> {
+  let summary = "Tag each memref.alloc with a BMU planning class (S/D/H)";
+  let description = [{
+    First step of the BMU memory-planning pipeline (BMU design §4.5). On an
+    A5 module with `pto.uses_bmu = true`, annotates every local-memory
+    `memref.alloc` with `pto.plan_class` = "S" (static), "D" (dynamic) or
+    "H" (hybrid), and an `pto.h_group_id` for H allocs.
+
+    This phase implements rules 0–3: arch / uses_bmu gate, the explicit
+    `multi_tile_buf` placement (kStatic→S, kBmu→H), and the multi-buffer
+    `placement=auto` capacity decision (H when N×slot_size overflows the
+    scope's static quota, else S). Non-multi-buffer allocs default to S
+    (rules 4–8 are added in a later phase). On A2/A3 or when uses_bmu is
+    false, the pass is a no-op so the static path is unchanged.
+  }];
+
+  let constructor = "mlir::pto::createPTOClassifyBuffersPass()";
+
+  let dependentDialects = [
+    "mlir::pto::PTODialect",
+    "mlir::memref::MemRefDialect"
+  ];
+}
+
 #endif // MLIR_DIALECT_PTO_PASSES

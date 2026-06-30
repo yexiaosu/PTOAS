@@ -13,6 +13,7 @@
 // metadata through binding ops and SSA backtracking.
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOBmu.h"
 #include "PTO/IR/PTOMultiBuffer.h"
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
@@ -1933,6 +1934,25 @@ struct PTOViewToMemrefPass
         allocOp->setAttr(
             mlir::pto::kPtoMultiBufferAttrName,
             IntegerAttr::get(i32Ty, static_cast<int64_t>(mtbTy.getCount())));
+
+        // Propagate an explicit placement choice down to the memref level so
+        // pto-classify-buffers (which runs on memref.alloc) can honor a
+        // kStatic / kBmu request. kAuto is the default and is left implicit
+        // (no attribute) so non-BMU IR is byte-for-byte unchanged.
+        StringRef placementTok;
+        switch (mtbTy.getPlacement()) {
+        case mlir::pto::MultiBufPlacement::kAuto:
+          break;
+        case mlir::pto::MultiBufPlacement::kStatic:
+          placementTok = mlir::pto::kPtoMultiBufPlacementStatic;
+          break;
+        case mlir::pto::MultiBufPlacement::kBmu:
+          placementTok = mlir::pto::kPtoMultiBufPlacementBmu;
+          break;
+        }
+        if (!placementTok.empty())
+          allocOp->setAttr(mlir::pto::kPtoMultiBufPlacementAttrName,
+                           rewriter.getStringAttr(placementTok));
 
         auto bindOp = rewriter.create<pto::BindTileOp>(
             loc, targetType, allocOp.getResult(), vRow ? vRow : Value(),

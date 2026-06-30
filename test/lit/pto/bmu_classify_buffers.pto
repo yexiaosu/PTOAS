@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// pto-classify-buffers tags each multi-buffer alloc with pto.plan_class.
+// rule 1: explicit placement (static->S, bmu->H); rule 2/3: auto capacity
+// decision (small->S, overflow->H). H allocs also get an h_group_id.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-classify-buffers %s 2>&1 1>/dev/null | FileCheck %s
+// Without --pto-uses-bmu the pass is a no-op (no plan_class anywhere).
+// RUN: ptoas --pto-arch=a5 --mlir-print-ir-after=pto-classify-buffers %s 2>&1 1>/dev/null | FileCheck %s --check-prefix=NOBMU
+
+module {
+  // auto + small tile stays static.
+  func.func @auto_small() {
+    %c0 = arith.constant 0 : index
+    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+    %s = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    return
+  }
+  // CHECK: @auto_small
+  // CHECK: memref.alloc() {pto.multi_buffer = 2 : i32, pto.plan_class = "S"}
+
+  // explicit placement=bmu forces hybrid (H) + an h_group_id.
+  func.func @explicit_bmu() {
+    %c0 = arith.constant 0 : index
+    %mb = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %s = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    return
+  }
+  // CHECK: @explicit_bmu
+  // CHECK: memref.alloc() {pto.h_group_id = 0 : i32, {{.*}}pto.plan_class = "H"}
+
+  // auto + a tile pair that overflows UB capacity is promoted to hybrid (H).
+  func.func @auto_overflow() {
+    %c0 = arith.constant 0 : index
+    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 256x256xf32, count=2>
+    %s = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 256x256xf32, count=2>
+       -> !pto.tile_buf<vec, 256x256xf32>
+    return
+  }
+  // CHECK: @auto_overflow
+  // CHECK: pto.plan_class = "H"
+
+  // NOBMU-NOT: pto.plan_class
+}
