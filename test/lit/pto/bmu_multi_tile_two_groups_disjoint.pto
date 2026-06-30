@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Two independent A5 + BMU groups share the segment but get distinct
+// bmu_alloc bases. InsertSync must NOT introduce a dependency between the two
+// groups' independent loads (different SSA bases => disjoint, BMU design
+// §4.8(b)).
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s --check-prefix=LAYOUT
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync --mlir-print-ir-after=pto-insert-sync %s 2>&1 1>/dev/null | FileCheck %s --check-prefix=SYNC
+
+// Two distinct BMU allocations, one per group.
+// LAYOUT: %[[A:.*]] = pto.bmu_alloc <vec>
+// LAYOUT: %[[B:.*]] = pto.bmu_alloc <vec>
+
+// The two independent loads carry no set_flag/wait_flag between them.
+// SYNC-NOT: set_flag
+// SYNC-NOT: wait_flag
+
+module {
+  func.func @two_groups(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                        %gm1 : memref<16x16xf16, #pto.address_space<gm>>) {
+    %c0 = arith.constant 0 : index
+    %a = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %b = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %a0 = pto.multi_tile_get %a[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    %b0 = pto.multi_tile_get %b[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%a0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%gm1 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%b0 : !pto.tile_buf<vec, 16x16xf16>)
+    return
+  }
+}

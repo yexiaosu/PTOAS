@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// A5 + BMU double-buffer prefetch with a dynamic (iv % N) slot. The H path
+// materializes the BMU allocation and InsertSync still derives the prefetch
+// pipeline over the runtime slot.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync %s -o - 2>&1 | FileCheck %s
+
+// CHECK: mov_x2spr<BMU_SEGM_VEC>
+// CHECK: ubuf_alloc<PIPE_MTE2, 0>
+// CHECK: ubuf_free<PIPE_MTE2>
+
+module {
+  func.func @dyn_prefetch(%gm : memref<16x16xf16, #pto.address_space<gm>>,
+                          %n : index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %mb = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %pre = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%pre : !pto.tile_buf<vec, 16x16xf16>)
+    scf.for %i = %c0 to %n step %c1 {
+      %nx = arith.addi %i, %c1 : index
+      %cur = arith.remui %i, %c2 : index
+      %nxi = arith.remui %nx, %c2 : index
+      %sn = pto.multi_tile_get %mb[%nxi]
+          : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+         -> !pto.tile_buf<vec, 16x16xf16>
+      pto.tload ins(%gm : memref<16x16xf16, #pto.address_space<gm>>)
+                outs(%sn : !pto.tile_buf<vec, 16x16xf16>)
+      %sc = pto.multi_tile_get %mb[%cur]
+          : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+         -> !pto.tile_buf<vec, 16x16xf16>
+      pto.tadd ins(%sc, %sc : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+               outs(%sc : !pto.tile_buf<vec, 16x16xf16>)
+    }
+    return
+  }
+}

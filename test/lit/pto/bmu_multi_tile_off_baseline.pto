@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// A multi-buffer kernel goes through the static (S) path with no BMU ops on
+// a3, and on a5 when --pto-uses-bmu is not set. This guards the no-op
+// invariant of the classify / plan-bmu-layout passes.
+
+// RUN: ptoas --pto-arch=a3 --enable-insert-sync %s -o - 2>&1 | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --enable-insert-sync %s -o - 2>&1 | FileCheck %s
+
+// CHECK-NOT: ubuf_alloc
+// CHECK-NOT: ubuf_free
+// CHECK-NOT: mov_x2spr
+// CHECK: TASSIGN
+
+module {
+  func.func @off_baseline(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                          %gm1 : memref<16x16xf16, #pto.address_space<gm>>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+    %s0 = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    %s1 = pto.multi_tile_get %mb[%c1]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%gm1 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s1 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tadd ins(%s0, %s1 : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+             outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    return
+  }
+}
