@@ -937,4 +937,33 @@ def PTOClassifyBuffers : Pass<"pto-classify-buffers", "ModuleOp"> {
   ];
 }
 
+def PTOPlanBmuLayout : Pass<"pto-plan-bmu-layout", "ModuleOp"> {
+  let summary = "Carve BMU segments and materialize H allocs into BMU ops";
+  let description = [{
+    Second step of the BMU memory-planning pipeline (BMU design §4.6). Runs
+    after `pto-classify-buffers` and before `pto-plan-memory`. On an A5 module
+    with `pto.uses_bmu = true`:
+
+    - Stage 1 (scope carve-up): emits one `pto.bmu_config` per used buffer
+      kind at the kernel entry, sizing segment 0 to hold the concurrent H
+      demand.
+    - Stage 3 subpath (a): rewrites each `memref.alloc {pto.multi_buffer=N,
+      pto.plan_class="H"}` into `pto.bmu_alloc` (%base) + N `arith.addi
+      %base, offK` + a multi-address `pto.pointer_cast`, plus a matching
+      `pto.bmu_free` before each function return. `pto.slot_marker` ops are
+      left untouched.
+
+    Stage 2 (D class) and subpath (b) (general H groups) are added in a later
+    phase. On A2/A3 or when uses_bmu is false, the pass is a no-op.
+  }];
+
+  let constructor = "mlir::pto::createPTOPlanBmuLayoutPass()";
+
+  let dependentDialects = [
+    "mlir::pto::PTODialect",
+    "mlir::memref::MemRefDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
+
 #endif // MLIR_DIALECT_PTO_PASSES

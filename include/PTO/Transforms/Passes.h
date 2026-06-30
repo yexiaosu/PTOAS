@@ -77,6 +77,7 @@ std::unique_ptr<Pass> createPTOValidateIntToPtrUsesPass();
 std::unique_ptr<Pass> createPTOMaterializeTileHandlesPass();
 std::unique_ptr<Pass> createPTOResolveBufferSelectPass();
 std::unique_ptr<Pass> createPTOClassifyBuffersPass();
+std::unique_ptr<Pass> createPTOPlanBmuLayoutPass();
 std::unique_ptr<Pass> createInferPTOLayoutPass();
 std::unique_ptr<Pass> createPTOA5NormalizeTMovPass();
 std::unique_ptr<Pass> createPreFusionAnalysisPass();

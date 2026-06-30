@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// pto-plan-bmu-layout materializes an H-class multi-buffer alloc into a BMU
+// runtime allocation: one bmu_config at entry, a bmu_alloc base, an arith.addi
+// chain for the N slot offsets, a multi-address pointer_cast, and a bmu_free.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+module {
+  func.func @h_const(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                     %gm1 : memref<16x16xf16, #pto.address_space<gm>>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mb = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %s0 = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    %s1 = pto.multi_tile_get %mb[%c1]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%gm1 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s1 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tadd ins(%s0, %s1 : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+             outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    return
+  }
+}
+
+// One config at entry: 2 slots * 512B = 1024B <= 8KB slice -> 1 slice.
+// CHECK: pto.bmu_config <vec> tails = [1, 1, 1, 1]
+// CHECK: %[[BASE:.*]] = pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+// Slot offsets 0 and 512 (16x16xf16 = 512 bytes) added to the same base.
+// CHECK-DAG: %[[A0:.*]] = arith.addi %[[BASE]], %{{.*}} : i64
+// CHECK-DAG: %[[A1:.*]] = arith.addi %[[BASE]], %{{.*}} : i64
+// CHECK: pto.pointer_cast(%{{.*}}, %{{.*}})
+// The slot markers survive for downstream resolve/sync.
+// CHECK: pto.slot_marker
+// CHECK: pto.slot_marker
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>, base %[[BASE]], count %{{.*}} : i64, index

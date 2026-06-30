@@ -715,8 +715,16 @@ bool MemLivenessAnalysis::isSkippableOp(Operation *op) const {
   // still be exercised. The N-way physical fan-out lives on the
   // `pto.multi_buffer` attr of the underlying `memref.alloc` and is a
   // follow-up.
+  // BMU H-class allocs are materialized by `pto-plan-bmu-layout` (which runs
+  // before this pass) into `pto.bmu_alloc` + a multi-address `pto.pointer_cast`
+  // and freed with `pto.bmu_free`, configured by `pto.bmu_config`. Those
+  // buffers are already addressed by the hardware BMU, so the static planner
+  // must leave them alone. In the static (S) flow `pto.pointer_cast` is only
+  // created *after* this analysis, so skipping it here is a no-op for S.
   return isa<func::ReturnOp, scf::YieldOp, pto::YieldOp, memref::DimOp,
-             mlir::pto::SlotMarkerOp>(op);
+             mlir::pto::SlotMarkerOp, mlir::pto::PointerCastOp,
+             mlir::pto::BmuAllocOp, mlir::pto::BmuFreeOp,
+             mlir::pto::BmuConfigOp>(op);
 }
 
 LogicalResult

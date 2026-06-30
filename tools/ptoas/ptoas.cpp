@@ -1884,6 +1884,14 @@ int mlir::pto::compilePTOASModule(
 
   pm.addPass(pto::createPTOViewToMemrefPass());
 
+  // BMU memory planning (A5 + uses_bmu only; no-op otherwise): classify each
+  // alloc into S/D/H, then materialize H allocs into BMU ops before the static
+  // planner runs.
+  if (effectiveLevel != PTOBuildLevel::Level3) {
+    pm.addPass(pto::createPTOClassifyBuffersPass());
+    pm.addPass(pto::createPTOPlanBmuLayoutPass());
+  }
+
   if (effectiveLevel != PTOBuildLevel::Level3) {
     PlanMemoryOptions planMemoryOption;
     planMemoryOption.memMode = MemPlanMode::LOCAL_MEM_PLAN;

@@ -64,6 +64,7 @@ add_mlir_dialect_library(PTOTransforms
   PTOLowerFrontendPipeOpsPass.cpp
   PTOInferValidatePipeInitPass.cpp
   PTOClassifyBuffers.cpp
+  PTOPlanBmuLayout.cpp
   PTOResolveBufferSelect.cpp
   PTOResolveReservedBuffersPass.cpp
   SlotAffineAnalysis.cpp
