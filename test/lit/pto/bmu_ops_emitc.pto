@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// The three BMU ops lower to ccec intrinsics: mov_x2spr<BMU_SEGM_*> for the
+// segment config, <kind>buf_alloc / <kind>buf_free for the runtime
+// allocate/free, with the i64 address reinterpreted to/from the buffer-kind
+// pointer.
+
+// RUN: ptoas --pto-arch=a5 %s -o - 2>&1 | FileCheck %s
+
+module {
+  // UB (vec) maps to ubuf_alloc / ubuf_free.
+  func.func @bmu_vec() {
+    %n = arith.constant 4 : index
+    // CHECK-LABEL: void bmu_vec()
+    // CHECK: mov_x2spr<BMU_SEGM_VEC>(0x0c080804);
+    pto.bmu_config #pto.address_space<vec> tails = [4, 8, 8, 12]
+    // CHECK: __ubuf__ void * [[P:v[0-9]+]] = ubuf_alloc<PIPE_MTE2, 0>(
+    // CHECK: int64_t [[A:v[0-9]+]] = reinterpret_cast<uint64_t>([[P]]);
+    %base = pto.bmu_alloc #pto.address_space<vec>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
+        : index -> i64
+    // CHECK: __ubuf__ void * [[Q:v[0-9]+]] = reinterpret_cast<__ubuf__ void *>([[A]]);
+    // CHECK: ubuf_free<PIPE_MTE3>([[Q]]
+    pto.bmu_free #pto.address_space<vec>, #pto.pipe<PIPE_MTE3>, base %base, count %n
+        : i64, index
+    return
+  }
+
+  // L1 (mat) maps to cbuf_alloc / cbuf_free; segm index is threaded through.
+  func.func @bmu_mat() {
+    %n = arith.constant 2 : index
+    // CHECK-LABEL: void bmu_mat()
+    // CHECK: mov_x2spr<BMU_SEGM_MAT>(
+    pto.bmu_config #pto.address_space<mat> tails = [2, 4, 4, 4]
+    // CHECK: cbuf_alloc<PIPE_MTE2, 1>(
+    %base = pto.bmu_alloc #pto.address_space<mat>, #pto.pipe<PIPE_MTE2>, segm 1, count %n
+        : index -> i64
+    // CHECK: cbuf_free<PIPE_MTE1>(
+    pto.bmu_free #pto.address_space<mat>, #pto.pipe<PIPE_MTE1>, base %base, count %n
+        : i64, index
+    return
+  }
+}

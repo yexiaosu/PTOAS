@@ -47,6 +47,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"                   
@@ -6026,6 +6027,149 @@ struct PTORlsBufToEmitC : public OpConversionPattern<mlir::pto::RlsBufOp> {
         /*args=*/argsAttr,
         /*templateArgs=*/ArrayAttr{},
         /*operands=*/ValueRange{});
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// BMU runtime buffer management lowering (A5)
+//===----------------------------------------------------------------------===//
+// bmu_config -> mov_x2spr<BMU_SEGM_*>(packed tails)
+// bmu_alloc  -> reinterpret_cast<uint64_t>(<kind>buf_alloc<PIPE, segm>(count))
+// bmu_free   -> <kind>buf_free<PIPE>(reinterpret_cast<__kind__ void*>(base), n)
+
+// The intrinsic infix for a BMU buffer kind (ubuf_alloc / cbuf_alloc / ...).
+static StringRef bmuIntrinsicInfix(pto::AddressSpace as) {
+  switch (as) {
+  case pto::AddressSpace::VEC:
+    return "ubuf";
+  case pto::AddressSpace::MAT:
+    return "cbuf";
+  case pto::AddressSpace::LEFT:
+    return "ca";
+  case pto::AddressSpace::RIGHT:
+    return "cb";
+  case pto::AddressSpace::ACC:
+    return "cc";
+  case pto::AddressSpace::BIAS:
+    return "bt";
+  case pto::AddressSpace::SCALING:
+    return "fb";
+  default:
+    return "ubuf";
+  }
+}
+
+// The BMU_SEGM_* SPR token for a buffer kind, matching the address-space name.
+static std::string bmuSegmSprToken(pto::AddressSpace as) {
+  return ("BMU_SEGM_" + pto::stringifyAddressSpace(as).upper());
+}
+
+// The `__ubuf__ void *` style opaque pointer type for a buffer kind.
+static emitc::OpaqueType bmuVoidPtrType(MLIRContext *ctx,
+                                        pto::AddressSpace as) {
+  return emitc::OpaqueType::get(
+      ctx, (Twine(addrSpaceQualifier(as)) + " void *").str());
+}
+
+struct PTOBmuConfigToEmitC : public OpConversionPattern<mlir::pto::BmuConfigOp> {
+  using OpConversionPattern<mlir::pto::BmuConfigOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(mlir::pto::BmuConfigOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    (void)adaptor;
+    auto *ctx = rewriter.getContext();
+    pto::AddressSpace as = op.getBuffer().getAddressSpace();
+
+    // Pack the 4 segment tails one byte each (matches the tbuf demo's
+    // mov_x2spr<...>(0xNNNNNNNN) form).
+    auto byteOf = [](uint32_t v) { return v & 0xFFu; };
+    uint32_t packed = byteOf(op.getTailSeg0()) |
+                      (byteOf(op.getTailSeg1()) << 8) |
+                      (byteOf(op.getTailSeg2()) << 16) |
+                      (byteOf(op.getTailSeg3()) << 24);
+    std::string hex;
+    {
+      llvm::raw_string_ostream os(hex);
+      os << llvm::format_hex(packed, /*Width=*/10); // "0x" + 8 hex digits
+    }
+
+    auto templateArgs = rewriter.getArrayAttr(
+        {emitc::OpaqueAttr::get(ctx, bmuSegmSprToken(as))});
+    auto args =
+        rewriter.getArrayAttr({emitc::OpaqueAttr::get(ctx, hex)});
+
+    rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
+        op, TypeRange{}, "mov_x2spr", args, templateArgs, ValueRange{});
+    return success();
+  }
+};
+
+struct PTOBmuAllocToEmitC : public OpConversionPattern<mlir::pto::BmuAllocOp> {
+  using OpConversionPattern<mlir::pto::BmuAllocOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(mlir::pto::BmuAllocOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+    pto::AddressSpace as = op.getBuffer().getAddressSpace();
+
+    std::string callee = (bmuIntrinsicInfix(as) + Twine("_alloc")).str();
+    std::string pipeTok = pto::stringifyPIPE(op.getPipe().getPipe()).str();
+    // <kind>buf_alloc<PIPE, segm>(count)
+    auto templateArgs = rewriter.getArrayAttr(
+        {emitc::OpaqueAttr::get(ctx, pipeTok),
+         emitc::OpaqueAttr::get(ctx, std::to_string(op.getSegm()))});
+
+    auto ptrTy = bmuVoidPtrType(ctx, as);
+    auto allocPtr =
+        rewriter
+            .create<emitc::CallOpaqueOp>(loc, ptrTy, callee, ArrayAttr{},
+                                         templateArgs,
+                                         ValueRange{adaptor.getSliceCount()})
+            .getResult(0);
+
+    // The op result is an i64 address; reinterpret the returned pointer.
+    Type addrTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (!addrTy)
+      addrTy = rewriter.getI64Type();
+    auto castTy = rewriter.getArrayAttr(
+        {emitc::OpaqueAttr::get(ctx, "uint64_t")});
+    rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
+        op, addrTy, "reinterpret_cast", ArrayAttr{}, castTy,
+        ValueRange{allocPtr});
+    return success();
+  }
+};
+
+struct PTOBmuFreeToEmitC : public OpConversionPattern<mlir::pto::BmuFreeOp> {
+  using OpConversionPattern<mlir::pto::BmuFreeOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(mlir::pto::BmuFreeOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+    pto::AddressSpace as = op.getBuffer().getAddressSpace();
+
+    // Reinterpret the i64 base back into the buffer-kind pointer.
+    auto ptrTy = bmuVoidPtrType(ctx, as);
+    auto ptrCastTy = rewriter.getArrayAttr(
+        {emitc::OpaqueAttr::get(ctx, ptrTy.getValue())});
+    auto basePtr =
+        rewriter
+            .create<emitc::CallOpaqueOp>(loc, ptrTy, "reinterpret_cast",
+                                         ArrayAttr{}, ptrCastTy,
+                                         ValueRange{adaptor.getBaseAddr()})
+            .getResult(0);
+
+    std::string callee = (bmuIntrinsicInfix(as) + Twine("_free")).str();
+    std::string pipeTok = pto::stringifyPIPE(op.getPipe().getPipe()).str();
+    auto templateArgs = rewriter.getArrayAttr(
+        {emitc::OpaqueAttr::get(ctx, pipeTok)});
+
+    rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
+        op, TypeRange{}, callee, ArrayAttr{}, templateArgs,
+        ValueRange{basePtr, adaptor.getSliceCount()});
     return success();
   }
 };
@@ -13587,6 +13731,9 @@ static void populatePTOToEmitCPatterns(RewritePatternSet &patterns,
   patterns.add<PTOSyncAllToEmitC>(typeConverter, ctx);
   patterns.add<PTOGetBufToEmitC>(typeConverter, ctx);
   patterns.add<PTORlsBufToEmitC>(typeConverter, ctx);
+  patterns.add<PTOBmuConfigToEmitC>(typeConverter, ctx);
+  patterns.add<PTOBmuAllocToEmitC>(typeConverter, ctx);
+  patterns.add<PTOBmuFreeToEmitC>(typeConverter, ctx);
   patterns.add<PTOSetFFTsToEmitC>(typeConverter, ctx);
   patterns.add<PTOXORSToEmitC>(typeConverter, ctx);
   patterns.add<PTOSubSToEmitC>(typeConverter, ctx);
