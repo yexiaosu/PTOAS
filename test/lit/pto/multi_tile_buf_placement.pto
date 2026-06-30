@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// The optional multi_tile_buf `placement` field (auto|static|bmu) parses and
+// prints. The default (auto) is kept implicit so the common form stays compact.
+
+// RUN: ptoas --mlir-print-ir-before=pto-view-to-memref --pto-arch=a5 %s 2>&1 1>/dev/null | FileCheck %s
+
+module {
+  func.func @placement_forms() {
+    // CHECK: pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<vec, 16x16xf16>, count=2>
+    %auto = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+
+    // CHECK: pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<vec, 16x16xf16>, count=2, placement=static>
+    %static = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=static>
+
+    // CHECK: pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<vec, 16x16xf16>, count=2, placement=bmu>
+    %bmu = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    return
+  }
+}

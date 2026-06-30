@@ -255,7 +255,9 @@ def MultiTileBufType : TypeDef<PTO_Dialect, "MultiTileBuf"> {
 
   let parameters = (ins
     "mlir::pto::TileBufType":$slotType,
-    "uint32_t":$count
+    "uint32_t":$count,
+    DefaultValuedParameter<"::mlir::pto::MultiBufPlacement",
+                           "::mlir::pto::MultiBufPlacement::kAuto">:$placement
   );
 
   let hasCustomAssemblyFormat = 1;

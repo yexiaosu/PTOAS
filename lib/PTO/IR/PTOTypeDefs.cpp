@@ -715,7 +715,8 @@ void mlir::pto::TileBufType::print(mlir::AsmPrinter &printer) const {
 
 LogicalResult MultiTileBufType::verify(
     function_ref<InFlightDiagnostic()> emitError,
-    mlir::pto::TileBufType slotType, uint32_t count) {
+    mlir::pto::TileBufType slotType, uint32_t count,
+    mlir::pto::MultiBufPlacement placement) {
   if (!slotType) {
     return emitError() << "multi_tile_buf slot type must be non-null";
   }
@@ -727,10 +728,68 @@ LogicalResult MultiTileBufType::verify(
     return emitError() << "multi_tile_buf count must be <= "
                        << kPtoMultiBufferMaxNum << " (got " << count << ")";
   }
+  switch (placement) {
+  case mlir::pto::MultiBufPlacement::kAuto:
+  case mlir::pto::MultiBufPlacement::kStatic:
+  case mlir::pto::MultiBufPlacement::kBmu:
+    break;
+  }
   return success();
 }
 
 namespace {
+// Map a `MultiBufPlacement` to/from its IR keyword.
+static StringRef multiBufPlacementToKeyword(mlir::pto::MultiBufPlacement p) {
+  switch (p) {
+  case mlir::pto::MultiBufPlacement::kAuto:
+    return "auto";
+  case mlir::pto::MultiBufPlacement::kStatic:
+    return "static";
+  case mlir::pto::MultiBufPlacement::kBmu:
+    return "bmu";
+  }
+  return "auto";
+}
+
+static std::optional<mlir::pto::MultiBufPlacement>
+multiBufPlacementFromKeyword(StringRef kw) {
+  if (kw == "auto")
+    return mlir::pto::MultiBufPlacement::kAuto;
+  if (kw == "static")
+    return mlir::pto::MultiBufPlacement::kStatic;
+  if (kw == "bmu")
+    return mlir::pto::MultiBufPlacement::kBmu;
+  return std::nullopt;
+}
+
+// Parse an optional trailing `, placement = <auto|static|bmu>` clause. Absence
+// leaves `placement` at its default (kAuto). The caller has already consumed
+// the `, count=N` clause; the cursor sits just before `>` or the placement
+// comma.
+static LogicalResult
+parseOptionalMultiBufPlacement(AsmParser &parser,
+                               mlir::pto::MultiBufPlacement &placement) {
+  placement = mlir::pto::MultiBufPlacement::kAuto;
+  if (failed(parser.parseOptionalComma()))
+    return success(); // no placement clause
+  if (failed(parser.parseKeyword("placement")) || failed(parser.parseEqual()))
+    return failure();
+  StringRef kw;
+  auto loc = parser.getCurrentLocation();
+  if (failed(parser.parseKeyword(&kw)))
+    return failure();
+  auto parsed = multiBufPlacementFromKeyword(kw);
+  if (!parsed) {
+    parser.emitError(loc,
+                     "invalid multi_tile_buf placement, expected one of "
+                     "auto|static|bmu, got: ")
+        << kw;
+    return failure();
+  }
+  placement = *parsed;
+  return success();
+}
+
 // Parse a trailing `, count = N` clause. The caller has already parsed the
 // per-slot tile_buf description; we must now consume the count and the
 // closing `>`.
@@ -795,16 +854,24 @@ Type MultiTileBufType::parse(AsmParser &parser) {
       return Type();
   }
 
+  mlir::pto::MultiBufPlacement placement = mlir::pto::MultiBufPlacement::kAuto;
+  if (failed(parseOptionalMultiBufPlacement(parser, placement)))
+    return Type();
+
   if (failed(parser.parseGreater()))
     return Type();
 
   return getChecked(
       [&]() { return parser.emitError(parser.getNameLoc()); }, ctx, slotType,
-      count);
+      count, placement);
 }
 
 void MultiTileBufType::print(AsmPrinter &printer) const {
   printer << "<";
   printer.printType(getSlotType());
-  printer << ", count=" << getCount() << ">";
+  printer << ", count=" << getCount();
+  // Keep the default placement implicit so the common form stays compact.
+  if (getPlacement() != mlir::pto::MultiBufPlacement::kAuto)
+    printer << ", placement=" << multiBufPlacementToKeyword(getPlacement());
+  printer << ">";
 }

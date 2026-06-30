@@ -2912,6 +2912,17 @@ LogicalResult AllocMultiTileOp::verify() {
                          << kPtoMultiBufferMaxNum << "] (got " << count << ")";
   }
 
+  // The BMU placement (kBmu) forces the A5 BMU dynamic-shell layout, which has
+  // no meaning on A2/A3. Reject it there (the type carries no arch context, so
+  // the check lives on the op that has a module). Use the verifier arch helper
+  // because this verifier also runs at parse time, before the pto.target_arch
+  // module attribute is attached.
+  if (mtbTy.getPlacement() == MultiBufPlacement::kBmu &&
+      getVerifierTargetArch(getOperation()) != VerifierTargetArch::A5) {
+    return emitOpError()
+           << "multi_tile_buf placement=bmu requires --pto-arch=a5";
+  }
+
   return success();
 }
 

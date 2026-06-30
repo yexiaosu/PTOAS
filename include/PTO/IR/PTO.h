@@ -60,6 +60,21 @@
 // PTO Types
 //===----------------------------------------------------------------------===//
 
+namespace mlir {
+namespace pto {
+/// Placement policy carried by a `!pto.multi_tile_buf` type. Selects how the
+/// N slots are physically placed (see BMU-integration-design §4.4):
+///   * kAuto   - the buffer classifier decides S vs H (default).
+///   * kStatic - force the static N-way layout (S mode).
+///   * kBmu    - force the BMU dynamic-shell layout (H mode); A5 only.
+enum class MultiBufPlacement : uint32_t {
+  kAuto = 0,
+  kStatic = 1,
+  kBmu = 2,
+};
+} // namespace pto
+} // namespace mlir
+
 #define GET_TYPEDEF_CLASSES
 #include "PTO/IR/PTOTypeDefs.h.inc"
 
