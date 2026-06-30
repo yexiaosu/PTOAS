@@ -97,8 +97,16 @@ struct BaseMemInfo {
   
   pto::AddressSpace scope;
   SmallVector<uint64_t> baseAddresses; // 用于 Offset 分析
+  /// Parallel to `baseAddresses` (same length when non-empty). `baseSSAs[i]`
+  /// is the SSA base that `baseAddresses[i]` is an offset from — used by the
+  /// BMU H path, where a multi-address `pto.pointer_cast` operand is
+  /// `arith.addi %base, constK` instead of an absolute constant. A null entry
+  /// (or an empty vector) means `baseAddresses[i]` is an absolute constant
+  /// address (the static / S path), so legacy behavior is preserved when this
+  /// stays empty. See BMU design §4.8(b).
+  SmallVector<Value> baseSSAs;
   uint64_t allocateSize;
- 
+
   bool areVectorEqual(const SmallVector<uint64_t>& vec1,
                       const SmallVector<uint64_t>& vec2) const {
     if (vec1.size() != vec2.size()) return false;
@@ -107,9 +115,24 @@ struct BaseMemInfo {
     }
     return true;
   }
- 
+
+  bool areSSAVectorEqual(const SmallVector<Value> &vec1,
+                         const SmallVector<Value> &vec2) const {
+    if (vec1.size() != vec2.size()) return false;
+    for (size_t i = 0; i < vec1.size(); ++i) {
+      if (vec1[i] != vec2[i]) return false;
+    }
+    return true;
+  }
+
+  /// SSA base paired with `baseAddresses[i]`, or null when absolute.
+  Value baseSSAAt(size_t i) const {
+    return i < baseSSAs.size() ? baseSSAs[i] : Value();
+  }
+
   bool operator==(const BaseMemInfo &other) const {
     if (!areVectorEqual(baseAddresses, other.baseAddresses)) return false;
+    if (!areSSAVectorEqual(baseSSAs, other.baseSSAs)) return false;
     if (rootBuffer != other.rootBuffer) return false;
     if (scope != other.scope) return false;
     // allocateSize 和 baseBuffer 的严格相等性在某些别名分析中可能太强了，
@@ -118,15 +141,19 @@ struct BaseMemInfo {
     if (baseBuffer != other.baseBuffer) return false;
     return true;
   }
- 
+
   std::unique_ptr<BaseMemInfo> clone() const {
-    return std::make_unique<BaseMemInfo>(
+    auto c = std::make_unique<BaseMemInfo>(
         baseBuffer, rootBuffer, scope, baseAddresses, allocateSize);
+    c->baseSSAs = baseSSAs;
+    return c;
   }
- 
+
   std::unique_ptr<BaseMemInfo> clone(Value cloneBaseBuffer) const {
-    return std::make_unique<BaseMemInfo>(
+    auto c = std::make_unique<BaseMemInfo>(
         cloneBaseBuffer, rootBuffer, scope, baseAddresses, allocateSize);
+    c->baseSSAs = baseSSAs;
+    return c;
   }
 };
  

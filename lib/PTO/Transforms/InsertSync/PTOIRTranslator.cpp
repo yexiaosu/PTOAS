@@ -551,32 +551,64 @@ LogicalResult PTOIRTranslator::UpdatePointerCastOpMemInfo(pto::PointerCastOp op)
 
   // Multi-address (multi-buffer) cast. Use the cast result as `rootBuffer`
   // so every downstream `pto.slot_marker` from the same alloc shares one
-  // root, and populate `baseAddresses` with each slot's physical offset
-  // (extracted from the constant i64 operands emitted by
-  // AllocToPointerCast). `pto.slot_marker` then narrows or keeps these
-  // offsets according to its slot SSA; MemAlias's existing
-  // `isBufferAddressRangeOverlap` does the per-slot disambiguation.
+  // root, and populate `baseAddresses` with each slot's physical offset.
+  //
+  // Two operand forms are recognized per slot:
+  //   * `arith.constant <addr>`         (static / S path): absolute address,
+  //     null SSA base.
+  //   * `arith.addi %base, <constK>`    (BMU H path): offset constK relative
+  //     to the `pto.bmu_alloc` SSA base. The SSA base is tracked in
+  //     `baseSSAs` so two different BMU groups (different bases) are disjoint
+  //     while two slots of the same group (same base, different offset) are
+  //     compared by offset. See BMU design §4.8(b).
+  // `pto.slot_marker` then narrows or keeps these per slot; MemAlias's
+  // `isBufferAddressRangeOverlap` does the disambiguation.
   SmallVector<uint64_t> slotOffsets;
+  SmallVector<Value> slotBases;
   slotOffsets.reserve(op.getAddrs().size());
+  slotBases.reserve(op.getAddrs().size());
+  bool anySSABase = false;
   for (Value a : op.getAddrs()) {
-    auto cst = a.getDefiningOp<arith::ConstantOp>();
-    IntegerAttr attr;
-    if (!cst || !(attr = dyn_cast<IntegerAttr>(cst.getValue()))) {
-      // Non-constant slot address: fall back to single-address semantics
-      // with the first operand as rootBuffer so existing non-multi-buffer
-      // codepaths that happen to feed non-constant i64s keep their
-      // historical behavior.
-      Value rootSrc = op.getAddrs().front();
-      auto newMemInfo = std::make_unique<BaseMemInfo>(
-          res, rootSrc, space, SmallVector<uint64_t>{0}, sizeInBytes);
-      buffer2MemInfoMap_[res].emplace_back(newMemInfo->clone());
-      return success();
+    if (auto cst = a.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<IntegerAttr>(cst.getValue())) {
+        slotOffsets.push_back(attr.getValue().getZExtValue());
+        slotBases.push_back(Value());
+        continue;
+      }
     }
-    slotOffsets.push_back(attr.getValue().getZExtValue());
+    if (auto addi = a.getDefiningOp<arith::AddIOp>()) {
+      // Match `arith.addi %base, %constK` (constant may be on either side).
+      Value base = addi.getLhs();
+      Value off = addi.getRhs();
+      auto cst = off.getDefiningOp<arith::ConstantOp>();
+      if (!cst) {
+        cst = base.getDefiningOp<arith::ConstantOp>();
+        std::swap(base, off);
+      }
+      IntegerAttr attr;
+      if (cst && (attr = dyn_cast<IntegerAttr>(cst.getValue()))) {
+        slotOffsets.push_back(attr.getValue().getZExtValue());
+        slotBases.push_back(base);
+        anySSABase = true;
+        continue;
+      }
+    }
+    // Unrecognized slot address: fall back to single-address semantics with
+    // the first operand as rootBuffer so existing non-multi-buffer codepaths
+    // that happen to feed non-constant i64s keep their historical behavior.
+    Value rootSrc = op.getAddrs().front();
+    auto newMemInfo = std::make_unique<BaseMemInfo>(
+        res, rootSrc, space, SmallVector<uint64_t>{0}, sizeInBytes);
+    buffer2MemInfoMap_[res].emplace_back(newMemInfo->clone());
+    return success();
   }
 
   auto newMemInfo = std::make_unique<BaseMemInfo>(
       res, res, space, std::move(slotOffsets), sizeInBytes);
+  // Only attach SSA bases when at least one slot is BMU-relative; an all-const
+  // cast keeps `baseSSAs` empty so the static path is byte-for-byte unchanged.
+  if (anySSABase)
+    newMemInfo->baseSSAs = std::move(slotBases);
   buffer2MemInfoMap_[res].emplace_back(newMemInfo->clone());
   return success();
 }
@@ -995,10 +1027,17 @@ void PTOIRTranslator::UpdateSlotMarkerAliasBufferInfo(pto::SlotMarkerOp op) {
     if (isConstSlot && constSlotIdx >= 0 &&
         constSlotIdx < static_cast<int64_t>(newInfo->baseAddresses.size()) &&
         newInfo->baseAddresses.size() > 1) {
-      uint64_t pickAddr =
-          newInfo->baseAddresses[static_cast<size_t>(constSlotIdx)];
+      size_t pick = static_cast<size_t>(constSlotIdx);
+      uint64_t pickAddr = newInfo->baseAddresses[pick];
+      // Narrow the parallel SSA-base vector in lock-step (BMU H path) so the
+      // surviving slot keeps its `arith.addi` base for the overlap check.
+      Value pickBase = newInfo->baseSSAAt(pick);
       newInfo->baseAddresses.clear();
       newInfo->baseAddresses.push_back(pickAddr);
+      if (!newInfo->baseSSAs.empty()) {
+        newInfo->baseSSAs.clear();
+        newInfo->baseSSAs.push_back(pickBase);
+      }
     }
     resultMemInfoVec.emplace_back(std::move(newInfo));
   }

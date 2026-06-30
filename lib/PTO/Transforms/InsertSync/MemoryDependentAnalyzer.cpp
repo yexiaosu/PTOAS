@@ -224,13 +224,27 @@ bool MemoryDependentAnalyzer::isBufferAddressRangeOverlap(
 bool MemoryDependentAnalyzer::isBufferOverlap(const BaseMemInfo *a,
                                               const BaseMemInfo *b, int aIndex,
                                               int bIndex) {
+  // BMU H path: `baseAddresses[i]` may be an offset from an SSA base
+  // (`baseSSAs[i]`) rather than an absolute address (BMU design §4.8(b)).
+  //   * both null (or same SSA base) -> the offsets share an origin, compare
+  //     them as ranges (the existing absolute-address path);
+  //   * different SSA bases -> distinct BMU allocations, always disjoint;
+  //   * one null, one SSA -> not comparable, conservatively overlap.
+  Value aBase = a->baseSSAAt(static_cast<size_t>(aIndex));
+  Value bBase = b->baseSSAAt(static_cast<size_t>(bIndex));
+  if (aBase != bBase) {
+    if (aBase && bBase)
+      return false; // different BMU bases are disjoint
+    return true;    // one absolute, one BMU-relative: conservative overlap
+  }
+
   uint64_t aStart = a->baseAddresses[aIndex];
   uint64_t bStart = b->baseAddresses[bIndex];
   uint64_t aEnd = aStart + a->allocateSize;
   uint64_t bEnd = bStart + b->allocateSize;
- 
+
   uint64_t maxStart = std::max(aStart, bStart);
   uint64_t minEnd = std::min(aEnd, bEnd);
- 
+
   return maxStart < minEnd;
 }
