@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas %s 2>&1 | FileCheck %s
+
+// A BMU buffer kind has at most 4 segments, so segm must be in [0, 3].
+module {
+  func.func @bad_segm() {
+    %n = arith.constant 4 : index
+    %b = pto.bmu_alloc #pto.address_space<vec>, #pto.pipe<PIPE_MTE2>, segm 5, count %n
+        : index -> i64
+    return
+  }
+}
+
+// CHECK: segm must be in [0, 3]

@@ -7702,6 +7702,65 @@ LogicalResult RlsBufOp::verify() {
                          getModeAttr());
 }
 
+// BMU buffer kinds are local-memory address spaces only; GM / default never
+// participate in BMU allocation.
+static LogicalResult verifyBmuBufferKind(Operation *op,
+                                         AddressSpaceAttr bufferAttr) {
+  AddressSpace space = bufferAttr.getAddressSpace();
+  if (space == AddressSpace::GM || space == AddressSpace::Zero)
+    return op->emitOpError()
+           << "buffer kind must be a local-memory address space, got "
+           << stringifyAddressSpace(space);
+  return success();
+}
+
+LogicalResult BmuConfigOp::verify() {
+  if (failed(verifyBmuBufferKind(getOperation(), getBufferAttr())))
+    return failure();
+
+  // Segment tails are in slice units and must be monotonically
+  // non-decreasing. A tail equal to its predecessor is a 0-sized segment.
+  int64_t tails[4] = {getTailSeg0(), getTailSeg1(), getTailSeg2(),
+                      getTailSeg3()};
+  if (tails[0] < 0)
+    return emitOpError() << "segment tails must be non-negative, got tail_seg0="
+                         << tails[0];
+  for (int i = 1; i < 4; ++i) {
+    if (tails[i] < tails[i - 1])
+      return emitOpError()
+             << "segment tails must be non-decreasing, got tail_seg" << (i - 1)
+             << "=" << tails[i - 1] << " > tail_seg" << i << "=" << tails[i];
+  }
+  return success();
+}
+
+LogicalResult BmuAllocOp::verify() {
+  if (failed(verifyBmuBufferKind(getOperation(), getBufferAttr())))
+    return failure();
+
+  int64_t segm = getSegm();
+  if (segm < 0 || segm > 3)
+    return emitOpError() << "segm must be in [0, 3], got " << segm;
+
+  // slice_count is an SSA index; check positivity only when it is constant.
+  if (std::optional<int64_t> cnt = getConstantIntValue(getSliceCount())) {
+    if (*cnt <= 0)
+      return emitOpError() << "slice_count must be > 0, got " << *cnt;
+  }
+  return success();
+}
+
+LogicalResult BmuFreeOp::verify() {
+  if (failed(verifyBmuBufferKind(getOperation(), getBufferAttr())))
+    return failure();
+
+  if (std::optional<int64_t> cnt = getConstantIntValue(getSliceCount())) {
+    if (*cnt <= 0)
+      return emitOpError() << "slice_count must be > 0, got " << *cnt;
+  }
+  return success();
+}
+
 static ParseResult parseLegacyOrAttrMemBar(OpAsmParser &parser,
                                            MemBarAttr &attr) {
   auto loc = parser.getCurrentLocation();

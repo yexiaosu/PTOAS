@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// Round-trip parse/print of the three BMU runtime buffer-management ops.
+
+module {
+  func.func @bmu_roundtrip() {
+    %n = arith.constant 4 : index
+
+    // CHECK: pto.bmu_config <vec> tails = [4, 8, 8, 12]
+    pto.bmu_config #pto.address_space<vec> tails = [4, 8, 8, 12]
+
+    // CHECK: %[[BASE:.*]] = pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+    %base = pto.bmu_alloc #pto.address_space<vec>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
+        : index -> i64
+
+    // CHECK: pto.bmu_free <vec>, <PIPE_MTE3>, base %[[BASE]], count %{{.*}} : i64, index
+    pto.bmu_free #pto.address_space<vec>, #pto.pipe<PIPE_MTE3>, base %base, count %n
+        : i64, index
+    return
+  }
+}

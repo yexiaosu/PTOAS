@@ -2769,6 +2769,100 @@ def RlsBufOp : PTO_Op<"rls_buf"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// BMU runtime buffer management (A5)
+//===----------------------------------------------------------------------===//
+// Hardware Buffer Management Unit ops. A BMU buffer kind (VEC/MAT/LEFT/RIGHT/
+// ACC/BIAS/SCALING) is carved into up to 4 segments by `pto.bmu_config`; each
+// segment hands out slices via a bump pointer on `pto.bmu_alloc` and reclaims
+// them on `pto.bmu_free`. See docs/designs/BMU-integration-design.md §4.4.
+// These ops only appear when the module is A5 with `pto.uses_bmu = true`.
+
+def BmuConfigOp : PTO_Op<"bmu_config"> {
+  let summary = "Configure the BMU segment register for a buffer kind (A5)";
+  let description = [{
+    Programs the 4 segment tails (in slice units) of one BMU buffer kind. The
+    tails are monotonically non-decreasing; a tail equal to its predecessor
+    denotes a 0-sized segment (legal). The region past `tail_seg3` is left for
+    the static / stack area planned by `pto-plan-memory`.
+
+    Emitted once per buffer kind at the kernel entry, before any
+    `pto.bmu_alloc` on that kind. Lowered to a `mov_x2spr<BMU_SEGM_*>(...)`
+    intrinsic.
+  }];
+
+  let arguments = (ins
+    PTO_AddressSpaceAttr:$buffer,
+    I32Attr:$tail_seg0,
+    I32Attr:$tail_seg1,
+    I32Attr:$tail_seg2,
+    I32Attr:$tail_seg3
+  );
+
+  let results = (outs);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $buffer `tails` `=` `[` $tail_seg0 `,` $tail_seg1 `,` $tail_seg2 `,`
+    $tail_seg3 `]` attr-dict
+  }];
+}
+
+def BmuAllocOp : PTO_Op<"bmu_alloc"> {
+  let summary = "Allocate slices from a BMU segment on a given pipe (A5)";
+  let description = [{
+    Reserves `slice_count` contiguous slices from segment `segm` of buffer kind
+    `buffer`, returning the chosen base address as an i64. The allocation runs
+    on `pipe`; if no contiguous run is free the pipe stalls until one is
+    reclaimed. Lowered to a `ubuf_alloc / cbuf_alloc / ca_alloc / ...`
+    intrinsic depending on the buffer kind.
+  }];
+
+  let arguments = (ins
+    PTO_PipeAttr:$pipe,
+    PTO_AddressSpaceAttr:$buffer,
+    I32Attr:$segm,
+    Index:$slice_count
+  );
+
+  let results = (outs I64:$base_addr);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $buffer `,` $pipe `,` `segm` $segm `,` `count` $slice_count
+    attr-dict `:` type($slice_count) `->` type($base_addr)
+  }];
+}
+
+def BmuFreeOp : PTO_Op<"bmu_free"> {
+  let summary = "Free a previously allocated BMU region on a given pipe (A5)";
+  let description = [{
+    Reclaims the `slice_count` slices starting at `base_addr` (the result of a
+    prior `pto.bmu_alloc`). Non-blocking: it executes on `pipe` after that
+    pipe's preceding instructions retire. Lowered to a
+    `ubuf_free / cbuf_free / ca_free / ...` intrinsic depending on the buffer
+    kind.
+  }];
+
+  let arguments = (ins
+    PTO_PipeAttr:$pipe,
+    PTO_AddressSpaceAttr:$buffer,
+    I64:$base_addr,
+    Index:$slice_count
+  );
+
+  let results = (outs);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $buffer `,` $pipe `,` `base` $base_addr `,` `count` $slice_count
+    attr-dict `:` type($base_addr) `,` type($slice_count)
+  }];
+}
+
 def SyncSetOp : PTO_Op<"sync.set"> {
   let summary = "Set a synchronization signal (trigger) between cube and vector.";
   let description = [{
