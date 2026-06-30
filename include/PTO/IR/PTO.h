@@ -137,6 +137,10 @@ namespace pto {
 
 inline constexpr char kPTOTargetArchAttrName[] = "pto.target_arch";
 
+/// Module attribute marking that BMU (Buffer Management Unit) runtime buffer
+/// management is enabled. Only meaningful on A5; A2/A3 always behave as false.
+inline constexpr char kPTOUsesBmuAttrName[] = "pto.uses_bmu";
+
 /// Get PTO Address Space Attr from input type.
 AddressSpaceAttr getPTOAddressSpaceAttr(Type type);
 
@@ -155,6 +159,12 @@ bool isTargetArchA3(ModuleOp module);
 bool isTargetArchA5(ModuleOp module);
 bool isTargetArchA3(Operation *op);
 bool isTargetArchA5(Operation *op);
+
+/// Return true iff BMU runtime buffer management is enabled for this module:
+/// the target arch is A5 and the `pto.uses_bmu` attribute is present and true.
+/// Defaults to false when the attribute is absent.
+bool usesBmu(ModuleOp module);
+bool usesBmu(Operation *op);
 
 enum class PTOParserTargetArch {
   Unspecified,

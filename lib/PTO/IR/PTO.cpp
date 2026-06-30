@@ -346,6 +346,19 @@ bool mlir::pto::isTargetArchA5(Operation *op) {
   return getTargetArch(op) == PTOArch::A5;
 }
 
+bool mlir::pto::usesBmu(ModuleOp module) {
+  if (!module || !isTargetArchA5(module))
+    return false;
+  auto attr = module->getAttrOfType<BoolAttr>(kPTOUsesBmuAttrName);
+  return attr && attr.getValue();
+}
+
+bool mlir::pto::usesBmu(Operation *op) {
+  if (!op)
+    return false;
+  return usesBmu(op->getParentOfType<ModuleOp>());
+}
+
 static llvm::TypeSize getOneByteTypeSize() {
   return llvm::TypeSize::getFixed(8);
 }

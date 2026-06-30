@@ -456,6 +456,12 @@ llvm::cl::opt<std::string> mlir::pto::ptoTargetArch(
     llvm::cl::value_desc("a3|a5"),
     llvm::cl::init("a3"));
 
+llvm::cl::opt<bool> mlir::pto::ptoUsesBmu(
+    "pto-uses-bmu",
+    llvm::cl::desc("Enable A5 BMU runtime buffer management (sets the "
+                   "pto.uses_bmu module attribute). Ignored on a3."),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<std::string> ptoBuildLevel(
     "pto-level",
     llvm::cl::desc("Build level for pass pipeline: level1, level2, or level3 (default: level2)"),

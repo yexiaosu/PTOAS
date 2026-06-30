@@ -225,6 +225,16 @@ loadInputModule(std::unique_ptr<llvm::MemoryBuffer> inputBuffer,
                       mlir::StringAttr::get(moduleOp->getContext(), arch));
   }
 
+  // BMU runtime buffer management is an A5-only feature. When the CLI flag is
+  // set on a5, mark the module so downstream passes/verifiers see it; on a3 the
+  // flag is forced off (the attribute stays false) per the design contract.
+  if (mlir::pto::ptoUsesBmu) {
+    bool enable = (arch == "a5");
+    moduleOp->setAttr(
+        mlir::pto::kPTOUsesBmuAttrName,
+        mlir::BoolAttr::get(moduleOp->getContext(), enable));
+  }
+
   if (failed(mlir::verify(*module))) {
     llvm::errs() << "Error: input module verification failed.\n";
     return {};
