@@ -231,11 +231,22 @@ struct PTOPlanBmuLayoutPass
           loc, static_cast<int64_t>(sliceCount));
       Value base = rewriter.create<pto::BmuAllocOp>(loc, i64Ty, pipeAttr,
                                                     bufferAttr, /*segm=*/0u, cnt);
-      func.walk([&](func::ReturnOp ret) {
-        rewriter.setInsertionPoint(ret);
-        rewriter.create<pto::BmuFreeOp>(ret.getLoc(), pipeAttr, bufferAttr, base,
-                                        cnt);
-      });
+      // Place the free so `base` dominates it. A function-scope alloc frees
+      // before every return; an alloc nested in an scf region (e.g. a
+      // branch-local D buffer, whose lifetime does not cross the branch) frees
+      // before that region's terminator, where the base is still in scope.
+      if (alloc->getParentRegion() == &func.getBody()) {
+        func.walk([&](func::ReturnOp ret) {
+          rewriter.setInsertionPoint(ret);
+          rewriter.create<pto::BmuFreeOp>(ret.getLoc(), pipeAttr, bufferAttr,
+                                          base, cnt);
+        });
+      } else {
+        Operation *term = alloc->getBlock()->getTerminator();
+        rewriter.setInsertionPoint(term);
+        rewriter.create<pto::BmuFreeOp>(term->getLoc(), pipeAttr, bufferAttr,
+                                        base, cnt);
+      }
       return base;
     };
 

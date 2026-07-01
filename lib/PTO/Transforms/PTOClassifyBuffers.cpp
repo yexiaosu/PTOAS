@@ -33,6 +33,7 @@
 #include "PTO/Transforms/Passes.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
@@ -68,6 +69,31 @@ static pto::AddressSpace allocScope(memref::AllocOp alloc) {
   return pto::AddressSpace::GM;
 }
 
+// True if `region` is `op`'s region or a transitive parent of it.
+static bool regionContains(Region *region, Operation *op) {
+  for (Region *r = op->getParentRegion(); r;
+       r = r->getParentOp() ? r->getParentOp()->getParentRegion() : nullptr) {
+    if (r == region)
+      return true;
+  }
+  return false;
+}
+
+// Rule 5: the alloc sits directly in one branch region of an scf.if and every
+// use stays inside that same region, i.e. its lifetime never crosses the
+// branch. Such a buffer is a dynamic (D) candidate — its liveness cannot
+// overlap the sibling branch, so BMU can bump-allocate it on demand.
+static bool isBranchLocalToIf(memref::AllocOp alloc) {
+  Region *region = alloc->getParentRegion();
+  Operation *parent = region ? region->getParentOp() : nullptr;
+  if (!isa_and_nonnull<scf::IfOp>(parent))
+    return false;
+  for (Operation *user : alloc->getUsers())
+    if (!regionContains(region, user))
+      return false;
+  return true;
+}
+
 struct PTOClassifyBuffersPass
     : public mlir::pto::impl::PTOClassifyBuffersBase<PTOClassifyBuffersPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PTOClassifyBuffersPass)
@@ -90,8 +116,15 @@ struct PTOClassifyBuffersPass
       // groups) arrive in a later phase.
       auto nAttr =
           alloc->getAttrOfType<IntegerAttr>(pto::kPtoMultiBufferAttrName);
-      if (!nAttr)
+      if (!nAttr) {
+        // Non-multi-buffer alloc. Rule 5 (scf.if branch-local -> D) is the only
+        // Phase-4 rule that fires here; everything else defaults to S.
+        if (pto::bmuSliceBytes(allocScope(alloc)) != 0 &&
+            isBranchLocalToIf(alloc))
+          alloc->setAttr(pto::kPtoPlanClassAttrName,
+                         strAttr(pto::kPtoPlanClassDynamic));
         return;
+      }
       uint64_t n = nAttr.getValue().getZExtValue();
 
       // Read the placement propagated by PTOViewToMemref (default auto).

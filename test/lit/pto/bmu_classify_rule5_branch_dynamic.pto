@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.5 rule 5: a local-memory buffer whose entire lifetime is
+// contained inside one scf.if branch is classified D (dynamic). pto-plan-bmu-
+// layout then materializes it as a pure BMU allocation scoped to the branch —
+// the bmu_free is emitted before the branch's scf.yield (not the function
+// return), so the runtime base still dominates the free.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-classify-buffers %s 2>&1 1>/dev/null | FileCheck --check-prefix=CLASSIFY %s
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck --check-prefix=LAYOUT %s
+
+// CLASSIFY: memref.alloc() {pto.plan_class = "D"}
+
+// The alloc, cast and free all stay inside the scf.if, ahead of scf.yield.
+// LAYOUT: scf.if
+// LAYOUT: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0
+// LAYOUT: pto.pointer_cast
+// LAYOUT: pto.bmu_free <vec>, <PIPE_MTE2>
+// LAYOUT: return
+
+module {
+  func.func @branchlocal(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                         %out : memref<16x16xf16, #pto.address_space<gm>>,
+                         %cond : i1) {
+    scf.if %cond {
+      %a = memref.alloc() : memref<16x16xf16, #pto.address_space<vec>>
+      pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+                outs(%a : memref<16x16xf16, #pto.address_space<vec>>)
+      pto.tstore ins(%a : memref<16x16xf16, #pto.address_space<vec>>)
+                 outs(%out : memref<16x16xf16, #pto.address_space<gm>>)
+    }
+    return
+  }
+}
