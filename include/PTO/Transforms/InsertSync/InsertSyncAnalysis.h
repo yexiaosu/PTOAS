@@ -54,7 +54,21 @@ public:
   /// 入口函数：执行分析并注入同步
   /// insertBarAllAtLast: 是否在最后插入一个全局 Barrier (通常需要)
   void Run(bool insertBarAllAtLast = true);
- 
+
+private:
+  // --- BMU function-tail barrier conditionalization (BMU design §4.8d) ---
+  enum class TailBarrierMode { kFull, kPartial, kSkip };
+
+  /// Decide how the function-tail clean barrier should be emitted, based on
+  /// BMU free coverage. `P_used` = physical pipes with instructions; `P_freed`
+  /// = physical pipes drained by a trailing `pto.bmu_free`. Returns kSkip when
+  /// every used pipe is already freed (barrier redundant), kPartial (filling
+  /// `partialPipes` with `P_used \ P_freed`) when frees cover a proper subset,
+  /// else kFull (the unchanged `PIPE_ALL` barrier — also the path taken by
+  /// every non-BMU function, which has no `pto.bmu_free`).
+  TailBarrierMode
+  analyzeBmuFreeCoverage(SmallVectorImpl<PipelineType> &partialPipes);
+
 private:
   // --- Data Members ---
   SyncIRs &syncIR_;

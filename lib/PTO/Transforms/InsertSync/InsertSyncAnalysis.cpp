@@ -18,6 +18,7 @@
 #include "PTO/Transforms/SlotAffineAnalysis.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/STLExtras.h"
@@ -40,6 +41,28 @@ namespace {
 
 static constexpr uint64_t kVectorRegisterSizeInBytes = 256U;
 static constexpr unsigned kPipeVPruneMinRepeat = 16U;
+
+// Analysis→codegen channel: the residual pipe set for a partial function-tail
+// barrier (BMU design §4.8d). Absent means "emit the full PIPE_ALL barrier".
+static constexpr llvm::StringLiteral kAutoSyncTailPipesAttrName =
+    "pto.auto_sync_tail_pipes";
+
+// A physical hardware pipe that can carry data-movement / compute instructions
+// (excludes PIPE_ALL, the reserved slots, the virtual pipes, and UNASSIGNED).
+static bool isPhysicalPipe(PipelineType p) {
+  switch (p) {
+  case PipelineType::PIPE_S:
+  case PipelineType::PIPE_V:
+  case PipelineType::PIPE_M:
+  case PipelineType::PIPE_MTE1:
+  case PipelineType::PIPE_MTE2:
+  case PipelineType::PIPE_MTE3:
+  case PipelineType::PIPE_FIX:
+    return true;
+  default:
+    return false;
+  }
+}
 
 struct RepeatAccessShape {
   SmallVector<int64_t, 2> fullShape;
@@ -215,8 +238,83 @@ void InsertSyncAnalysis::Run(bool insertBarAllAtLast) {
   }
 
   if (insertBarAllAtLast) {
-    InsertLastPipeAll();
+    // BMU design §4.8d: condition the function-tail clean barrier on how many
+    // used pipes are already drained by a trailing bmu_free.
+    SmallVector<PipelineType> partialPipes;
+    switch (analyzeBmuFreeCoverage(partialPipes)) {
+    case TailBarrierMode::kSkip:
+      // Every used pipe is drained by a trailing bmu_free (H1); the clean
+      // barrier is redundant, so emit nothing.
+      break;
+    case TailBarrierMode::kPartial: {
+      // Record the residual pipe set so SyncCodegen degrades the PIPE_ALL
+      // barrier into per-pipe barriers over just P_used \ P_freed.
+      SmallVector<int32_t> pipeInts;
+      pipeInts.reserve(partialPipes.size());
+      for (PipelineType p : partialPipes)
+        pipeInts.push_back(static_cast<int32_t>(p));
+      func_->setAttr(kAutoSyncTailPipesAttrName,
+                     DenseI32ArrayAttr::get(func_.getContext(), pipeInts));
+      InsertLastPipeAll();
+      break;
+    }
+    case TailBarrierMode::kFull:
+      InsertLastPipeAll();
+      break;
+    }
   }
+}
+
+InsertSyncAnalysis::TailBarrierMode InsertSyncAnalysis::analyzeBmuFreeCoverage(
+    SmallVectorImpl<PipelineType> &partialPipes) {
+  partialPipes.clear();
+
+  constexpr unsigned kNumPipes =
+      static_cast<unsigned>(PipelineType::PIPE_NUM);
+  std::array<bool, kNumPipes> used{};
+  std::array<bool, kNumPipes> freed{};
+  bool anyFree = false;
+
+  func_.walk([&](Operation *op) {
+    if (auto freeOp = dyn_cast<pto::BmuFreeOp>(op)) {
+      PipelineType p = static_cast<PipelineType>(freeOp.getPipe().getPipe());
+      if (isPhysicalPipe(p)) {
+        freed[static_cast<unsigned>(p)] = true;
+        anyFree = true;
+      }
+      return;
+    }
+    if (auto pipeOp = dyn_cast<pto::OpPipeInterface>(op)) {
+      PipelineType p = static_cast<PipelineType>(pipeOp.getPipe());
+      if (isPhysicalPipe(p))
+        used[static_cast<unsigned>(p)] = true;
+    }
+  });
+
+  // Non-BMU functions have no bmu_free; keep the unconditional PIPE_ALL barrier
+  // so A2/A3 and A5-static behavior is byte-for-byte unchanged.
+  if (!anyFree)
+    return TailBarrierMode::kFull;
+
+  bool usedSubsetFreed = true; // P_used ⊆ P_freed
+  bool freedSubsetUsed = true; // P_freed ⊆ P_used
+  for (unsigned i = 0; i < kNumPipes; ++i) {
+    if (used[i] && !freed[i])
+      usedSubsetFreed = false;
+    if (freed[i] && !used[i])
+      freedSubsetUsed = false;
+  }
+
+  if (usedSubsetFreed)
+    return TailBarrierMode::kSkip;
+  if (freedSubsetUsed) {
+    for (unsigned i = 0; i < kNumPipes; ++i)
+      if (used[i] && !freed[i])
+        partialPipes.push_back(static_cast<PipelineType>(i));
+    return TailBarrierMode::kPartial;
+  }
+  // Some freed pipe is never used (unexpected); fall back conservatively.
+  return TailBarrierMode::kFull;
 }
 
 // ==============================================================================

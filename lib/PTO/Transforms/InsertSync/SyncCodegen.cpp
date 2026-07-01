@@ -15,6 +15,7 @@
 #include "PTO/IR/PTO.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -320,14 +321,44 @@ void SyncCodegen::AppendAutoSyncTailBarrierIfNeeded(IRRewriter &rewriter) {
   if (returns.empty())
     return;
 
-  auto pipeAllAttr = getPipeAttr(rewriter, PipelineType::PIPE_ALL);
-  for (auto ret : returns) {
+  // BMU design §4.8d: when a trailing bmu_free already drains a subset of the
+  // used pipes, InsertSyncAnalysis records the residual pipe set (P_used \
+  // P_freed) here and we degrade the PIPE_ALL clean barrier into per-pipe
+  // barriers over just that residual. Absent attr => full PIPE_ALL barrier.
+  SmallVector<PipelineType> tailPipes;
+  if (auto pipesAttr = func_->getAttrOfType<mlir::DenseI32ArrayAttr>(
+          "pto.auto_sync_tail_pipes")) {
+    for (int32_t v : pipesAttr.asArrayRef())
+      tailPipes.push_back(static_cast<PipelineType>(v));
+    func_->removeAttr("pto.auto_sync_tail_pipes");
+  }
+
+  // On A5 a standalone PIPE_V barrier is illegal (rejected by the backend, see
+  // CreateBarrierOp) and PIPE_V's drain would otherwise be lost. If PIPE_V is
+  // in the residual set, fall back to the full PIPE_ALL barrier, which drains
+  // every pipe (including V) via the aggregate, rather than silently dropping
+  // the V drain that the original PIPE_ALL provided.
+  bool isA5 = isTargetArchA5(func_.getOperation());
+  if (!tailPipes.empty() && isA5 &&
+      llvm::is_contained(tailPipes, PipelineType::PIPE_V))
+    tailPipes.clear();
+
+  auto emitBarrier = [&](func::ReturnOp ret, PipelineType pipe) {
     rewriter.setInsertionPoint(ret);
-    auto barrier = rewriter.create<pto::BarrierOp>(ret.getLoc(), pipeAllAttr);
+    auto barrier =
+        rewriter.create<pto::BarrierOp>(ret.getLoc(), getPipeAttr(rewriter, pipe));
     barrier->setAttr("pto.auto_sync_tail_barrier", rewriter.getUnitAttr());
     if (auto hintAttr =
-            func_->getAttrOfType<mlir::StringAttr>("pto.auto_sync_tail_hint")) {
+            func_->getAttrOfType<mlir::StringAttr>("pto.auto_sync_tail_hint"))
       barrier->setAttr("pto.auto_sync_tail_hint", hintAttr);
+  };
+
+  for (auto ret : returns) {
+    if (tailPipes.empty()) {
+      emitBarrier(ret, PipelineType::PIPE_ALL);
+    } else {
+      for (PipelineType pipe : tailPipes)
+        emitBarrier(ret, pipe);
     }
   }
 
