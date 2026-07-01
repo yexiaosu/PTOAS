@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.6 stage 2: a D-class memref.alloc (as rule 4/5 would mark) is
+// materialized as a pure dynamic BMU allocation — one pto.bmu_alloc whose base
+// feeds a single-address pto.pointer_cast, released by pto.bmu_free before the
+// return. No static intra-group offsets are involved.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync %s -o - 2>&1 | FileCheck --check-prefix=EMITC %s
+
+// CHECK-LABEL: func.func @dclass
+// CHECK: pto.bmu_config <vec>
+// CHECK: %[[BASE:.+]] = pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0
+// CHECK: pto.pointer_cast(%[[BASE]])
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>, base %[[BASE]]
+
+// EMITC: mov_x2spr<BMU_SEGM_VEC>
+// EMITC: ubuf_alloc<PIPE_MTE2, 0>
+// EMITC: ubuf_free<PIPE_MTE2>
+
+module {
+  func.func @dclass(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                    %out : memref<16x16xf16, #pto.address_space<gm>>) {
+    %a = memref.alloc() {pto.plan_class = "D"}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%a : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tstore ins(%a : memref<16x16xf16, #pto.address_space<vec>>)
+               outs(%out : memref<16x16xf16, #pto.address_space<gm>>)
+    return
+  }
+}

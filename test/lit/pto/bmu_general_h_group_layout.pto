@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.6 subpath (b): a general H group is a set of independent
+// memref.allocs sharing a pto.h_group_id (as rule 7 would assign). They are
+// laid out inside a single BMU allocation: one pto.bmu_alloc yields the group
+// base, each member gets a static intra-group offset via arith.addi, and one
+// pto.bmu_free releases the whole group. The intra-group offsets come from the
+// §4.7 layout subroutine (bump-pointer over co-living members; here member %a
+// takes offset 0 and %b takes 512, the next 512B-aligned slot).
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-LABEL: func.func @genh
+// CHECK: pto.bmu_config <vec>
+// CHECK: %[[BASE:.+]] = pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0
+// CHECK: %[[O0:.+]] = arith.addi %[[BASE]], %c0_i64
+// CHECK: pto.pointer_cast(%[[O0]])
+// CHECK: %[[O1:.+]] = arith.addi %[[BASE]], %c512_i64
+// CHECK: pto.pointer_cast(%[[O1]])
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>, base %[[BASE]]
+
+module {
+  func.func @genh(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                  %out : memref<16x16xf16, #pto.address_space<gm>>) {
+    %a = memref.alloc() {pto.plan_class = "H", pto.h_group_id = 0 : i32}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    %b = memref.alloc() {pto.plan_class = "H", pto.h_group_id = 0 : i32}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%a : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tadd ins(%a, %b : memref<16x16xf16, #pto.address_space<vec>>, memref<16x16xf16, #pto.address_space<vec>>)
+             outs(%b : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tstore ins(%b : memref<16x16xf16, #pto.address_space<vec>>)
+               outs(%out : memref<16x16xf16, #pto.address_space<gm>>)
+    return
+  }
+}

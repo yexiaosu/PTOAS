@@ -44,6 +44,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
 namespace pto {
@@ -106,6 +107,38 @@ static uint64_t ceilDiv(uint64_t a, uint64_t b) {
   return b == 0 ? 0 : (a + b - 1) / b;
 }
 
+static uint64_t alignUp(uint64_t v, uint64_t a) {
+  return a == 0 ? v : ((v + a - 1) / a) * a;
+}
+
+// Conservative intra-group member alignment (bytes). 512B covers the largest
+// fractal/tile alignment seen on the BMU scopes (L0C fractal, 16x16xf16 s_frac).
+static constexpr uint64_t kHGroupMemberAlignBytes = 512;
+
+// §4.7 intra-group layout subroutine: given the members of one H group (all
+// co-living by construction — the group is exactly the set of buffers that live
+// and die together), assign each a byte offset inside a single BMU allocation
+// and return the group's total byte size via `groupBytes`.
+//
+// Because the members are co-living they can never overlap, so a bump-pointer
+// walk in allocation order is a correct layout; for equal-size members this
+// naturally yields the ping/pong offsets the design calls for. Inplace reuse of
+// dead holes (delegating to the full MemPlan allocator) is a later refinement;
+// it only tightens packing and never changes correctness.
+static SmallVector<uint64_t> assignGroupOffsets(ArrayRef<memref::AllocOp> members,
+                                                uint64_t &groupBytes) {
+  SmallVector<uint64_t> offsets;
+  offsets.reserve(members.size());
+  uint64_t cursor = 0;
+  for (memref::AllocOp m : members) {
+    cursor = alignUp(cursor, kHGroupMemberAlignBytes);
+    offsets.push_back(cursor);
+    cursor += slotByteSize(m);
+  }
+  groupBytes = cursor;
+  return offsets;
+}
+
 struct PTOPlanBmuLayoutPass
     : public mlir::pto::impl::PTOPlanBmuLayoutBase<PTOPlanBmuLayoutPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PTOPlanBmuLayoutPass)
@@ -119,32 +152,58 @@ struct PTOPlanBmuLayoutPass
   }
 
   void processFunc(func::FuncOp func) {
-    // Collect the H-class multi-buffer allocs in this function.
-    SmallVector<memref::AllocOp> hAllocs;
+    // Collect the three materializable categories:
+    //   * multi-buffer H allocs           -> subpath (a), multi-address cast
+    //   * general H groups (h_group_id)   -> subpath (b), one base per group
+    //   * D-class allocs                  -> stage 2, pure dynamic alloc/free
+    SmallVector<memref::AllocOp> mbHAllocs;
+    llvm::MapVector<int32_t, SmallVector<memref::AllocOp>> hGroups;
+    SmallVector<memref::AllocOp> dAllocs;
     func.walk([&](memref::AllocOp alloc) {
       auto cls = alloc->getAttrOfType<StringAttr>(pto::kPtoPlanClassAttrName);
-      if (cls && cls.getValue() == pto::kPtoPlanClassHybrid &&
-          alloc->hasAttr(pto::kPtoMultiBufferAttrName))
-        hAllocs.push_back(alloc);
+      if (!cls)
+        return;
+      StringRef c = cls.getValue();
+      if (c == pto::kPtoPlanClassHybrid) {
+        if (alloc->hasAttr(pto::kPtoMultiBufferAttrName)) {
+          mbHAllocs.push_back(alloc);
+        } else if (auto gid = alloc->getAttrOfType<IntegerAttr>(
+                       pto::kPtoHGroupIdAttrName)) {
+          hGroups[static_cast<int32_t>(gid.getInt())].push_back(alloc);
+        }
+      } else if (c == pto::kPtoPlanClassDynamic) {
+        dAllocs.push_back(alloc);
+      }
     });
-    if (hAllocs.empty())
+    if (mbHAllocs.empty() && hGroups.empty() && dAllocs.empty())
       return;
 
     MLIRContext *ctx = &getContext();
     IRRewriter rewriter(ctx);
 
-    // Stage 1: per-scope concurrent slice demand. Phase 2 conservatively sums
-    // all H groups in the function (ignores liveness), so segment 0 never
-    // stalls. Liveness-aware sizing is a Phase 5 optimization.
+    // Stage 1: per-scope concurrent slice demand. Conservatively sums every
+    // dynamic/hybrid buffer in the function (ignores liveness), so segment 0
+    // never stalls. Liveness-aware sizing is a Phase 5 optimization.
     llvm::MapVector<pto::AddressSpace, uint64_t> scopeSlices;
-    for (memref::AllocOp alloc : hAllocs) {
+    for (memref::AllocOp alloc : mbHAllocs) {
       pto::AddressSpace scope = allocScope(alloc);
       uint64_t n =
           alloc->getAttrOfType<IntegerAttr>(pto::kPtoMultiBufferAttrName)
               .getValue()
               .getZExtValue();
-      uint64_t sliceBytes = pto::bmuSliceBytes(scope);
-      scopeSlices[scope] += ceilDiv(n * slotByteSize(alloc), sliceBytes);
+      scopeSlices[scope] +=
+          ceilDiv(n * slotByteSize(alloc), pto::bmuSliceBytes(scope));
+    }
+    for (auto &kv : hGroups) {
+      pto::AddressSpace scope = allocScope(kv.second.front());
+      uint64_t groupBytes = 0;
+      (void)assignGroupOffsets(kv.second, groupBytes);
+      scopeSlices[scope] += ceilDiv(groupBytes, pto::bmuSliceBytes(scope));
+    }
+    for (memref::AllocOp alloc : dAllocs) {
+      pto::AddressSpace scope = allocScope(alloc);
+      scopeSlices[scope] +=
+          ceilDiv(slotByteSize(alloc), pto::bmuSliceBytes(scope));
     }
 
     // Emit one bmu_config per buffer kind at the function entry, before any
@@ -158,10 +217,30 @@ struct PTOPlanBmuLayoutPass
                                         tail, tail);
     }
 
-    // Stage 3a: materialize each H alloc.
     auto pipeAttr = pto::PipeAttr::get(ctx, pto::PIPE::PIPE_MTE2);
     auto i64Ty = rewriter.getI64Type();
-    for (memref::AllocOp alloc : hAllocs) {
+
+    // Emit a bmu_alloc at `alloc`'s site and a matching bmu_free before every
+    // return. base / cnt dominate the returns because these allocs live at
+    // function scope.
+    auto emitAllocAndFree = [&](memref::AllocOp alloc, uint64_t sliceCount,
+                                pto::AddressSpaceAttr bufferAttr) -> Value {
+      Location loc = alloc.getLoc();
+      rewriter.setInsertionPoint(alloc);
+      Value cnt = rewriter.create<arith::ConstantIndexOp>(
+          loc, static_cast<int64_t>(sliceCount));
+      Value base = rewriter.create<pto::BmuAllocOp>(loc, i64Ty, pipeAttr,
+                                                    bufferAttr, /*segm=*/0u, cnt);
+      func.walk([&](func::ReturnOp ret) {
+        rewriter.setInsertionPoint(ret);
+        rewriter.create<pto::BmuFreeOp>(ret.getLoc(), pipeAttr, bufferAttr, base,
+                                        cnt);
+      });
+      return base;
+    };
+
+    // Stage 3a: multi-buffer H allocs -> one base + N slot addresses.
+    for (memref::AllocOp alloc : mbHAllocs) {
       pto::AddressSpace scope = allocScope(alloc);
       auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
       uint64_t n =
@@ -170,14 +249,10 @@ struct PTOPlanBmuLayoutPass
               .getZExtValue();
       uint64_t slotBytes = slotByteSize(alloc);
       uint64_t sliceCount = ceilDiv(n * slotBytes, pto::bmuSliceBytes(scope));
+      Value base = emitAllocAndFree(alloc, sliceCount, bufferAttr);
+
       Location loc = alloc.getLoc();
-
-      rewriter.setInsertionPoint(alloc);
-      Value cnt = rewriter.create<arith::ConstantIndexOp>(
-          loc, static_cast<int64_t>(sliceCount));
-      Value base = rewriter.create<pto::BmuAllocOp>(
-          loc, i64Ty, pipeAttr, bufferAttr, /*segm=*/0u, cnt);
-
+      rewriter.setInsertionPointAfter(base.getDefiningOp());
       SmallVector<Value> addrs;
       addrs.reserve(n);
       for (uint64_t k = 0; k < n; ++k) {
@@ -185,20 +260,52 @@ struct PTOPlanBmuLayoutPass
             loc, static_cast<int64_t>(k * slotBytes), 64);
         addrs.push_back(rewriter.create<arith::AddIOp>(loc, base, off));
       }
-
       auto [vRow, vCol] = getDynamicValidShapeValues(alloc);
       auto cast = rewriter.create<pto::PointerCastOp>(
           loc, alloc.getType(), ValueRange(addrs), vRow ? vRow : Value(),
           vCol ? vCol : Value(), inferBindTileConfig(alloc));
       rewriter.replaceOp(alloc, cast.getResult());
+    }
 
-      // Free before every function return. base / cnt dominate the returns
-      // because alloc_multi_tile allocs live at function scope.
-      func.walk([&](func::ReturnOp ret) {
-        rewriter.setInsertionPoint(ret);
-        rewriter.create<pto::BmuFreeOp>(ret.getLoc(), pipeAttr, bufferAttr,
-                                        base, cnt);
-      });
+    // Stage 3b: general H groups -> one group base + per-member static offset.
+    for (auto &kv : hGroups) {
+      SmallVector<memref::AllocOp> &members = kv.second;
+      pto::AddressSpace scope = allocScope(members.front());
+      auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
+      uint64_t groupBytes = 0;
+      SmallVector<uint64_t> offsets = assignGroupOffsets(members, groupBytes);
+      uint64_t sliceCount = ceilDiv(groupBytes, pto::bmuSliceBytes(scope));
+      // Anchor the shared allocation at the first member's site.
+      Value base = emitAllocAndFree(members.front(), sliceCount, bufferAttr);
+      for (auto [member, offset] : llvm::zip(members, offsets)) {
+        Location loc = member.getLoc();
+        rewriter.setInsertionPoint(member);
+        Value off = rewriter.create<arith::ConstantIntOp>(
+            loc, static_cast<int64_t>(offset), 64);
+        Value addr = rewriter.create<arith::AddIOp>(loc, base, off);
+        auto [vRow, vCol] = getDynamicValidShapeValues(member);
+        auto cast = rewriter.create<pto::PointerCastOp>(
+            loc, member.getType(), ValueRange(addr), vRow ? vRow : Value(),
+            vCol ? vCol : Value(), inferBindTileConfig(member));
+        rewriter.replaceOp(member, cast.getResult());
+      }
+    }
+
+    // Stage 2: D-class allocs -> pure dynamic single-address alloc/free.
+    for (memref::AllocOp alloc : dAllocs) {
+      pto::AddressSpace scope = allocScope(alloc);
+      auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
+      uint64_t sliceCount =
+          ceilDiv(slotByteSize(alloc), pto::bmuSliceBytes(scope));
+      Value base = emitAllocAndFree(alloc, sliceCount, bufferAttr);
+
+      Location loc = alloc.getLoc();
+      rewriter.setInsertionPointAfter(base.getDefiningOp());
+      auto [vRow, vCol] = getDynamicValidShapeValues(alloc);
+      auto cast = rewriter.create<pto::PointerCastOp>(
+          loc, alloc.getType(), ValueRange(base), vRow ? vRow : Value(),
+          vCol ? vCol : Value(), inferBindTileConfig(alloc));
+      rewriter.replaceOp(alloc, cast.getResult());
     }
   }
 };
