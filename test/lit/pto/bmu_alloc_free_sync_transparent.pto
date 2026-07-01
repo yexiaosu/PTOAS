@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.8a: pto.bmu_alloc / pto.bmu_free are sync-transparent scalar
+// nodes. The buffer's addresses are tracked through the multi-address
+// pto.pointer_cast (SSA-base MemInfo), not the bmu_alloc, and bmu_free carries
+// no memref so it needs no sync of its own. This pins that:
+//   * the MTE2 -> V data dependency between the tloads and the tadd still forms
+//     its set_flag / wait_flag correctly with the BMU ops present, and
+//   * bmu_alloc dominates the writes while bmu_free lands at the function tail
+//     after the last use (no sync spuriously wrapped around the free).
+// The free's "same-pipe drain" semantic is accounted for separately by the
+// function-tail barrier conditionalization (§4.8d).
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync --mlir-print-ir-after=pto-insert-sync %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-LABEL: func.func @h_dep
+// CHECK: pto.bmu_alloc <vec>, <PIPE_MTE2>
+// CHECK: pto.tload
+// CHECK: pto.tload
+// CHECK: pto.set_flag[<PIPE_MTE2>, <PIPE_V>
+// CHECK: pto.wait_flag[<PIPE_MTE2>, <PIPE_V>
+// CHECK: pto.tadd
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>
+
+module {
+  func.func @h_dep(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                   %gm1 : memref<16x16xf16, #pto.address_space<gm>>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mb = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %s0 = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    %s1 = pto.multi_tile_get %mb[%c1]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%gm1 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s1 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tadd ins(%s0, %s1 : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+             outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    return
+  }
+}
