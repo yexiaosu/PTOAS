@@ -13,10 +13,21 @@
 // residual is {MTE3} and we emit a single pto.barrier <PIPE_MTE3>.
 
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync --mlir-print-ir-after=pto-insert-sync %s 2>&1 1>/dev/null | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync %s -o - 2>&1 | FileCheck --check-prefix=EMITC %s
 
+// The residual barrier is deliberately left untagged (no auto_sync_tail_barrier)
+// so it survives to EmitC as a real per-pipe barrier instead of collapsing into
+// the deferred full-PIPE_ALL clean barrier.
 // CHECK-LABEL: func.func @mte2_mte3
-// CHECK: pto.barrier <PIPE_MTE3> {pto.auto_sync_tail_barrier}
+// CHECK: pto.barrier <PIPE_MTE3>
 // CHECK-NOT: pto.barrier <PIPE_ALL>
+// CHECK-NOT: auto_sync_tail_barrier
+
+// At EmitC the residual lowers to pipe_barrier(PIPE_MTE3) and there is no
+// ptoas_auto_sync_tail(...) call (only its unused inline definition) and no
+// full PIPE_ALL tail barrier.
+// EMITC: pipe_barrier(PIPE_MTE3)
+// EMITC-NOT: ptoas_auto_sync_tail(PTOAutoSyncTailMode::
 
 module {
   func.func @mte2_mte3(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,

@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.5 rule 5 guard: a buffer allocated in an scf.if branch but
+// yielded out through the scf.if result escapes the branch and outlives it, so
+// it is NOT branch-local and must stay S. Marking it D would make pto-plan-bmu-
+// layout free it before the scf.yield and use-after-free the result.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-classify-buffers %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-NOT: pto.plan_class
+
+module {
+  func.func @yielded(%gm0 : memref<16x16xf16, #pto.address_space<gm>>, %cond : i1) {
+    %r = scf.if %cond -> (memref<16x16xf16, #pto.address_space<vec>>) {
+      %a = memref.alloc() : memref<16x16xf16, #pto.address_space<vec>>
+      pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+                outs(%a : memref<16x16xf16, #pto.address_space<vec>>)
+      scf.yield %a : memref<16x16xf16, #pto.address_space<vec>>
+    } else {
+      %b = memref.alloc() : memref<16x16xf16, #pto.address_space<vec>>
+      scf.yield %b : memref<16x16xf16, #pto.address_space<vec>>
+    }
+    return
+  }
+}

@@ -175,6 +175,15 @@ static void hoistSetFlagBeforeStallAlloc(IRRewriter &rewriter,
     rewriter.setInsertionPoint(stallAlloc);
 }
 
+// A5 rejects an explicit standalone PIPE_V barrier — intra-pipe V ordering is
+// guaranteed by hardware, so the backend refuses a per-V barrier. Any pipe for
+// which this returns true must not get its own barrier op. Kept as one predicate
+// so CreateBarrierOp and the tail-barrier residual stay consistent (extend here
+// if more arch-restricted pipes appear).
+static bool isStandalonePipeBarrierRejected(PipelineType pipe, bool isA5) {
+  return isA5 && pipe == PipelineType::PIPE_V;
+}
+
 static void createSetOrWaitFlagOp(IRRewriter &rewriter, Operation *op,
                                   SyncOperation *sync, pto::PipeAttr srcPipe,
                                   pto::PipeAttr dstPipe,
@@ -321,10 +330,10 @@ void SyncCodegen::SyncInsert(IRRewriter &rewriter, Operation *op,
 // [核心修改] 加强版 CreateBarrierOp
 void SyncCodegen::CreateBarrierOp(IRRewriter &rewriter, Operation *op,
                                   SyncOperation *sync, bool beforeInsert) {
-  // A5: PIPE_V intra-pipe ordering is guaranteed by hardware; do not emit
+  // A5: PIPE_V intra-pipe ordering is guaranteed by hardware; do not emit an
   // explicit vector barrier (it is also rejected by backend checks).
-  if (isTargetArchA5(func_.getOperation()) &&
-      sync->GetActualSrcPipe() == PipelineType::PIPE_V) {
+  if (isStandalonePipeBarrierRejected(sync->GetActualSrcPipe(),
+                                      isTargetArchA5(func_.getOperation()))) {
     return;
   }
 
@@ -370,32 +379,40 @@ void SyncCodegen::AppendAutoSyncTailBarrierIfNeeded(IRRewriter &rewriter) {
     func_->removeAttr("pto.auto_sync_tail_pipes");
   }
 
-  // On A5 a standalone PIPE_V barrier is illegal (rejected by the backend, see
-  // CreateBarrierOp) and PIPE_V's drain would otherwise be lost. If PIPE_V is
-  // in the residual set, fall back to the full PIPE_ALL barrier, which drains
-  // every pipe (including V) via the aggregate, rather than silently dropping
-  // the V drain that the original PIPE_ALL provided.
+  // A pipe whose standalone barrier the backend rejects (PIPE_V on A5) cannot be
+  // emitted per-pipe, and dropping it would lose the drain the aggregate
+  // PIPE_ALL used to provide. If any residual pipe is such, fall back to the
+  // full PIPE_ALL barrier (which drains every pipe via the aggregate).
   bool isA5 = isTargetArchA5(func_.getOperation());
-  if (!tailPipes.empty() && isA5 &&
-      llvm::is_contained(tailPipes, PipelineType::PIPE_V))
+  if (llvm::any_of(tailPipes, [&](PipelineType p) {
+        return isStandalonePipeBarrierRejected(p, isA5);
+      }))
     tailPipes.clear();
 
-  auto emitBarrier = [&](func::ReturnOp ret, PipelineType pipe) {
+  // The full PIPE_ALL clean barrier is tagged so PTOToEmitC defers it to the
+  // return as ptoas_auto_sync_tail(<mode>), honoring the auto_sync_tail_hint.
+  // The partial residual barriers must NOT be tagged: that deferral path
+  // hardcodes kBarrierAll and would collapse the per-pipe residual back into a
+  // full PIPE_ALL. Left untagged they lower directly to pipe_barrier(<pipe>) at
+  // the return, so the §4.8d partial optimization survives to EmitC.
+  auto emitBarrier = [&](func::ReturnOp ret, PipelineType pipe, bool tagged) {
     rewriter.setInsertionPoint(ret);
-    auto barrier =
-        rewriter.create<pto::BarrierOp>(ret.getLoc(), getPipeAttr(rewriter, pipe));
-    barrier->setAttr("pto.auto_sync_tail_barrier", rewriter.getUnitAttr());
-    if (auto hintAttr =
-            func_->getAttrOfType<mlir::StringAttr>("pto.auto_sync_tail_hint"))
-      barrier->setAttr("pto.auto_sync_tail_hint", hintAttr);
+    auto barrier = rewriter.create<pto::BarrierOp>(ret.getLoc(),
+                                                   getPipeAttr(rewriter, pipe));
+    if (tagged) {
+      barrier->setAttr("pto.auto_sync_tail_barrier", rewriter.getUnitAttr());
+      if (auto hintAttr =
+              func_->getAttrOfType<mlir::StringAttr>("pto.auto_sync_tail_hint"))
+        barrier->setAttr("pto.auto_sync_tail_hint", hintAttr);
+    }
   };
 
   for (auto ret : returns) {
     if (tailPipes.empty()) {
-      emitBarrier(ret, PipelineType::PIPE_ALL);
+      emitBarrier(ret, PipelineType::PIPE_ALL, /*tagged=*/true);
     } else {
       for (PipelineType pipe : tailPipes)
-        emitBarrier(ret, pipe);
+        emitBarrier(ret, pipe, /*tagged=*/false);
     }
   }
 

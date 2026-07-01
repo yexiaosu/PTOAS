@@ -102,9 +102,15 @@ static bool isBranchLocalToIf(memref::AllocOp alloc) {
   Operation *parent = region ? region->getParentOp() : nullptr;
   if (!isa_and_nonnull<scf::IfOp>(parent))
     return false;
-  for (Operation *user : alloc->getUsers())
+  for (Operation *user : alloc->getUsers()) {
     if (!regionContains(region, user))
       return false;
+    // If the buffer feeds this branch's scf.yield it escapes through the
+    // scf.if result and outlives the branch — not branch-local. Materializing
+    // it as D would free it before the yield and use-after-free the result.
+    if (isa<scf::YieldOp>(user) && user->getParentRegion() == region)
+      return false;
+  }
   return true;
 }
 
