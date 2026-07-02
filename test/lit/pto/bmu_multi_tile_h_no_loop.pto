@@ -12,8 +12,8 @@
 
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync %s -o - 2>&1 | FileCheck %s
 
-// CHECK: ubuf_alloc<PIPE_MTE2, 0>
-// CHECK: ubuf_free<PIPE_MTE3>
+// CHECK: __ubuf_alloc({{.*}}, 0, PIPE_MTE2)
+// CHECK: __ubuf_free({{.*}}, {{.*}}, PIPE_MTE3)
 
 module {
   func.func @no_loop(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,

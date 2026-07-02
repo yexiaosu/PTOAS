@@ -2787,8 +2787,8 @@ def BmuConfigOp : PTO_Op<"bmu_config"> {
     the static / stack area planned by `pto-plan-memory`.
 
     Emitted once per buffer kind at the kernel entry, before any
-    `pto.bmu_alloc` on that kind. Lowered to a `mov_x2spr<BMU_SEGM_*>(...)`
-    intrinsic.
+    `pto.bmu_alloc` on that kind. Lowered to a
+    `set_bmu_segm_<ub|l1|l0a|l0b|l0c|bt|fb>(...)` intrinsic.
   }];
 
   let arguments = (ins

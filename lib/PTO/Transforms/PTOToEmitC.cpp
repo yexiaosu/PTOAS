@@ -6034,14 +6034,18 @@ struct PTORlsBufToEmitC : public OpConversionPattern<mlir::pto::RlsBufOp> {
 //===----------------------------------------------------------------------===//
 // BMU runtime buffer management lowering (A5)
 //===----------------------------------------------------------------------===//
-// bmu_config -> mov_x2spr<BMU_SEGM_*>(packed tails)
-// bmu_alloc  -> reinterpret_cast<uint64_t>(<kind>buf_alloc<PIPE, segm>(count))
-// bmu_free   -> <kind>buf_free<PIPE>(reinterpret_cast<__kind__ void*>(base), n)
+// bmu_config -> set_bmu_segm_<ub|l1|l0a|l0b|l0c|bt|fb>(packed tails)
+// bmu_alloc  -> reinterpret_cast<uint64_t>(__<stem>_alloc(count, segm, PIPE))
+//               (BIAS: __bt_alloc returns uint64_t directly, no cast)
+// bmu_free   -> __<stem>_free(reinterpret_cast<__<stem>__ void*>(base), n, PIPE)
+//               (BIAS: __bt_free takes the uint64_t base directly, no cast)
 
-// The intrinsic infix for a BMU buffer kind (ubuf_alloc / cbuf_alloc / ...).
-// UB is AddressSpace::VEC ("ubuf"); GM / Zero are NOT BMU buffer kinds and must
-// never map to "ubuf" — verifyBmuBufferKind rejects them before lowering, so
-// reaching them here is an internal invariant violation, not a UB buffer.
+// The C name stem of the ccec BMU intrinsic for a buffer kind: the callee is
+// `__<stem>_alloc` / `__<stem>_free` and the opaque pointer type is
+// `__<stem>__ void*`. UB is AddressSpace::VEC ("ubuf"); GM / Zero are NOT BMU
+// buffer kinds and must never map here — verifyBmuBufferKind rejects them before
+// lowering, so reaching them is an internal invariant violation.
+// Note SCALING's stem is "fbuf" (not "fb"), matching pto-isa's __fbuf__ tiles.
 static StringRef bmuIntrinsicInfix(pto::AddressSpace as) {
   switch (as) {
   case pto::AddressSpace::VEC:
@@ -6057,7 +6061,7 @@ static StringRef bmuIntrinsicInfix(pto::AddressSpace as) {
   case pto::AddressSpace::BIAS:
     return "bt";
   case pto::AddressSpace::SCALING:
-    return "fb";
+    return "fbuf";
   case pto::AddressSpace::GM:
   case pto::AddressSpace::Zero:
     break;
@@ -6065,9 +6069,39 @@ static StringRef bmuIntrinsicInfix(pto::AddressSpace as) {
   llvm_unreachable("non-BMU address space reached BMU intrinsic lowering");
 }
 
-// The BMU_SEGM_* SPR token for a buffer kind, matching the address-space name.
-static std::string bmuSegmSprToken(pto::AddressSpace as) {
-  return ("BMU_SEGM_" + pto::stringifyAddressSpace(as).upper());
+// The `set_bmu_segm_<suffix>` ccec intrinsic name for a buffer kind. The
+// suffix is the hardware buffer name (ub/l1/l0a/l0b/l0c/bt/fb), NOT the PTO
+// address-space spelling. GM / Zero are not BMU buffer kinds and are rejected
+// by the verifier before lowering.
+static std::string bmuSegmSetterCallee(pto::AddressSpace as) {
+  StringRef suffix;
+  switch (as) {
+  case pto::AddressSpace::VEC:
+    suffix = "ub";
+    break;
+  case pto::AddressSpace::MAT:
+    suffix = "l1";
+    break;
+  case pto::AddressSpace::LEFT:
+    suffix = "l0a";
+    break;
+  case pto::AddressSpace::RIGHT:
+    suffix = "l0b";
+    break;
+  case pto::AddressSpace::ACC:
+    suffix = "l0c";
+    break;
+  case pto::AddressSpace::BIAS:
+    suffix = "bt";
+    break;
+  case pto::AddressSpace::SCALING:
+    suffix = "fb";
+    break;
+  case pto::AddressSpace::GM:
+  case pto::AddressSpace::Zero:
+    llvm_unreachable("non-BMU address space reached BMU segm lowering");
+  }
+  return ("set_bmu_segm_" + suffix).str();
 }
 
 // The `__ubuf__ void *` style opaque pointer type for a buffer kind.
@@ -6086,8 +6120,8 @@ struct PTOBmuConfigToEmitC : public OpConversionPattern<mlir::pto::BmuConfigOp> 
     auto *ctx = rewriter.getContext();
     pto::AddressSpace as = op.getBuffer().getAddressSpace();
 
-    // Pack the 4 segment tails one byte each (matches the tbuf demo's
-    // mov_x2spr<...>(0xNNNNNNNN) form).
+    // Pack the 4 segment tails one byte each: bit[7:0]=tail_seg0 ...
+    // bit[31:24]=tail_seg3 (BMU.md §3.1), passed as a single 0xNNNNNNNN literal.
     auto byteOf = [](uint32_t v) { return v & 0xFFu; };
     uint32_t packed = byteOf(op.getTailSeg0()) |
                       (byteOf(op.getTailSeg1()) << 8) |
@@ -6099,13 +6133,11 @@ struct PTOBmuConfigToEmitC : public OpConversionPattern<mlir::pto::BmuConfigOp> 
       os << llvm::format_hex(packed, /*Width=*/10); // "0x" + 8 hex digits
     }
 
-    auto templateArgs = rewriter.getArrayAttr(
-        {emitc::OpaqueAttr::get(ctx, bmuSegmSprToken(as))});
-    auto args =
-        rewriter.getArrayAttr({emitc::OpaqueAttr::get(ctx, hex)});
+    auto args = rewriter.getArrayAttr({emitc::OpaqueAttr::get(ctx, hex)});
 
     rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
-        op, TypeRange{}, "mov_x2spr", args, templateArgs, ValueRange{});
+        op, TypeRange{}, bmuSegmSetterCallee(as), args, ArrayAttr{},
+        ValueRange{});
     return success();
   }
 };
@@ -6119,25 +6151,39 @@ struct PTOBmuAllocToEmitC : public OpConversionPattern<mlir::pto::BmuAllocOp> {
     auto loc = op.getLoc();
     pto::AddressSpace as = op.getBuffer().getAddressSpace();
 
-    std::string callee = (bmuIntrinsicInfix(as) + Twine("_alloc")).str();
+    std::string callee = (Twine("__") + bmuIntrinsicInfix(as) + "_alloc").str();
     std::string pipeTok = pto::stringifyPIPE(op.getPipe().getPipe()).str();
-    // <kind>buf_alloc<PIPE, segm>(count)
-    auto templateArgs = rewriter.getArrayAttr(
-        {emitc::OpaqueAttr::get(ctx, pipeTok),
-         emitc::OpaqueAttr::get(ctx, std::to_string(op.getSegm()))});
+    // __<stem>_alloc(slice_cnt, segment_id, pipe). The hardware alloc builtin is
+    // not a template: pipe/segm are positional args (segm/pipe as literals,
+    // slice_cnt is operand 0).
+    auto callArgs = rewriter.getArrayAttr(
+        {rewriter.getIndexAttr(0),
+         emitc::OpaqueAttr::get(ctx, std::to_string(op.getSegm())),
+         emitc::OpaqueAttr::get(ctx, pipeTok)});
+
+    // The op result is an i64 address.
+    Type addrTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (!addrTy)
+      addrTy = rewriter.getI64Type();
+
+    // BT (BIAS) has no `__bt__` opaque pointer type in pto-isa: __bt_alloc
+    // returns a uint64_t address directly, so no pointer reinterpret is needed.
+    if (as == pto::AddressSpace::BIAS) {
+      rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
+          op, addrTy, callee, callArgs, ArrayAttr{},
+          ValueRange{adaptor.getSliceCount()});
+      return success();
+    }
 
     auto ptrTy = bmuVoidPtrType(ctx, as);
     auto allocPtr =
         rewriter
-            .create<emitc::CallOpaqueOp>(loc, ptrTy, callee, ArrayAttr{},
-                                         templateArgs,
+            .create<emitc::CallOpaqueOp>(loc, ptrTy, callee, callArgs,
+                                         ArrayAttr{},
                                          ValueRange{adaptor.getSliceCount()})
             .getResult(0);
 
-    // The op result is an i64 address; reinterpret the returned pointer.
-    Type addrTy = getTypeConverter()->convertType(op.getResult().getType());
-    if (!addrTy)
-      addrTy = rewriter.getI64Type();
+    // Reinterpret the returned pointer to the i64 address.
     auto castTy = rewriter.getArrayAttr(
         {emitc::OpaqueAttr::get(ctx, "uint64_t")});
     rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
@@ -6156,6 +6202,23 @@ struct PTOBmuFreeToEmitC : public OpConversionPattern<mlir::pto::BmuFreeOp> {
     auto loc = op.getLoc();
     pto::AddressSpace as = op.getBuffer().getAddressSpace();
 
+    std::string callee = (Twine("__") + bmuIntrinsicInfix(as) + "_free").str();
+    std::string pipeTok = pto::stringifyPIPE(op.getPipe().getPipe()).str();
+    // __<stem>_free(base_addr, slice_cnt, pipe). Positional args: base is
+    // operand 0, slice_cnt operand 1, pipe a literal. base_addr must match the
+    // pointer type returned by the corresponding __<stem>_alloc.
+    auto callArgs = rewriter.getArrayAttr(
+        {rewriter.getIndexAttr(0), rewriter.getIndexAttr(1),
+         emitc::OpaqueAttr::get(ctx, pipeTok)});
+
+    // BT (BIAS): __bt_free takes the uint64_t base directly, no pointer cast.
+    if (as == pto::AddressSpace::BIAS) {
+      rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
+          op, TypeRange{}, callee, callArgs, ArrayAttr{},
+          ValueRange{adaptor.getBaseAddr(), adaptor.getSliceCount()});
+      return success();
+    }
+
     // Reinterpret the i64 base back into the buffer-kind pointer.
     auto ptrTy = bmuVoidPtrType(ctx, as);
     auto ptrCastTy = rewriter.getArrayAttr(
@@ -6167,13 +6230,8 @@ struct PTOBmuFreeToEmitC : public OpConversionPattern<mlir::pto::BmuFreeOp> {
                                          ValueRange{adaptor.getBaseAddr()})
             .getResult(0);
 
-    std::string callee = (bmuIntrinsicInfix(as) + Twine("_free")).str();
-    std::string pipeTok = pto::stringifyPIPE(op.getPipe().getPipe()).str();
-    auto templateArgs = rewriter.getArrayAttr(
-        {emitc::OpaqueAttr::get(ctx, pipeTok)});
-
     rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
-        op, TypeRange{}, callee, ArrayAttr{}, templateArgs,
+        op, TypeRange{}, callee, callArgs, ArrayAttr{},
         ValueRange{basePtr, adaptor.getSliceCount()});
     return success();
   }

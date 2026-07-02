@@ -15,7 +15,7 @@
 
 // CHECK-NOT: ubuf_alloc
 // CHECK-NOT: ubuf_free
-// CHECK-NOT: mov_x2spr
+// CHECK-NOT: set_bmu_segm
 // CHECK: TASSIGN
 
 module {

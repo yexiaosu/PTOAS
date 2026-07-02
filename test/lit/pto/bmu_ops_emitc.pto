@@ -6,42 +6,77 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// The three BMU ops lower to ccec intrinsics: mov_x2spr<BMU_SEGM_*> for the
-// segment config, <kind>buf_alloc / <kind>buf_free for the runtime
-// allocate/free, with the i64 address reinterpreted to/from the buffer-kind
-// pointer.
+// The three BMU ops lower to ccec intrinsics: set_bmu_segm_<ub|l1|l0a|l0b|l0c|
+// bt|fb> for the segment config, __<stem>_alloc / __<stem>_free for the runtime
+// allocate/free (stem = ubuf/cbuf/ca/cb/cc/bt/fbuf). For all kinds except BT the i64 address
+// is reinterpreted to/from the `__<stem>__ void*` pointer; BT has no such
+// pointer type in pto-isa, so __bt_alloc returns / __bt_free takes uint64_t
+// directly.
 
 // RUN: ptoas --pto-arch=a5 %s -o - 2>&1 | FileCheck %s
 
 module {
-  // UB (vec) maps to ubuf_alloc / ubuf_free.
+  // UB (vec) maps to __ubuf_alloc / __ubuf_free.
   func.func @bmu_vec() {
     %n = arith.constant 4 : index
     // CHECK-LABEL: void bmu_vec()
-    // CHECK: mov_x2spr<BMU_SEGM_VEC>(0x0c080804);
+    // CHECK: set_bmu_segm_ub(0x0c080804);
     pto.bmu_config #pto.address_space<vec> tails = [4, 8, 8, 12]
-    // CHECK: __ubuf__ void * [[P:v[0-9]+]] = ubuf_alloc<PIPE_MTE2, 0>(
+    // CHECK: __ubuf__ void * [[P:v[0-9]+]] = __ubuf_alloc({{.*}}, 0, PIPE_MTE2)
     // CHECK: int64_t [[A:v[0-9]+]] = reinterpret_cast<uint64_t>([[P]]);
     %base = pto.bmu_alloc #pto.address_space<vec>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
         : index -> i64
     // CHECK: __ubuf__ void * [[Q:v[0-9]+]] = reinterpret_cast<__ubuf__ void *>([[A]]);
-    // CHECK: ubuf_free<PIPE_MTE3>([[Q]]
+    // CHECK: __ubuf_free([[Q]], {{.*}}, PIPE_MTE3)
     pto.bmu_free #pto.address_space<vec>, #pto.pipe<PIPE_MTE3>, base %base, count %n
         : i64, index
     return
   }
 
-  // L1 (mat) maps to cbuf_alloc / cbuf_free; segm index is threaded through.
+  // L1 (mat) maps to __cbuf_alloc / __cbuf_free; segm index is threaded through.
   func.func @bmu_mat() {
     %n = arith.constant 2 : index
     // CHECK-LABEL: void bmu_mat()
-    // CHECK: mov_x2spr<BMU_SEGM_MAT>(
+    // CHECK: set_bmu_segm_l1(
     pto.bmu_config #pto.address_space<mat> tails = [2, 4, 4, 4]
-    // CHECK: cbuf_alloc<PIPE_MTE2, 1>(
+    // CHECK: __cbuf_alloc({{.*}}, 1, PIPE_MTE2)
     %base = pto.bmu_alloc #pto.address_space<mat>, #pto.pipe<PIPE_MTE2>, segm 1, count %n
         : index -> i64
-    // CHECK: cbuf_free<PIPE_MTE1>(
+    // CHECK: __cbuf_free({{.*}}, {{.*}}, PIPE_MTE1)
     pto.bmu_free #pto.address_space<mat>, #pto.pipe<PIPE_MTE1>, base %base, count %n
+        : i64, index
+    return
+  }
+
+  // BT (bias) has no __bt__ pointer type: __bt_alloc returns a uint64_t address
+  // directly (no reinterpret) and __bt_free takes it directly.
+  func.func @bmu_bias() {
+    %n = arith.constant 3 : index
+    // CHECK-LABEL: void bmu_bias()
+    // CHECK: set_bmu_segm_bt(
+    pto.bmu_config #pto.address_space<bias> tails = [3, 3, 3, 3]
+    // CHECK: int64_t [[A:v[0-9]+]] = __bt_alloc({{.*}}, 0, PIPE_MTE2)
+    %base = pto.bmu_alloc #pto.address_space<bias>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
+        : index -> i64
+    // CHECK: __bt_free([[A]], {{.*}}, PIPE_FIX)
+    pto.bmu_free #pto.address_space<bias>, #pto.pipe<PIPE_FIX>, base %base, count %n
+        : i64, index
+    return
+  }
+
+  // FB (scaling) uses stem "fbuf": __fbuf_alloc / __fbuf_free + __fbuf__ void*.
+  func.func @bmu_scaling() {
+    %n = arith.constant 2 : index
+    // CHECK-LABEL: void bmu_scaling()
+    // CHECK: set_bmu_segm_fb(
+    pto.bmu_config #pto.address_space<scaling> tails = [2, 2, 2, 2]
+    // CHECK: __fbuf__ void * [[P:v[0-9]+]] = __fbuf_alloc({{.*}}, 0, PIPE_MTE1)
+    // CHECK: int64_t [[A:v[0-9]+]] = reinterpret_cast<uint64_t>([[P]]);
+    %base = pto.bmu_alloc #pto.address_space<scaling>, #pto.pipe<PIPE_MTE1>, segm 0, count %n
+        : index -> i64
+    // CHECK: __fbuf__ void * [[Q:v[0-9]+]] = reinterpret_cast<__fbuf__ void *>([[A]]);
+    // CHECK: __fbuf_free([[Q]], {{.*}}, PIPE_FIX)
+    pto.bmu_free #pto.address_space<scaling>, #pto.pipe<PIPE_FIX>, base %base, count %n
         : i64, index
     return
   }
