@@ -201,7 +201,8 @@ H 模式是 S + D 长处的并集：外层 ping-pong 用 BMU bump pointer 隐式
                 ↓
 (5) Dynamic-Class Placement        pto-plan-bmu-layout 第 3 阶段
     D 类:每个 alloc emit pto.bmu_alloc/free,塞到对应 segment
-    H 类:每个组 emit 一对 pto.bmu_alloc/free（group-level），members 用 base+offset 物化
+    H 类:通用组 / multi-buffer 回退整环 = 每组一对 pto.bmu_alloc/free（group-level）+ base+offset；
+         显式 multi-buffer 首选逐轮 = 循环内每轮一对 alloc/free（§4.6 (a-1)）
                 ↓
 (6) Address Materialization        现有 AllocToPointerCast + 新逻辑
     S: emit pto.pointer_cast %const
@@ -379,12 +380,38 @@ ModuleOp pass，**对应规划 pipeline §4.3 第 (3)(5) 步**——做 scope �
 
 H 组有两类来源，对应不同的 IR 形态。
 
-**(a) multi-buffer 子路径**（`alloc_multi_tile` 产出，§1.4，PR baseline 范围）
+**(a) multi-buffer 子路径**（`alloc_multi_tile` 产出，§1.4）
 
-输入只有一个 `memref.alloc` 带 `pto.multi_buffer = N` attr；组成员是它的 N 个 slot：
+输入只有一个 `memref.alloc` 带 `pto.multi_buffer = N` attr；组成员是它的 N 个 slot。
+
+**识别信号 = 这条 `pto.multi_buffer` 属性本身**（由 `alloc_multi_tile` 经 `PTOViewToMemref` 下放，classify 已在读）。显式路径**不需要、也不应该**去检测 pypto 的 `double_buffer` / `multibuffer-unroll` / `LowerPipelineLoops` 等流水 pass 的结构——那些是**隐式** multi-buffer（两份 `memref.alloc` + loop attr，规则 6/7）的识别信号，与显式路径无关。整条 BMU 物化只在 **level1/2** 生效：level3 下 pypto 已完成内存规划、PTOAS `pto-plan-memory` 不跑（见 §4.7 / reserve_buffer 分流）。
+
+有两种物化形态。**H 路径下首选 (a-1)**，前提不满足时回退 (a-2)。
+
+**(a-1) 逐轮物化（per-advance，循环内 alloc/free）——首选**
+
+适用前提：`alloc_multi_tile` 的所有 slot 使用都落在一个循环体内，且**槽的生命周期在迭代内闭合**（纯 produce→consume 的 ping-pong；不存在按 index 跨迭代持有特定数据的依赖）。这正是显式 multi-buffer 的典型形态——循环里 `multi_tile_get %mb[%k]`（k=i%N）用 index 轮转表达 ping-pong，本身就是流水化结构，无需再判"是否流水"。
+
+物化：
+
+1. segment 容量 = N 个**单 slot** 的 slice 数：`tail_seg3 = N * ceil(sizeof(slotType) / slice_bytes)`，保证 N 深并发。
+2. 在每轮 slot 首次写入点 emit `pto.bmu_alloc <scope>, <producerPipe>, count = ceil(sizeof(slotType)/slice_bytes)`，得本轮 `%slot_base`。
+3. 该 slot 的 `pto.pointer_cast` 直接用 `%slot_base`（单地址，无 index 偏移）。
+4. 在该 slot 最后消费点 emit `pto.bmu_free %slot_base`（free 的 pipe 见下方约束）。
+5. 绕开 index 多槽选择：per-advance 下每轮 `bmu_alloc` 即本轮唯一的槽，`slot_marker` / `PTOResolveBufferSelect` 的多地址选择不再需要。
+
+收益（**这是 line 166 / §5「少同步指令」收益的实现路径**，整环物化拿不到）：复用边界的 reuse WAR 由下一次 `bmu_alloc` 的 backpressure stall **隐式承担**（§2.1 bump pointer + §4.8(a)），省掉 S 模式必须显式 emit 的反向 `wait_flag`；正向 disjoint 仍成立（不同轮 alloc 同源 SSA-base 判 disjoint，§10.2）。硬件按 base+size 发放、live 分配互不重叠，非重叠由硬件保证。
+
+代价：alloc 粒度是**每槽至少 1 slice**，当 `sizeof(slotType) < slice_bytes` 时比整环打包更占 slice（例如 512B slot、8KB slice、N=2：逐轮需 2 slice，整环 `ceil(2*512/8192)=1` slice）。这是换取硬件隐式同步的固有成本。
+
+死锁安全：alloc 进入循环后，`set_flag_dyn` 必须 hoist 到同 pipe 的 `bmu_alloc` 之前（§4.8(c)），否则 waiter 阻塞 alloc 等待的资源 → 死锁（§5 已知坑）。§4.8(c) 在整环物化下是 latent no-op，逐轮物化下变为**承重路径**。
+
+**(a-2) 整环物化（whole-ring，函数级一次 alloc）——回退**
+
+当 (a-1) 前提不满足（slot 值跨迭代逃逸、非循环使用、或 index 携带跨迭代状态）时回退到此形态（也是 phase 2 baseline 已实现的形态）：
 
 1. 算 `slice_count = ceil(N * sizeof(slotType) / slice_bytes)`（slice_bytes 见 §2.1 表）。
-2. 在 `alloc_multi_tile` 生命周期的最早 dominator block emit `pto.bmu_alloc` 得到 `%base`。
+2. 在 `alloc_multi_tile` 生命周期的最早 dominator block emit 一个 `pto.bmu_alloc` 得到 `%base`。
 3. 把 `PTOPlanMemory` / `AllocToPointerCast` 原本会 emit 的 multi-address `pto.pointer_cast(%c0..%c_{N-1})` 改写为：
 
 ```
@@ -395,6 +422,8 @@ H 组有两类来源，对应不同的 IR 形态。
 
 4. 在覆盖所有 slot last-use 的 post-dominator emit `pto.bmu_free %base, %slice_count`。
 5. `pto.slot_marker` 不动；下游 `PTOResolveBufferSelect` 仍按 slot 索引选第 k 个 operand。
+
+整环物化不产生 per-iteration backpressure，因此**不获得**反向同步收益，只提供函数级容量分时；作用是正确性回退 + 保住 baseline 行为。
 
 **(b) 通用 H 组子路径**（多 alloc 共生死，BMU 主线 phase 4+）
 
@@ -417,7 +446,7 @@ H 组有两类来源，对应不同的 IR 形态。
 
 - 段内 size 一致：phase 1 强制同 size 的 D / H alloc 才能进同一段；混合 size 退回到独立段或退到 S 类。multi-buffer 内部 N 个 slot 天然同 size，自然满足；跨 multi-buffer 共享 segment 时按 slot size 分桶。
 - 死亡点判定：用 `MemLivenessAnalysis` 的 `kill` 集合；H 组的 free 点 = 组内最后一个成员的 kill 时刻。
-- alloc / free 的 pipe 选择：默认 alloc 在生产者 pipe（最早写入者所在的 pipe，比如 MTE2 对 GM→UB 数据）；free 在最后消费者 pipe。multi-buffer 跨 pipe 时按所有 use 的 pipe 并集取主导 pipe。
+- alloc / free 的 pipe 选择：alloc 在生产者 pipe，free 在消费者 pipe。当前按每个 buffer kind 取固定 canonical pipe（`PTOBmu.h` 的 `bmuAllocPipeFor` / `bmuFreePipeFor`）：alloc vec/mat/bt→MTE2、L0A/L0B/fb→MTE1、L0C→M；free vec→MTE3、mat→MTE1、L0A/L0B→M、L0C/bt/fb→FIX。这套矩阵是 op verifier（`verifyBmuPipeForBuffer`）与本 pass 的**唯一真值源**——两者都从 `PTOBmu.h` 的 `bmuValidPipesFor(scope, isAlloc)` 取，保证不漂移（§4.4 生产者矩阵 / §5.4 消费者矩阵）。alloc 与 free 落在不同 pipe，故生产者→消费者的数据依赖仍由 InsertSync 主流程的 set/wait_flag 保护（BMU 不做跨 pipe 数据同步，§2.1 / §4.8(a)）。「按实际最后消费者 pipe 取」是后续优化（能复活 §4.8(d) 的 skip 档，见该节）。
 
 ### 4.7 `pto-plan-memory` 改动
 
@@ -489,6 +518,8 @@ else:
 
 前提：函数内跨 pipe 数据依赖已经被 InsertSync 主流程的 set/wait_flag 保护好（这是 InsertSync 一贯的不变量）。
 
+**skip 档在消费者 pipe free 下不可达（已实测）**：`bmu_free` 按 §5.4 落在 buffer 的**消费者** pipe（vec→MTE3、mat→MTE1……，见 PTOBmu.h `bmuFreePipeFor`），而 buffer 一定先被某个**生产者** pipe 写入（vec←MTE2 load / V compute……，`bmuAllocPipeFor`）。生产者 pipe ≠ 消费者 pipe，所以 P_freed 与生产者 pipe 恒不相交，`P_used ⊆ P_freed` **永远不成立** → skip 档对真实 buffer 不可达。实际落到 partial（load→store：残差 = 生产者 pipe，如 {MTE2}）或 full（load-only：free 的 MTE3 与 used 的 MTE2 不相交 → PIPE_ALL）。测例 `bmu_tail_barrier_skip.pto` 现记录这一 full 回退。若要保留 skip 收益，需把 free pipe 改成「实际最后消费者 pipe」（V-only 就地计算 kernel 才可能 P_used=P_freed={V}）——当前按固定 canonical pipe 实现，skip 档暂搁置。
+
 实现位置：在 `InsertSyncAnalysis::Run`（`InsertSyncAnalysis.cpp:198`）末尾、调用 `InsertLastPipeAll` 之前加一个 query 函数 `analyzeBmuFreeCoverage(func_) -> (P_used, P_freed)`，根据结果决定 `InsertLastPipeAll` 的 mode。
 
 对 SyncCodegen 端（`SyncCodegen.cpp:314` `AppendAutoSyncTailBarrierIfNeeded`）：根据 mode 改成支持 emit `<PIPE_ALL>` / `<某 pipe 集合>` / 完全跳过。
@@ -541,7 +572,8 @@ ptoas (--pto-level=level1/2):
 | `alloc_multi_tile` 默认 S 还是 H | **首选 S，容量超限自动 H** | S 保住 const-addr disjoint sync、affine drop forward 等当前 PR 的优化；只在 N×slot_size 超过 segment 静态尾区时切 H |
 | pypto-决策的 ping-pong pair 默认 S 还是 H | **第一版默认 S** | 保住 pypto + `relationPongEntry` 已有的优化收益；第二版再 try H 看是否更省 sync |
 | 候选分类由 PTOAS 自决 vs 由 pypto 标 | PTOAS 自决 | 不动 pypto；用 IR 启发式 + dry-run + 反馈环判定 |
-| ping-pong 显式排布 vs 依赖 bump pointer | S 模式显式，H 模式依赖硬件 | bump pointer 在 size 一致 + segment 容量 ≥ 2 × 单次 alloc 时自然产生 ping/pong（适合 H）；S 模式仍用现 `relationPongEntry` |
+| ping-pong 显式排布 vs 依赖 bump pointer | S 模式显式，H 模式依赖硬件 | bump pointer 在 size 一致 + segment 容量 ≥ 2 × 单次 alloc 时自然产生 ping/pong（适合 H）；S 模式仍用现 `relationPongEntry`。H 路径的具体物化见 §4.6 (a-1) 逐轮 / (a-2) 整环 |
+| 显式 multi-buffer H 的物化：整环 vs 逐轮 | **首选逐轮 (a-1)，前提不满足回退整环 (a-2)** | 逐轮 alloc/free 才拿到 bump pointer 的隐式 reuse 同步（省反向 wait_flag，line 166 收益）；整环一次 alloc 只有函数级容量分时、拿不到该收益。见 §4.6 (a-1)/(a-2) |
 | segment 编译期定 vs 运行时切 | 编译期定 | 硬件 §7 规则 7：重配 SPR 必须先 free 全部 + hscb barrier，运行时切代价过高 |
 | 用 BMU sync 替换 InsertSync 跨 pipe wait | 不替换 | 硬件确认跨 pipe alloc/free 不做数据同步；只在 buffer reuse 边界用 BMU 隐式资源同步替代 wait_flag |
 | 规划失败时 emit fail vs 反馈给 classifier | 反馈给 classifier | 利用 BMU 让"容量峰值满足但布局失败"的程序仍能跑；现 `EmitPlanMemoryFailureInfo` 改为写 attr 而非 emit user-level error |

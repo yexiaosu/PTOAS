@@ -6,14 +6,16 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// A5 + BMU multi-buffer inside an scf.while. The alloc lives at function scope
-// and the H path materializes one BMU allocation; the dynamic slot is selected
-// per while iteration.
+// A5 + BMU multi-buffer inside an scf.while. The slot's lifetime closes within
+// each iteration, so the H path materializes per-advance (§4.6 a-1): a
+// bmu_alloc/free pair inside the loop body (alloc on MTE2, free on MTE3), not
+// one function-scope allocation. The dedicated IR-level check is in
+// bmu_multi_tile_per_advance.pto; this test pins the emitted intrinsics.
 
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync %s -o - 2>&1 | FileCheck %s
 
 // CHECK: ubuf_alloc<PIPE_MTE2, 0>
-// CHECK: ubuf_free<PIPE_MTE2>
+// CHECK: ubuf_free<PIPE_MTE3>
 
 module {
   func.func @while_loop(%gm : memref<16x16xf16, #pto.address_space<gm>>,

@@ -6,17 +6,20 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+// verifyBmuBufferKind whitelists the on-chip BMU scopes, so the default/none
+// address space (`zero`) is rejected just like GM. This pins that the verifier
+// is a whitelist and does not silently treat a non-BMU space as UB.
+
 // RUN: not ptoas %s 2>&1 | FileCheck %s
 
-// BMU manages on-chip local buffers only; GM (global / off-chip) never
-// participates. GM is NOT the Unified Buffer — UB is #pto.address_space<vec>.
 module {
-  func.func @bad_buffer() {
+  func.func @zero_buffer() {
     %n = arith.constant 4 : index
-    %b = pto.bmu_alloc #pto.address_space<gm>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
+    %b = pto.bmu_alloc #pto.address_space<zero>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
         : index -> i64
     return
   }
 }
 
 // CHECK: buffer kind must be an on-chip BMU local-memory address space
+// CHECK-SAME: got zero

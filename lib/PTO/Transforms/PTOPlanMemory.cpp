@@ -2299,7 +2299,62 @@ LogicalResult MemPlan::InitMemSpecsFromModule(func::FuncOp funcOp) {
   if (isTargetArchA5(getTopLevelModuleOp(funcOp))) {
     applySpec(kA5);
   }
+
+  // BMU static-tail coexistence (BMU design §4.7). When pto-plan-bmu-layout
+  // carved BMU dynamic segments out of a buffer kind it left a `pto.bmu_config`
+  // whose tail_seg3 slices form the BMU region [0, tail_seg3*slice); the static
+  // ("S") allocs planned here must occupy the reserved tail above it. For such a
+  // scope the BMU.md CoreV920 geometry is authoritative (it describes the buffer
+  // the BMU manages), so we override the arch spec with the reserved-tail size
+  // and record the base offset for ApplyBmuStaticTailShift(). Scopes without a
+  // bmu_config keep the arch spec untouched (non-BMU funcs are unchanged).
+  auto setScopeSpaceBits = [this](pto::AddressSpace scope, int64_t bits) {
+    switch (scope) {
+    case pto::AddressSpace::VEC: ubSpaceSize = bits; break;
+    case pto::AddressSpace::MAT: l1SpaceSize = bits; break;
+    case pto::AddressSpace::LEFT: l0aSpaceSize = bits; break;
+    case pto::AddressSpace::RIGHT: l0bSpaceSize = bits; break;
+    case pto::AddressSpace::ACC: l0cSpaceSize = bits; break;
+    case pto::AddressSpace::BIAS: biasSpaceSize = bits; break;
+    case pto::AddressSpace::SCALING: scalingSpaceSize = bits; break;
+    default: break;
+    }
+  };
+  funcOp.walk([&](pto::BmuConfigOp cfg) {
+    pto::AddressSpace scope = cfg.getBufferAttr().getAddressSpace();
+    uint64_t sliceBytes = pto::bmuSliceBytes(scope);
+    if (sliceBytes == 0)
+      return; // non-BMU scope; nothing to reserve.
+    uint64_t baseBytes =
+        static_cast<uint64_t>(cfg.getTailSeg3()) * sliceBytes;
+    // A scope is configured once; if several configs exist, the largest BMU
+    // region wins so the static tail never overlaps any BMU segment.
+    uint64_t &recorded = bmuStaticTailBaseBytes[scope];
+    recorded = std::max(recorded, baseBytes);
+    uint64_t scopeTotalBytes = pto::bmuScopeTotalBytes(scope);
+    uint64_t tailBytes =
+        scopeTotalBytes > recorded ? scopeTotalBytes - recorded : 0;
+    setScopeSpaceBits(scope, static_cast<int64_t>(tailBytes) * kBitsPerByte);
+  });
   return success();
+}
+
+void MemPlan::ApplyBmuStaticTailShift() {
+  if (bmuStaticTailBaseBytes.empty())
+    return;
+  for (auto &kv : buffer2Offsets) {
+    auto ty = dyn_cast<MemRefType>(kv.first.getType());
+    if (!ty)
+      continue;
+    auto as = dyn_cast_or_null<pto::AddressSpaceAttr>(ty.getMemorySpace());
+    if (!as)
+      continue;
+    auto it = bmuStaticTailBaseBytes.find(as.getAddressSpace());
+    if (it == bmuStaticTailBaseBytes.end() || it->second == 0)
+      continue;
+    for (uint64_t &offset : kv.second)
+      offset += it->second;
+  }
 }
 
 void MemPlan::RollBackForAllocFail(StatusWrapper &statusWrapper,
@@ -2444,6 +2499,11 @@ void PlanMemoryPass::runOnOperation() {
                                             memPlan.GetBuffer2Offsets()))) {
       return signalPassFailure();
     }
+
+    // BMU design §4.7: lift the planned static offsets into the reserved tail
+    // above the BMU dynamic segments. Runs after reserve_buffer placement so
+    // the shift applies to the final offset map consumed below.
+    memPlan.ApplyBmuStaticTailShift();
 
     RewritePatternSet patterns(&getContext());
     populateBufferAddressToAllocOp(patterns, memPlan.GetBuffer2Offsets());

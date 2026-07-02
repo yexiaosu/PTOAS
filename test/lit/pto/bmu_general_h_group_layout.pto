@@ -23,7 +23,7 @@
 // CHECK: pto.pointer_cast(%[[O0]])
 // CHECK: %[[O1:.+]] = arith.addi %[[BASE]], %c512_i64
 // CHECK: pto.pointer_cast(%[[O1]])
-// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>, base %[[BASE]]
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE3>, base %[[BASE]]
 
 module {
   func.func @genh(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,

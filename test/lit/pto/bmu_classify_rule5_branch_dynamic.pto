@@ -21,7 +21,7 @@
 // LAYOUT: scf.if
 // LAYOUT: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0
 // LAYOUT: pto.pointer_cast
-// LAYOUT: pto.bmu_free <vec>, <PIPE_MTE2>
+// LAYOUT: pto.bmu_free <vec>, <PIPE_MTE3>
 // LAYOUT: return
 
 module {

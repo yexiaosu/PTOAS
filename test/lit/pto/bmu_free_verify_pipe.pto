@@ -8,15 +8,20 @@
 
 // RUN: not ptoas %s 2>&1 | FileCheck %s
 
-// BMU manages on-chip local buffers only; GM (global / off-chip) never
-// participates. GM is NOT the Unified Buffer — UB is #pto.address_space<vec>.
+// A BMU free must be issued on the last-consumer pipe that reads the region
+// (BMU.md §5.4), or on the scalar pipe as a fallback. MTE2 only writes UB
+// (GM->UB), never reads it, so a drain there does not wait for the real
+// consumers and is rejected.
 module {
-  func.func @bad_buffer() {
+  func.func @bad_free_pipe() {
     %n = arith.constant 4 : index
-    %b = pto.bmu_alloc #pto.address_space<gm>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
+    %b = pto.bmu_alloc #pto.address_space<vec>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
         : index -> i64
+    pto.bmu_free #pto.address_space<vec>, #pto.pipe<PIPE_MTE2>, base %b, count %n
+        : i64, index
     return
   }
 }
 
-// CHECK: buffer kind must be an on-chip BMU local-memory address space
+// CHECK: 'pto.bmu_free' op pipe PIPE_MTE2 is not valid for a BMU free on buffer kind vec
+// CHECK-SAME: expected one of: PIPE_S, PIPE_V, PIPE_MTE3

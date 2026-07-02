@@ -8,15 +8,17 @@
 
 // RUN: not ptoas %s 2>&1 | FileCheck %s
 
-// BMU manages on-chip local buffers only; GM (global / off-chip) never
-// participates. GM is NOT the Unified Buffer — UB is #pto.address_space<vec>.
+// A BMU alloc must be issued on the producer pipe that writes the region
+// (BMU.md §4.4), or on the scalar pipe as a fallback. MTE3 only reads UB
+// (UB->GM), so it can never be the producer of a UB alloc.
 module {
-  func.func @bad_buffer() {
+  func.func @bad_alloc_pipe() {
     %n = arith.constant 4 : index
-    %b = pto.bmu_alloc #pto.address_space<gm>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
+    %b = pto.bmu_alloc #pto.address_space<vec>, #pto.pipe<PIPE_MTE3>, segm 0, count %n
         : index -> i64
     return
   }
 }
 
-// CHECK: buffer kind must be an on-chip BMU local-memory address space
+// CHECK: 'pto.bmu_alloc' op pipe PIPE_MTE3 is not valid for a BMU alloc on buffer kind vec
+// CHECK-SAME: expected one of: PIPE_S, PIPE_MTE2, PIPE_V, PIPE_FIX

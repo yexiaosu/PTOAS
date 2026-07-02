@@ -40,17 +40,22 @@ module {
   // CHECK: @explicit_bmu
   // CHECK: memref.alloc() {pto.h_group_id = 0 : i32, {{.*}}pto.plan_class = "H"}
 
-  // auto + a tile pair that overflows UB capacity is promoted to hybrid (H).
-  func.func @auto_overflow() {
+  // A 256x256xf16 pair is 256KB and the real UB total is 384KB (BMU.md), so it
+  // fits the scope and stays S. Capacity-driven H requires the static tail to
+  // be smaller than the scope total (a BMU carve-up, §4.7, or contention, rule
+  // 4); at classify time reservedSlices = 0 so nothing is promoted by size
+  // alone — a single multi-buffer that exceeds the total can't be BMU-allocated
+  // either.
+  func.func @auto_fits() {
     %c0 = arith.constant 0 : index
-    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 256x256xf32, count=2>
+    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 256x256xf16, count=2>
     %s = pto.multi_tile_get %mb[%c0]
-        : !pto.multi_tile_buf<vec, 256x256xf32, count=2>
-       -> !pto.tile_buf<vec, 256x256xf32>
+        : !pto.multi_tile_buf<vec, 256x256xf16, count=2>
+       -> !pto.tile_buf<vec, 256x256xf16>
     return
   }
-  // CHECK: @auto_overflow
-  // CHECK: pto.plan_class = "H"
+  // CHECK: @auto_fits
+  // CHECK: memref.alloc() {pto.multi_buffer = 2 : i32, pto.plan_class = "S"}
 
   // NOBMU-NOT: pto.plan_class
 }

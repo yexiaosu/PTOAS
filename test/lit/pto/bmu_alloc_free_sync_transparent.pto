@@ -26,7 +26,7 @@
 // CHECK: pto.set_flag[<PIPE_MTE2>, <PIPE_V>
 // CHECK: pto.wait_flag[<PIPE_MTE2>, <PIPE_V>
 // CHECK: pto.tadd
-// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE3>
 
 module {
   func.func @h_dep(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,

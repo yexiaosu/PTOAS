@@ -6,16 +6,25 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// BMU design §4.8d: function-tail clean barrier is fully elided when every
-// used physical pipe is already drained by a trailing pto.bmu_free.
-// Here both tloads run on PIPE_MTE2 and the H-path bmu_free drains PIPE_MTE2,
-// so P_used = P_freed = {MTE2} => skip the tail barrier entirely.
+// BMU design §4.8d, skip-tier reachability under consumer-pipe frees.
+//
+// The §4.8d "skip" tier fires only when P_used is a subset of P_freed, i.e.
+// every used pipe is drained by a trailing bmu_free. But a BMU free rides the
+// buffer's *consumer* pipe (§5.4: vec -> PIPE_MTE3), while a buffer is always
+// first written on a *producer* pipe (vec <- PIPE_MTE2 load / PIPE_V compute).
+// Producer != consumer, so the free pipe is disjoint from at least the producer
+// pipe and P_used can never be a subset of P_freed. The skip tier is therefore
+// unreachable for real buffers; disjoint coverage falls through to the full
+// PIPE_ALL clean barrier (deferred, tagged auto_sync_tail_barrier).
+//
+// Here both tloads write on PIPE_MTE2 and the free drains PIPE_MTE3; the sets
+// are disjoint, so we keep the full tail barrier rather than skipping.
 
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync --mlir-print-ir-after=pto-insert-sync %s 2>&1 1>/dev/null | FileCheck %s
 
 // CHECK-LABEL: func.func @only_mte2
-// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>
-// CHECK-NOT: pto.barrier
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE3>
+// CHECK: pto.barrier <PIPE_ALL> {pto.auto_sync_tail_barrier}
 
 module {
   func.func @only_mte2(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,

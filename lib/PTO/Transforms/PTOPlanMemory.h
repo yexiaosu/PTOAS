@@ -12,6 +12,7 @@
 #define PTO_PLAN_MEMORY_H
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOBmu.h"
 #include "OptMemPlanForPipeline.h"
 #include "PTO/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -479,6 +480,12 @@ public:
   /// Setup the device's storage specs
   LogicalResult InitMemSpecsFromModule(func::FuncOp funcOp);
 
+  /// BMU design §4.7: after planning the static ("S") allocs in the reduced
+  /// per-scope capacity (the reserved tail), shift every planned offset up by
+  /// the BMU dynamic-segment size so S allocs occupy the tail above the BMU
+  /// region. No-op when no `pto.bmu_config` carved segments out of the scope.
+  void ApplyBmuStaticTailShift();
+
   func::FuncOp func_;
 
 private:
@@ -762,6 +769,15 @@ private:
 
   /// The scope of the buffer applied memory fail and the max bits it applied.
   std::map<pto::AddressSpace, uint64_t> failApplyBufferInfo;
+
+  /// BMU static-tail coexistence (BMU design §4.7). When pto-plan-bmu-layout
+  /// carves BMU dynamic segments out of the low part of a buffer kind (via a
+  /// `pto.bmu_config` whose tail_seg3 slices are reserved for BMU), the static
+  /// ("S") allocs planned here must live in the reserved tail above those
+  /// segments. Maps scope -> base byte offset (= tail_seg3 * slice_size) added
+  /// to every planned static offset in that scope. Empty when no BMU config
+  /// exists (non-BMU functions are byte-for-byte unchanged).
+  std::map<pto::AddressSpace, uint64_t> bmuStaticTailBaseBytes;
 
   /// The device's UB storage size
   int ubSpaceSize{0};

@@ -40,9 +40,12 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -139,6 +142,77 @@ static SmallVector<uint64_t> assignGroupOffsets(ArrayRef<memref::AllocOp> member
   return offsets;
 }
 
+// True if `region` is `op`'s region or a transitive parent of it.
+static bool regionContains(Region *region, Operation *op) {
+  for (Region *r = op->getParentRegion(); r;
+       r = r->getParentOp() ? r->getParentOp()->getParentRegion() : nullptr) {
+    if (r == region)
+      return true;
+  }
+  return false;
+}
+
+// The nearest ancestor region that re-executes per loop iteration: an scf.for
+// body or an scf.while `after` region. Null if `op` is not inside any loop.
+static Region *enclosingLoopBody(Operation *op) {
+  for (Region *r = op->getParentRegion(); r;) {
+    Operation *p = r->getParentOp();
+    if (!p)
+      return nullptr;
+    if (isa<scf::ForOp, scf::WhileOp>(p))
+      return r;
+    r = p->getParentRegion();
+  }
+  return nullptr;
+}
+
+// §4.6 (a-1) shape match: the clean explicit-multi-buffer ping-pong, where the
+// alloc's single `bind_tile` user is consumed only by `slot_marker`s:
+//   %alloc = memref.alloc {multi_buffer=N, H}
+//   %bt    = bind_tile %alloc ...          (alloc's only user)
+//   ... slot_marker %bt[%k] ...            (bt's only users)
+// Fills `bindOut` / `smsOut` and returns true on a match, else false.
+static bool collectPingPongShape(memref::AllocOp alloc,
+                                 pto::BindTileOp &bindOut,
+                                 SmallVectorImpl<pto::SlotMarkerOp> &smsOut) {
+  if (!alloc->hasOneUse())
+    return false;
+  auto bind = dyn_cast<pto::BindTileOp>(*alloc->getUsers().begin());
+  if (!bind || bind.getSource() != alloc.getResult())
+    return false;
+  SmallVector<pto::SlotMarkerOp> sms;
+  for (Operation *u : bind->getUsers()) {
+    auto sm = dyn_cast<pto::SlotMarkerOp>(u);
+    if (!sm || sm.getSource() != bind.getResult())
+      return false;
+    sms.push_back(sm);
+  }
+  if (sms.empty())
+    return false;
+  bindOut = bind;
+  smsOut.assign(sms.begin(), sms.end());
+  return true;
+}
+
+// §4.6 (a-1) precondition: the slot's lifetime is closed inside one loop
+// iteration — every transitive user of `sm` stays inside `loopBody` and none is
+// the loop terminator (which would carry the slot value across iterations).
+static bool slotStaysInIteration(pto::SlotMarkerOp sm, Region *loopBody) {
+  Operation *term = loopBody->back().getTerminator();
+  SmallVector<Operation *> work(sm->getUsers().begin(), sm->getUsers().end());
+  llvm::DenseSet<Operation *> seen;
+  while (!work.empty()) {
+    Operation *op = work.pop_back_val();
+    if (!seen.insert(op).second)
+      continue;
+    if (!regionContains(loopBody, op) || op == term)
+      return false;
+    for (Operation *u : op->getUsers())
+      work.push_back(u);
+  }
+  return true;
+}
+
 struct PTOPlanBmuLayoutPass
     : public mlir::pto::impl::PTOPlanBmuLayoutBase<PTOPlanBmuLayoutPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PTOPlanBmuLayoutPass)
@@ -181,9 +255,42 @@ struct PTOPlanBmuLayoutPass
     MLIRContext *ctx = &getContext();
     IRRewriter rewriter(ctx);
 
+    // §4.6 (a-1): decide which multi-buffer H allocs are materialized
+    // per-advance (loop-internal alloc/free, gets the bump-pointer implicit
+    // reuse sync) vs whole-ring (a-2, one function-scope alloc). A multi-buffer
+    // qualifies when its slots are used through the clean ping-pong shape inside
+    // one loop and every slot's lifetime closes within the iteration.
+    struct PerAdvanceInfo {
+      pto::BindTileOp bind;
+      SmallVector<pto::SlotMarkerOp> sms;
+      Region *loopBody;
+    };
+    llvm::DenseMap<Operation *, PerAdvanceInfo> perAdvance;
+    for (memref::AllocOp alloc : mbHAllocs) {
+      pto::BindTileOp bind;
+      SmallVector<pto::SlotMarkerOp> sms;
+      if (!collectPingPongShape(alloc, bind, sms))
+        continue;
+      Region *loopBody = enclosingLoopBody(sms.front());
+      if (!loopBody || !loopBody->hasOneBlock())
+        continue;
+      bool ok = true;
+      for (pto::SlotMarkerOp sm : sms) {
+        if (enclosingLoopBody(sm) != loopBody ||
+            !slotStaysInIteration(sm, loopBody)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok)
+        perAdvance[alloc] = {bind, std::move(sms), loopBody};
+    }
+
     // Stage 1: per-scope concurrent slice demand. Conservatively sums every
     // dynamic/hybrid buffer in the function (ignores liveness), so segment 0
-    // never stalls. Liveness-aware sizing is a Phase 5 optimization.
+    // never stalls. Liveness-aware sizing is a Phase 5 optimization. Per-advance
+    // multi-buffers need N * perSlotSlices (each of the N in-flight slots is an
+    // independent >=1-slice alloc); whole-ring packs the N slots into one alloc.
     llvm::MapVector<pto::AddressSpace, uint64_t> scopeSlices;
     for (memref::AllocOp alloc : mbHAllocs) {
       pto::AddressSpace scope = allocScope(alloc);
@@ -191,8 +298,12 @@ struct PTOPlanBmuLayoutPass
           alloc->getAttrOfType<IntegerAttr>(pto::kPtoMultiBufferAttrName)
               .getValue()
               .getZExtValue();
-      scopeSlices[scope] +=
-          ceilDiv(n * slotByteSize(alloc), pto::bmuSliceBytes(scope));
+      uint64_t slotBytes = slotByteSize(alloc);
+      uint64_t sliceBytes = pto::bmuSliceBytes(scope);
+      if (perAdvance.count(alloc))
+        scopeSlices[scope] += n * ceilDiv(slotBytes, sliceBytes);
+      else
+        scopeSlices[scope] += ceilDiv(n * slotBytes, sliceBytes);
     }
     for (auto &kv : hGroups) {
       pto::AddressSpace scope = allocScope(kv.second.front());
@@ -217,20 +328,31 @@ struct PTOPlanBmuLayoutPass
                                         tail, tail);
     }
 
-    auto pipeAttr = pto::PipeAttr::get(ctx, pto::PIPE::PIPE_MTE2);
     auto i64Ty = rewriter.getI64Type();
+
+    // Alloc rides the producer pipe, free the last-consumer pipe (§5.4). They
+    // differ, so the producer->consumer data dependency is still carried by
+    // InsertSync's cross-pipe set/wait_flag (BMU does no cross-pipe data sync —
+    // §4.8(a)); the free only drains its own consumer pipe.
+    auto allocPipeAttr = [&](pto::AddressSpace s) {
+      return pto::PipeAttr::get(ctx, pto::bmuAllocPipeFor(s));
+    };
+    auto freePipeAttr = [&](pto::AddressSpace s) {
+      return pto::PipeAttr::get(ctx, pto::bmuFreePipeFor(s));
+    };
 
     // Emit a bmu_alloc at `alloc`'s site and a matching bmu_free before every
     // return. base / cnt dominate the returns because these allocs live at
     // function scope.
     auto emitAllocAndFree = [&](memref::AllocOp alloc, uint64_t sliceCount,
                                 pto::AddressSpaceAttr bufferAttr) -> Value {
+      pto::AddressSpace scope = bufferAttr.getAddressSpace();
       Location loc = alloc.getLoc();
       rewriter.setInsertionPoint(alloc);
       Value cnt = rewriter.create<arith::ConstantIndexOp>(
           loc, static_cast<int64_t>(sliceCount));
-      Value base = rewriter.create<pto::BmuAllocOp>(loc, i64Ty, pipeAttr,
-                                                    bufferAttr, /*segm=*/0u, cnt);
+      Value base = rewriter.create<pto::BmuAllocOp>(
+          loc, i64Ty, allocPipeAttr(scope), bufferAttr, /*segm=*/0u, cnt);
       // Place the free so `base` dominates it. A function-scope alloc frees
       // before every return; an alloc nested in an scf region (e.g. a
       // branch-local D buffer, whose lifetime does not cross the branch) frees
@@ -238,19 +360,19 @@ struct PTOPlanBmuLayoutPass
       if (alloc->getParentRegion() == &func.getBody()) {
         func.walk([&](func::ReturnOp ret) {
           rewriter.setInsertionPoint(ret);
-          rewriter.create<pto::BmuFreeOp>(ret.getLoc(), pipeAttr, bufferAttr,
-                                          base, cnt);
+          rewriter.create<pto::BmuFreeOp>(ret.getLoc(), freePipeAttr(scope),
+                                          bufferAttr, base, cnt);
         });
       } else {
         Operation *term = alloc->getBlock()->getTerminator();
         rewriter.setInsertionPoint(term);
-        rewriter.create<pto::BmuFreeOp>(term->getLoc(), pipeAttr, bufferAttr,
-                                        base, cnt);
+        rewriter.create<pto::BmuFreeOp>(term->getLoc(), freePipeAttr(scope),
+                                        bufferAttr, base, cnt);
       }
       return base;
     };
 
-    // Stage 3a: multi-buffer H allocs -> one base + N slot addresses.
+    // Stage 3a: multi-buffer H allocs.
     for (memref::AllocOp alloc : mbHAllocs) {
       pto::AddressSpace scope = allocScope(alloc);
       auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
@@ -259,6 +381,41 @@ struct PTOPlanBmuLayoutPass
               .getValue()
               .getZExtValue();
       uint64_t slotBytes = slotByteSize(alloc);
+
+      // §4.6 (a-1) per-advance: replace each in-loop slot_marker with its own
+      // bmu_alloc/free so consecutive iterations acquire distinct slots from the
+      // hardware bump pointer and the reuse WAR is absorbed by the alloc stall.
+      auto paIt = perAdvance.find(alloc);
+      if (paIt != perAdvance.end()) {
+        PerAdvanceInfo &info = paIt->second;
+        uint64_t perSlot = ceilDiv(slotBytes, pto::bmuSliceBytes(scope));
+        Attribute cfg = inferBindTileConfig(alloc);
+        Operation *term = info.loopBody->back().getTerminator();
+        for (pto::SlotMarkerOp sm : info.sms) {
+          Location loc = sm.getLoc();
+          rewriter.setInsertionPoint(sm);
+          Value cnt = rewriter.create<arith::ConstantIndexOp>(
+              loc, static_cast<int64_t>(perSlot));
+          Value base = rewriter.create<pto::BmuAllocOp>(
+              loc, i64Ty, allocPipeAttr(scope), bufferAttr, /*segm=*/0u, cnt);
+          auto pc = rewriter.create<pto::PointerCastOp>(
+              loc, alloc.getType(), ValueRange(base), Value(), Value(), cfg);
+          // Reproduce the slot's result type by cloning the func-scope bind_tile
+          // with its source rewired to this iteration's cast.
+          IRMapping map;
+          map.map(info.bind.getSource(), pc.getResult());
+          Operation *newBind = rewriter.clone(*info.bind.getOperation(), map);
+          rewriter.setInsertionPoint(term);
+          rewriter.create<pto::BmuFreeOp>(term->getLoc(), freePipeAttr(scope),
+                                          bufferAttr, base, cnt);
+          rewriter.replaceOp(sm, newBind->getResult(0));
+        }
+        rewriter.eraseOp(info.bind);
+        rewriter.eraseOp(alloc);
+        continue;
+      }
+
+      // §4.6 (a-2) whole-ring fallback: one base + N slot addresses.
       uint64_t sliceCount = ceilDiv(n * slotBytes, pto::bmuSliceBytes(scope));
       Value base = emitAllocAndFree(alloc, sliceCount, bufferAttr);
 

@@ -45,4 +45,4 @@ module {
 // The slot markers survive for downstream resolve/sync.
 // CHECK: pto.slot_marker
 // CHECK: pto.slot_marker
-// CHECK: pto.bmu_free <vec>, <PIPE_MTE2>, base %[[BASE]], count %{{.*}} : i64, index
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE3>, base %[[BASE]], count %{{.*}} : i64, index

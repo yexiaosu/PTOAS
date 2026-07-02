@@ -160,11 +160,14 @@ struct PTOClassifyBuffersPass
         hybrid = true; // rule 1: explicit bmu
       } else {
         // rule 2/3: auto — promote to H only when the N slots would overflow
-        // the scope's static quota; otherwise keep S to retain the const-addr
-        // disjoint-sync optimizations.
+        // the scope's static capacity; otherwise keep S to retain the const-addr
+        // disjoint-sync optimizations. At classify time no BMU segment is
+        // reserved yet, so the whole scope (BMU.md geometry) is available. §4.7's
+        // feedback loop will subtract the reserved BMU tail (tail_seg3 * slice)
+        // here once the carve-up is known.
         pto::AddressSpace scope = allocScope(alloc);
         uint64_t demand = n * slotByteSize(alloc);
-        uint64_t quota = pto::a5ScopeStaticCapacityBytes(scope);
+        uint64_t quota = pto::bmuScopeTotalBytes(scope);
         hybrid = (quota != 0) && (demand > quota);
       }
 

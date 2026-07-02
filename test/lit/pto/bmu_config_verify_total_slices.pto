@@ -6,17 +6,16 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+// BMU.md §3.1: 0 <= tail_seg0 <= tail_seg1 <= tail_seg2 <= tail_seg3 <=
+// total_slices. UB (vec) has 48 slices, so tail_seg3 = 100 is out of range.
+
 // RUN: not ptoas %s 2>&1 | FileCheck %s
 
-// BMU manages on-chip local buffers only; GM (global / off-chip) never
-// participates. GM is NOT the Unified Buffer — UB is #pto.address_space<vec>.
 module {
-  func.func @bad_buffer() {
-    %n = arith.constant 4 : index
-    %b = pto.bmu_alloc #pto.address_space<gm>, #pto.pipe<PIPE_MTE2>, segm 0, count %n
-        : index -> i64
+  func.func @over_total_slices() {
+    pto.bmu_config <vec> tails = [0, 0, 0, 100]
     return
   }
 }
 
-// CHECK: buffer kind must be an on-chip BMU local-memory address space
+// CHECK: tail_seg3=100 exceeds the total slice count (48) of buffer kind vec

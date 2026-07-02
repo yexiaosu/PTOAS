@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.6 (a-1): an explicit multi-buffer whose slots are used through
+// the clean ping-pong shape inside one loop, with each slot's lifetime closing
+// within the iteration, is materialized per-advance: the func-scope alloc is
+// replaced by a bmu_alloc/free pair *inside* the loop body, so consecutive
+// iterations acquire distinct slots from the hardware bump pointer and the reuse
+// WAR is absorbed by the alloc stall (no explicit reverse wait_flag needed).
+//
+// Segment 0 is sized to N=2 single-slot slices (tail = [2,2,2,2]); alloc rides
+// the producer pipe (MTE2), free the last-consumer pipe (MTE3, §5.4).
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+module {
+  func.func @per_advance(%gm : memref<16x16xf16, #pto.address_space<gm>>,
+                         %n : index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %mb = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    scf.for %i = %c0 to %n step %c1 {
+      %k = arith.remui %i, %c2 : index
+      %s = pto.multi_tile_get %mb[%k]
+          : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+         -> !pto.tile_buf<vec, 16x16xf16>
+      pto.tload ins(%gm : memref<16x16xf16, #pto.address_space<gm>>)
+                outs(%s : !pto.tile_buf<vec, 16x16xf16>)
+      pto.tadd ins(%s, %s : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+               outs(%s : !pto.tile_buf<vec, 16x16xf16>)
+    }
+    return
+  }
+}
+
+// Segment sized to N single-slot slices.
+// CHECK: pto.bmu_config <vec> tails = [2, 2, 2, 2]
+// The alloc/cast/free all live inside the loop body (per-advance), not at
+// function scope: the config is followed by scf.for, then the alloc.
+// CHECK: scf.for
+// CHECK: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+// CHECK: pto.pointer_cast(%{{.*}})
+// CHECK: pto.bmu_free <vec>, <PIPE_MTE3>, base %{{.*}}, count %{{.*}} : i64, index

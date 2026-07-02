@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU design §4.7: S and BMU (H/D) allocs coexist in one buffer kind. The BMU
+// dynamic segments occupy the low region [0, tail_seg3*slice); pto-plan-memory
+// places the static ("S") allocs in the reserved tail above them by reducing
+// the scope capacity to the tail and shifting every planned offset up by the
+// BMU region size (= tail_seg3 * slice_size).
+//
+// Here one explicit-bmu multi-buffer (H) reserves 1 vec slice (2*512B <= 8KB),
+// so tail_seg3 = 1 and the reserved-tail base is 1*8192 = 8192 bytes. The auto
+// multi-buffer (S) would otherwise be planned at 0/512; instead it lands at
+// 8192/8704, disjoint from the BMU segment.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-memory %s 2>&1 1>/dev/null | FileCheck %s
+
+module {
+  func.func @coexist(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                     %gm1 : memref<16x16xf16, #pto.address_space<gm>>,
+                     %gm2 : memref<16x16xf16, #pto.address_space<gm>>,
+                     %gm3 : memref<16x16xf16, #pto.address_space<gm>>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    // H: explicit BMU multi-buffer -> BMU segment 0.
+    %mbh = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    %h0 = pto.multi_tile_get %mbh[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    %h1 = pto.multi_tile_get %mbh[%c1]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%h0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%gm1 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%h1 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tadd ins(%h0, %h1 : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+             outs(%h0 : !pto.tile_buf<vec, 16x16xf16>)
+    // S: auto small multi-buffer -> reserved static tail.
+    %mbs = pto.alloc_multi_tile
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+    %s0 = pto.multi_tile_get %mbs[%c0]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    %s1 = pto.multi_tile_get %mbs[%c1]
+        : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
+       -> !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%gm2 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%gm3 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%s1 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tadd ins(%s0, %s1 : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>)
+             outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+    return
+  }
+}
+
+// The BMU H group reserves 1 slice.
+// CHECK: pto.bmu_config <vec> tails = [1, 1, 1, 1]
+// H slots come from the runtime BMU base.
+// CHECK: %[[BASE:.*]] = pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+// CHECK: pto.pointer_cast(%[[BASE]], %{{.*}})
+// S slots are shifted into the reserved tail above the 8192-byte BMU region.
+// CHECK-DAG: %[[S0:.*]] = arith.constant 8192 : i64
+// CHECK-DAG: %[[S1:.*]] = arith.constant 8704 : i64
+// CHECK: pto.pointer_cast(%[[S0]], %[[S1]])

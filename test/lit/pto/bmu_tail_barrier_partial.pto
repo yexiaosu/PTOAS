@@ -8,9 +8,10 @@
 
 // BMU design §4.8d: when a trailing pto.bmu_free drains a proper subset of the
 // used pipes, the PIPE_ALL clean barrier degrades to per-pipe barriers over
-// just the residual P_used \ P_freed. Here the tloads use PIPE_MTE2 (freed by
-// the H-path bmu_free) and the tstore uses PIPE_MTE3 (not freed), so the
-// residual is {MTE3} and we emit a single pto.barrier <PIPE_MTE3>.
+// just the residual P_used \ P_freed. The H-path bmu_free for a vec buffer
+// rides the last-consumer pipe PIPE_MTE3 (§5.4). Here the tstore uses PIPE_MTE3
+// (drained by the free) and the tloads use PIPE_MTE2 (not drained), so the
+// residual is {MTE2} and we emit a single pto.barrier <PIPE_MTE2>.
 
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync --mlir-print-ir-after=pto-insert-sync %s 2>&1 1>/dev/null | FileCheck %s
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --enable-insert-sync %s -o - 2>&1 | FileCheck --check-prefix=EMITC %s
@@ -19,14 +20,14 @@
 // so it survives to EmitC as a real per-pipe barrier instead of collapsing into
 // the deferred full-PIPE_ALL clean barrier.
 // CHECK-LABEL: func.func @mte2_mte3
-// CHECK: pto.barrier <PIPE_MTE3>
+// CHECK: pto.barrier <PIPE_MTE2>
 // CHECK-NOT: pto.barrier <PIPE_ALL>
 // CHECK-NOT: auto_sync_tail_barrier
 
-// At EmitC the residual lowers to pipe_barrier(PIPE_MTE3) and there is no
+// At EmitC the residual lowers to pipe_barrier(PIPE_MTE2) and there is no
 // ptoas_auto_sync_tail(...) call (only its unused inline definition) and no
 // full PIPE_ALL tail barrier.
-// EMITC: pipe_barrier(PIPE_MTE3)
+// EMITC: pipe_barrier(PIPE_MTE2)
 // EMITC-NOT: ptoas_auto_sync_tail(PTOAutoSyncTailMode::
 
 module {
