@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOBmu.h"
 #include "PTO/IR/PTOMultiBuffer.h"
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/IR/PTOSyncUtils.h"
@@ -7726,16 +7727,62 @@ LogicalResult RlsBufOp::verify() {
                          getModeAttr());
 }
 
-// BMU buffer kinds are local-memory address spaces only; GM / default never
-// participate in BMU allocation.
+// BMU manages on-chip local buffers only. Exactly the address spaces that have
+// a real BMU intrinsic (see bmuIntrinsicInfix in PTOToEmitC) are valid; the
+// verifier whitelists them so a new address space is rejected by default rather
+// than silently lowered. Note: the Unified Buffer (UB) is AddressSpace::VEC,
+// NOT GM — GM is global/off-chip memory and never participates in BMU.
 static LogicalResult verifyBmuBufferKind(Operation *op,
                                          AddressSpaceAttr bufferAttr) {
+  // BMU manages on-chip local buffers only; GM (global/off-chip) and Zero
+  // (default) never participate. Note: the Unified Buffer (UB) is
+  // AddressSpace::VEC, NOT GM.
   AddressSpace space = bufferAttr.getAddressSpace();
   if (space == AddressSpace::GM || space == AddressSpace::Zero)
     return op->emitOpError()
-           << "buffer kind must be a local-memory address space, got "
+           << "buffer kind must be an on-chip BMU local-memory address space "
+              "(vec/mat/left/right/acc/bias/scaling), got "
            << stringifyAddressSpace(space);
   return success();
+}
+
+// Checks that `pipe` is a legal pipe for a BMU alloc/free on `space`.
+//
+// An alloc stall only protects the region if it is issued on the *producer*
+// pipe (the pipe whose next instruction writes the region); a free drain only
+// guards the true dependency if issued on the *last consumer* pipe (BMU.md
+// §4.4 / §5.4). A pipe outside those roles cannot serve the op and is
+// rejected. PIPE_S (scalar) is always legal as a fallback on both.
+//
+// The allowed sets union the VecCore and CubeCore validity matrices, since the
+// op alone does not carry which core it targets. Only UB (VEC) is shared
+// across cores; every other buffer kind is CubeCore-only, so the union stays
+// tight.
+static LogicalResult verifyBmuPipeForBuffer(Operation *op, AddressSpace space,
+                                            PIPE pipe, bool isAlloc) {
+  // Scalar is always a legal fallback (stalls / drains control flow).
+  if (pipe == PIPE::PIPE_S)
+    return success();
+
+  // Producer (alloc, BMU.md §4.4) / consumer (free, §5.4) pipe matrices live in
+  // PTOBmu.h so this verifier and pto-plan-bmu-layout's pipe selection stay in
+  // sync.
+  SmallVector<PIPE, 4> allowed = pto::bmuValidPipesFor(space, isAlloc);
+  if (allowed.empty())
+    return success(); // buffer kind already rejected by verifyBmuBufferKind
+
+  if (llvm::is_contained(allowed, pipe))
+    return success();
+
+  InFlightDiagnostic diag = op->emitOpError()
+                            << "pipe " << stringifyPIPE(pipe)
+                            << " is not valid for a BMU "
+                            << (isAlloc ? "alloc" : "free")
+                            << " on buffer kind " << stringifyAddressSpace(space)
+                            << "; expected one of: " << stringifyPIPE(PIPE::PIPE_S);
+  for (PIPE p : allowed)
+    diag << ", " << stringifyPIPE(p);
+  return diag;
 }
 
 LogicalResult BmuConfigOp::verify() {
@@ -7755,11 +7802,25 @@ LogicalResult BmuConfigOp::verify() {
              << "segment tails must be non-decreasing, got tail_seg" << (i - 1)
              << "=" << tails[i - 1] << " > tail_seg" << i << "=" << tails[i];
   }
+
+  // The top tail cannot exceed the buffer's total slice count (BMU.md §3.1:
+  // 0 <= tail_seg0 <= ... <= tail_seg3 <= total_slices).
+  AddressSpace space = getBufferAttr().getAddressSpace();
+  uint64_t totalSlices = pto::bmuTotalSlices(space);
+  if (totalSlices != 0 && static_cast<uint64_t>(tails[3]) > totalSlices)
+    return emitOpError() << "tail_seg3=" << tails[3]
+                         << " exceeds the total slice count (" << totalSlices
+                         << ") of buffer kind " << stringifyAddressSpace(space);
   return success();
 }
 
 LogicalResult BmuAllocOp::verify() {
   if (failed(verifyBmuBufferKind(getOperation(), getBufferAttr())))
+    return failure();
+
+  if (failed(verifyBmuPipeForBuffer(getOperation(),
+                                    getBufferAttr().getAddressSpace(),
+                                    getPipe().getPipe(), /*isAlloc=*/true)))
     return failure();
 
   int64_t segm = getSegm();
@@ -7776,6 +7837,11 @@ LogicalResult BmuAllocOp::verify() {
 
 LogicalResult BmuFreeOp::verify() {
   if (failed(verifyBmuBufferKind(getOperation(), getBufferAttr())))
+    return failure();
+
+  if (failed(verifyBmuPipeForBuffer(getOperation(),
+                                    getBufferAttr().getAddressSpace(),
+                                    getPipe().getPipe(), /*isAlloc=*/false)))
     return failure();
 
   if (std::optional<int64_t> cnt = getConstantIntValue(getSliceCount())) {

@@ -30,6 +30,7 @@
 // Pulls in the generated `pto::AddressSpace` enum (via its include guard).
 #include "PTO/IR/PTO.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
@@ -79,30 +80,126 @@ inline uint64_t bmuSliceBytes(AddressSpace scope) {
   return 0;
 }
 
-/// Approximate A5 per-scope local-memory byte capacity, used by the
-/// classifier's `placement=auto` threshold. Mirrors the kA5 MemSpec in
-/// PTOPlanMemory (values there are in bits; converted to bytes here). This is
-/// a heuristic threshold only — exact carve-up happens in pto-plan-bmu-layout.
-inline uint64_t a5ScopeStaticCapacityBytes(AddressSpace scope) {
+/// Total number of BMU slices in each buffer kind (BMU.md CoreV920 slice
+/// table). This is the hardware upper bound for a BMU_SEGM_* tail: the config
+/// constraint is 0 <= tail_seg0 <= tail_seg1 <= tail_seg2 <= tail_seg3 <=
+/// total_slices. Non-BMU scopes (GM/Zero) return 0.
+inline uint64_t bmuTotalSlices(AddressSpace scope) {
   switch (scope) {
   case AddressSpace::VEC:
-    return 2031616 / 8;
+    return 48; // UB  384KB / 8KB
   case AddressSpace::MAT:
-    return 4194304 / 8;
+    return 64; // L1  512KB / 8KB
   case AddressSpace::LEFT:
+    return 16; // L0A 64KB / 4KB
   case AddressSpace::RIGHT:
-    return 524288 / 8;
+    return 16; // L0B 64KB / 4KB
   case AddressSpace::ACC:
-    return 2097152 / 8;
+    return 16; // L0C 256KB / 16KB
   case AddressSpace::BIAS:
-    return 524288 / 8;
+    return 16; // BT  4KB / 256B
   case AddressSpace::SCALING:
-    return 2031616 / 8;
+    return 16; // FB  16 entries
   case AddressSpace::GM:
   case AddressSpace::Zero:
     return 0;
   }
   return 0;
+}
+
+/// Total physical byte capacity of a buffer kind, derived from the BMU.md
+/// CoreV920 slice table (total_slices * slice_size) — the single source of
+/// truth for scope capacity. Non-BMU scopes (GM/Zero) return 0.
+inline uint64_t bmuScopeTotalBytes(AddressSpace scope) {
+  return bmuTotalSlices(scope) * bmuSliceBytes(scope);
+}
+
+/// Pipes that may carry a BMU alloc (producer) / free (consumer) for a buffer
+/// kind. This is the single source of truth shared by the op verifier
+/// (`verifyBmuPipeForBuffer`) and pto-plan-bmu-layout's pipe selection, so the
+/// two never drift. BMU.md §4.4 (alloc / producer pipes) and §5.4 (free /
+/// consumer pipes). `PIPE_S` (scalar) is a universal fallback the verifier
+/// accepts in addition to these. Non-BMU scopes (GM/Zero) return {}.
+inline llvm::SmallVector<PIPE, 4> bmuValidPipesFor(AddressSpace scope,
+                                                   bool isAlloc) {
+  if (isAlloc) {
+    switch (scope) {
+    case AddressSpace::VEC: // UB <- MTE2 (GM->UB) / V (compute) / F (fixpipe)
+      return {PIPE::PIPE_MTE2, PIPE::PIPE_V, PIPE::PIPE_FIX};
+    case AddressSpace::MAT: // L1 <- MTE2 (GM->L1)
+      return {PIPE::PIPE_MTE2};
+    case AddressSpace::LEFT:  // L0A <- MTE1 (L1->L0A)
+    case AddressSpace::RIGHT: // L0B <- MTE1 (L1->L0B)
+      return {PIPE::PIPE_MTE1};
+    case AddressSpace::ACC: // L0C <- M (MAD)
+      return {PIPE::PIPE_M};
+    case AddressSpace::BIAS: // BT <- MTE1 (from L1) / MTE2 (from GM)
+      return {PIPE::PIPE_MTE1, PIPE::PIPE_MTE2};
+    case AddressSpace::SCALING: // FB <- MTE1 (L1->FB)
+      return {PIPE::PIPE_MTE1};
+    default:
+      return {};
+    }
+  }
+  switch (scope) {
+  case AddressSpace::VEC: // UB read by V (in-place) / MTE3 (UB->GM)
+    return {PIPE::PIPE_V, PIPE::PIPE_MTE3};
+  case AddressSpace::MAT: // L1 read by MTE1 (L1->L0) / F (L1->FB)
+    return {PIPE::PIPE_MTE1, PIPE::PIPE_FIX};
+  case AddressSpace::LEFT:  // L0A read by M (MAD)
+  case AddressSpace::RIGHT: // L0B read by M (MAD)
+    return {PIPE::PIPE_M};
+  case AddressSpace::ACC:     // L0C read by F (fixpipe)
+  case AddressSpace::BIAS:    // BT  read by F (fixpipe)
+  case AddressSpace::SCALING: // FB  read by F (fixpipe)
+    return {PIPE::PIPE_FIX};
+  default:
+    return {};
+  }
+}
+
+/// Canonical carrier pipe pto-plan-bmu-layout emits for a BMU alloc of `scope`
+/// (the dominant producer pipe). Always a member of
+/// bmuValidPipesFor(scope, /*isAlloc=*/true).
+inline PIPE bmuAllocPipeFor(AddressSpace scope) {
+  switch (scope) {
+  case AddressSpace::VEC:     // GM->UB load
+  case AddressSpace::MAT:     // GM->L1 load
+  case AddressSpace::BIAS:    // bias from GM
+    return PIPE::PIPE_MTE2;
+  case AddressSpace::LEFT:    // L1->L0A
+  case AddressSpace::RIGHT:   // L1->L0B
+  case AddressSpace::SCALING: // L1->FB
+    return PIPE::PIPE_MTE1;
+  case AddressSpace::ACC: // MAD writes L0C
+    return PIPE::PIPE_M;
+  default:
+    return PIPE::PIPE_S;
+  }
+}
+
+/// Canonical carrier pipe pto-plan-bmu-layout emits for a BMU free of `scope`
+/// (the dominant last-consumer pipe). Always a member of
+/// bmuValidPipesFor(scope, /*isAlloc=*/false). Because this differs from the
+/// alloc pipe, the producer->consumer data dependency is protected by
+/// InsertSync's normal cross-pipe set/wait_flag, not by the free itself (BMU
+/// does no cross-pipe data sync — BMU.md §2.1 / design §4.8(a)).
+inline PIPE bmuFreePipeFor(AddressSpace scope) {
+  switch (scope) {
+  case AddressSpace::VEC: // UB->GM store drains UB
+    return PIPE::PIPE_MTE3;
+  case AddressSpace::MAT: // L1->L0 drains L1
+    return PIPE::PIPE_MTE1;
+  case AddressSpace::LEFT:  // MAD reads L0A
+  case AddressSpace::RIGHT: // MAD reads L0B
+    return PIPE::PIPE_M;
+  case AddressSpace::ACC:     // fixpipe consumes L0C
+  case AddressSpace::BIAS:    // fixpipe consumes BT
+  case AddressSpace::SCALING: // fixpipe consumes FB
+    return PIPE::PIPE_FIX;
+  default:
+    return PIPE::PIPE_S;
+  }
 }
 
 } // namespace pto

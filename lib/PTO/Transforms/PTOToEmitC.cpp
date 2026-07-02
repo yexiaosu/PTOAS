@@ -6039,6 +6039,9 @@ struct PTORlsBufToEmitC : public OpConversionPattern<mlir::pto::RlsBufOp> {
 // bmu_free   -> <kind>buf_free<PIPE>(reinterpret_cast<__kind__ void*>(base), n)
 
 // The intrinsic infix for a BMU buffer kind (ubuf_alloc / cbuf_alloc / ...).
+// UB is AddressSpace::VEC ("ubuf"); GM / Zero are NOT BMU buffer kinds and must
+// never map to "ubuf" — verifyBmuBufferKind rejects them before lowering, so
+// reaching them here is an internal invariant violation, not a UB buffer.
 static StringRef bmuIntrinsicInfix(pto::AddressSpace as) {
   switch (as) {
   case pto::AddressSpace::VEC:
@@ -6055,9 +6058,11 @@ static StringRef bmuIntrinsicInfix(pto::AddressSpace as) {
     return "bt";
   case pto::AddressSpace::SCALING:
     return "fb";
-  default:
-    return "ubuf";
+  case pto::AddressSpace::GM:
+  case pto::AddressSpace::Zero:
+    break;
   }
+  llvm_unreachable("non-BMU address space reached BMU intrinsic lowering");
 }
 
 // The BMU_SEGM_* SPR token for a buffer kind, matching the address-space name.
