@@ -1,0 +1,58 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU segmentation strategy §4 Step D: more than 4 `(class, sliceCount)`
+// partitions cannot each own a segment (only 4 exist). The 3 highest-priority
+// partitions take seg0/1/2; the rest bin-merge into seg3 with a common
+// `binSlice` granularity (each member rounds its alloc up to binSlice, keeping
+// seg3 uniform at the cost of internal fragmentation).
+//
+// vec slice = 8KB. Six D allocs form five partitions (sorted by cap desc):
+//   (D,5) e   cap 5  -> seg0        t0 = 5
+//   (D,4) d   cap 4  -> seg1        t1 = 9
+//   (D,3) c   cap 3  -> seg2        t2 = 12
+//   (D,1) a1,a2  slots 2           -\ bin, binSlice = max(1,2) = 2
+//   (D,2) b      slots 1           -/ seg3
+// seg3 capacity = slots*binSlice, NOT sum(cap) rounded: (2*2) + (1*2) = 6, so
+//   t3 = 12 + 6 = 18   (the sum(cap)-rounded formula would wrongly give 16).
+// The two 1-slice (D,1) allocs are bin-rounded up to count 2.
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-LABEL: func.func @binf
+// CHECK: pto.bmu_config <vec> tails = [5, 9, 12, 18]
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 1, count %{{.*}} : index -> i64
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 2, count %{{.*}} : index -> i64
+// The three binned allocs (two (D,1) + one (D,2)) all land in seg3.
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 3, count %{{.*}} : index -> i64
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 3, count %{{.*}} : index -> i64
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 3, count %{{.*}} : index -> i64
+
+module {
+  func.func @binf(%g5 : memref<160x128xf16, #pto.address_space<gm>>,
+                  %g4 : memref<128x128xf16, #pto.address_space<gm>>,
+                  %g3 : memref<96x128xf16, #pto.address_space<gm>>,
+                  %g2 : memref<64x128xf16, #pto.address_space<gm>>,
+                  %g1a : memref<16x16xf16, #pto.address_space<gm>>,
+                  %g1b : memref<16x16xf16, #pto.address_space<gm>>) {
+    %e  = memref.alloc() {pto.plan_class = "D"} : memref<160x128xf16, #pto.address_space<vec>>
+    %d  = memref.alloc() {pto.plan_class = "D"} : memref<128x128xf16, #pto.address_space<vec>>
+    %c  = memref.alloc() {pto.plan_class = "D"} : memref<96x128xf16, #pto.address_space<vec>>
+    %b  = memref.alloc() {pto.plan_class = "D"} : memref<64x128xf16, #pto.address_space<vec>>
+    %a1 = memref.alloc() {pto.plan_class = "D"} : memref<16x16xf16, #pto.address_space<vec>>
+    %a2 = memref.alloc() {pto.plan_class = "D"} : memref<16x16xf16, #pto.address_space<vec>>
+    pto.tload ins(%g5 : memref<160x128xf16, #pto.address_space<gm>>) outs(%e : memref<160x128xf16, #pto.address_space<vec>>)
+    pto.tload ins(%g4 : memref<128x128xf16, #pto.address_space<gm>>) outs(%d : memref<128x128xf16, #pto.address_space<vec>>)
+    pto.tload ins(%g3 : memref<96x128xf16, #pto.address_space<gm>>) outs(%c : memref<96x128xf16, #pto.address_space<vec>>)
+    pto.tload ins(%g2 : memref<64x128xf16, #pto.address_space<gm>>) outs(%b : memref<64x128xf16, #pto.address_space<vec>>)
+    pto.tload ins(%g1a : memref<16x16xf16, #pto.address_space<gm>>) outs(%a1 : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tload ins(%g1b : memref<16x16xf16, #pto.address_space<gm>>) outs(%a2 : memref<16x16xf16, #pto.address_space<vec>>)
+    return
+  }
+}

@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU segmentation strategy §4: two D-class allocs with different slice counts
+// form two `(class, sliceCount)` partitions, so each gets its own BMU segment
+// instead of being summed into segment 0. The larger partition (higher cap)
+// sorts first and takes seg0; tails become differentiated rather than all-equal.
+//
+// vec slice = 8KB. 16x16xf16 = 512B -> 1 slice = partition (D,1), cap 1.
+//             64x128xf16 = 16KB   -> 2 slices = partition (D,2), cap 2.
+// Sort by cap desc: (D,2) -> seg0, (D,1) -> seg1.
+//   tails = [t0=2, t1=2+1=3, t2=3, t3=3].
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-LABEL: func.func @szsplit
+// CHECK: pto.bmu_config <vec> tails = [2, 3, 3, 3]
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 1, count %{{.*}} : index -> i64
+// CHECK-DAG: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+
+module {
+  func.func @szsplit(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                     %out0 : memref<16x16xf16, #pto.address_space<gm>>,
+                     %gm1 : memref<64x128xf16, #pto.address_space<gm>>,
+                     %out1 : memref<64x128xf16, #pto.address_space<gm>>) {
+    %a = memref.alloc() {pto.plan_class = "D"}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    %b = memref.alloc() {pto.plan_class = "D"}
+        : memref<64x128xf16, #pto.address_space<vec>>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%a : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tstore ins(%a : memref<16x16xf16, #pto.address_space<vec>>)
+               outs(%out0 : memref<16x16xf16, #pto.address_space<gm>>)
+    pto.tload ins(%gm1 : memref<64x128xf16, #pto.address_space<gm>>)
+              outs(%b : memref<64x128xf16, #pto.address_space<vec>>)
+    pto.tstore ins(%b : memref<64x128xf16, #pto.address_space<vec>>)
+               outs(%out1 : memref<64x128xf16, #pto.address_space<gm>>)
+    return
+  }
+}

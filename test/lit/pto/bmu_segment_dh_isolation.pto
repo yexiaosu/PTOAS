@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// BMU segmentation strategy §4 / §11.6: an H group and a D scratch of the *same*
+// slice size still form distinct `(class, sliceCount)` partitions, so they land
+// in separate BMU segments. This keeps the short-lived D churn from pushing the
+// long-lived H group's bump pointer. Class H sorts before D, so the group takes
+// seg0 and the D scratch seg1.
+//
+// vec slice = 8KB. Both the H group (two 16x16xf16 members packed into 1KB) and
+// the D alloc (16x16xf16) round to 1 slice, yet occupy different segments.
+//   tails = [t0=1(H), t1=1+1=2(D), t2=2, t3=2].
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-LABEL: func.func @dhiso
+// CHECK: pto.bmu_config <vec> tails = [1, 2, 2, 2]
+// The H group is materialized first (seg0), the D scratch second (seg1).
+// CHECK: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
+// CHECK: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 1, count %{{.*}} : index -> i64
+
+module {
+  func.func @dhiso(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
+                   %out : memref<16x16xf16, #pto.address_space<gm>>) {
+    %a = memref.alloc() {pto.plan_class = "H", pto.h_group_id = 0 : i32}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    %b = memref.alloc() {pto.plan_class = "H", pto.h_group_id = 0 : i32}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    %d = memref.alloc() {pto.plan_class = "D"}
+        : memref<16x16xf16, #pto.address_space<vec>>
+    pto.tload ins(%gm0 : memref<16x16xf16, #pto.address_space<gm>>)
+              outs(%a : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tadd ins(%a, %b : memref<16x16xf16, #pto.address_space<vec>>, memref<16x16xf16, #pto.address_space<vec>>)
+             outs(%b : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tadd ins(%b, %b : memref<16x16xf16, #pto.address_space<vec>>, memref<16x16xf16, #pto.address_space<vec>>)
+             outs(%d : memref<16x16xf16, #pto.address_space<vec>>)
+    pto.tstore ins(%d : memref<16x16xf16, #pto.address_space<vec>>)
+               outs(%out : memref<16x16xf16, #pto.address_space<gm>>)
+    return
+  }
+}
