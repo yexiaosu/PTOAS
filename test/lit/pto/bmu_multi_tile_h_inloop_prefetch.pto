@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Regression for the per-advance cross-iteration-reuse guard (task #31).
+//
+// @inloop_prime is a valid software-pipelined double-buffer kernel. Steady state:
+// iteration i prefetches slot[(i+1)%2] (for iteration i+1) and consumes slot[i%2]
+// (data prefetched by iteration i-1). Iteration 0 primes slot[0] itself via an
+// in-loop `scf.if %i == 0`, so there is NO out-of-loop prologue slot_marker.
+//
+// The cross-iteration dependency travels through the PHYSICAL slot via index
+// arithmetic ((i+1)%2 vs i%2), never through an SSA value crossing scf.yield.
+// per-advance materializes one INDEPENDENT bmu_alloc per slot_marker, which would
+// hand the consume a fresh never-written buffer -> stored garbage. The fix routes
+// any multi-slot_marker multi-buffer to whole-ring (one persistent base + N slot
+// addresses before the loop), so the slots survive across iterations.
+//
+// Guard: with more than one slot_marker, per-advance is rejected; the correct
+// output is whole-ring -> exactly one bmu_alloc, emitted BEFORE the loop, and none
+// inside the loop body. (The documented safe idiom in
+// docs/designs/ptoas-multi-buffer-explicit-design.md "### 7.2" uses a separate
+// out-of-loop prologue; this variant primes in-loop and must be handled by the
+// slot_marker-count guard, not by the incidental "same loop body" check.)
+
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
+
+// CHECK-LABEL: @inloop_prime
+// Whole-ring: one persistent base allocated before the loop...
+// CHECK: pto.bmu_alloc
+// CHECK: scf.for
+// ...and NO per-iteration alloc inside the loop body (bounded by `return` so the
+// scan stops before the print-ir-after hook's second dump of the function).
+// CHECK-NOT: pto.bmu_alloc
+// CHECK: return
+
+module {
+  func.func @inloop_prime(%gm : memref<16x16xf16, #pto.address_space<gm>>,
+                          %out : memref<16x16xf16, #pto.address_space<gm>>, %n : index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>
+    scf.for %i = %c0 to %n step %c1 {
+      %cur_idx  = arith.remui %i,    %c2 : index
+      %next     = arith.addi  %i,    %c1 : index
+      %next_idx = arith.remui %next, %c2 : index
+      %is0 = arith.cmpi eq, %i, %c0 : index
+      // iteration 0 primes slot[cur] (=slot0) in-loop -- keeps the program
+      // correct without introducing an out-of-loop slot_marker.
+      scf.if %is0 {
+        %s0 = pto.multi_tile_get %mb[%cur_idx]
+            : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu> -> !pto.tile_buf<vec, 16x16xf16>
+        pto.tload ins(%gm : memref<16x16xf16, #pto.address_space<gm>>) outs(%s0 : !pto.tile_buf<vec, 16x16xf16>)
+      }
+      // prefetch into slot[(i+1)%2] for the next iteration
+      %s_next = pto.multi_tile_get %mb[%next_idx]
+          : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu> -> !pto.tile_buf<vec, 16x16xf16>
+      pto.tload ins(%gm : memref<16x16xf16, #pto.address_space<gm>>) outs(%s_next : !pto.tile_buf<vec, 16x16xf16>)
+      // consume slot[i%2] (data prefetched by iteration i-1, or the prime) and store it out
+      %s_cur = pto.multi_tile_get %mb[%cur_idx]
+          : !pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu> -> !pto.tile_buf<vec, 16x16xf16>
+      pto.tstore ins(%s_cur : !pto.tile_buf<vec, 16x16xf16>) outs(%out : memref<16x16xf16, #pto.address_space<gm>>)
+    }
+    return
+  }
+}

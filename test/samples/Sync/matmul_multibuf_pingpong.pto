@@ -1,0 +1,100 @@
+// Split-K matmul with a ping-pong (double) buffer on the A/B L1 staging tiles,
+// expressed with pto.alloc_multi_tile.
+//
+// Derived from Sync/matmul.pto. The three async pipeline stages per K-step are
+//   MTE2: GM -> aMat/bMat (L1)   MTE1: aMat/bMat -> aLeft/bRight (L0)   M: matmul
+// and the cube chain is serial (each step accumulates into cAcc). To hide the
+// MTE2 and MTE1 latency under that serial cube chain, BOTH the L1 staging tiles
+// (aMat/bMat) and the L0 operand tiles (aLeft/bRight) are 2-slot
+// `pto.alloc_multi_tile` buffers. Each step picks slot `k % 2` via
+// `pto.multi_tile_get`:
+//   * L1 ping-pong lets iteration k+1's GM->L1 load use the other slot while
+//     iteration k's tmov still reads its slot (decouples MTE2 from MTE1).
+//   * L0 ping-pong lets iteration k+1's L1->L0 tmov write the other slot while
+//     the cube still reads iteration k's operands (removes the L0 WAR that
+//     would otherwise serialize MTE1 behind M).
+// PTOAS derives the cross-slot RAW/WAR sync automatically (multi-buffer
+// explicit-design §2.3) — no manual set_flag/wait_flag needed.
+//
+// The accumulator (cAcc) stays single-buffered — it is the running
+// K-accumulation and must persist across the whole loop. The bias tiles are
+// effectively loop-invariant (loaded once, added on the first step only) and
+// are left single-buffered too.
+module attributes {"pto.device-spec" = "Ascend910B1"} {
+  func.func @RunTMATMULSplitKPingPong(%arg0: !pto.ptr<f32>, %arg1: !pto.ptr<f32>, %arg2: !pto.ptr<f32>, %arg3: !pto.ptr<f32>, %arg4: i1) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c32 = arith.constant 32 : index
+    %c256 = arith.constant 256 : index
+    %c8 = arith.constant 8 : index
+
+    %tvA = pto.make_tensor_view %arg1, shape = [%c32, %c256], strides = [%c256, %c1] : !pto.tensor_view<?x?xf32>
+    %tvB = pto.make_tensor_view %arg2, shape = [%c256, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xf32>
+    %tvOut = pto.make_tensor_view %arg0, shape = [%c32, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xf32>
+    %tvBias = pto.make_tensor_view %arg3, shape = [%c1, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xf32>
+
+    // Ping-pong (count=2) L1 staging tiles for A and B.
+    %aMb = pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, count=2>
+    %bMb = pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, count=2>
+
+    %biasData = pto.alloc_tile : !pto.tile_buf<loc=mat, dtype=f32, rows=1, cols=32, v_row=1, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+
+    // Ping-pong (count=2) L0 left/right operand tiles, so MTE1 (L1->L0) of the
+    // next step can run ahead while the cube still reads this step's operands.
+    %aLb = pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, count=2>
+    %bRb = pto.alloc_multi_tile : !pto.multi_tile_buf<!pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>, count=2>
+    // Single-buffered accumulator: it holds the running K-sum and must persist
+    // across every step, so it is deliberately NOT ping-ponged.
+    %cAcc = pto.alloc_tile : !pto.tile_buf<loc=acc, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+    %biasTile = pto.alloc_tile : !pto.tile_buf<loc=bias, dtype=f32, rows=1, cols=32, v_row=1, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    scf.for %arg5 = %c0 to %c8 step %c1 {
+      // Ping-pong slot for this K step: k % 2.
+      %pp = arith.remui %arg5, %c2 : index
+      %aMat = pto.multi_tile_get %aMb[%pp] : !pto.multi_tile_buf<!pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, count=2> -> !pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+      %bMat = pto.multi_tile_get %bMb[%pp] : !pto.multi_tile_buf<!pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, count=2> -> !pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+      %aLeft = pto.multi_tile_get %aLb[%pp] : !pto.multi_tile_buf<!pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, count=2> -> !pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+      %bRight = pto.multi_tile_get %bRb[%pp] : !pto.multi_tile_buf<!pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>, count=2> -> !pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>
+
+      %12 = arith.muli %arg5, %c32 : index
+      %13 = pto.partition_view %tvA, offsets = [%c0, %12], sizes = [%c32, %c32] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<32x32xf32>
+      %14 = pto.partition_view %tvB, offsets = [%12, %c0], sizes = [%c32, %c32] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<32x32xf32>
+      %15 = pto.partition_view %tvBias, offsets = [%c0, %c0], sizes = [%c1, %c32] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x32xf32>
+
+      pto.tload ins(%13 : !pto.partition_tensor_view<32x32xf32>) outs(%aMat : !pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>)
+      pto.tload ins(%14 : !pto.partition_tensor_view<32x32xf32>) outs(%bMat : !pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>)
+      scf.if %arg4 {
+        pto.tload ins(%15 : !pto.partition_tensor_view<1x32xf32>) outs(%biasData : !pto.tile_buf<loc=mat, dtype=f32, rows=1, cols=32, v_row=1, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+      } else {
+      }
+      //pto.set_flag[<PIPE_MTE2>, <PIPE_MTE1>, <EVENT_ID0>]
+      //pto.wait_flag[<PIPE_MTE2>, <PIPE_MTE1>, <EVENT_ID0>]
+      pto.tmov ins(%aMat : !pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>) outs(%aLeft : !pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>)
+      pto.tmov ins(%bMat : !pto.tile_buf<loc=mat, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>) outs(%bRight : !pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>)
+      scf.if %arg4 {
+        pto.tmov ins(%biasData : !pto.tile_buf<loc=mat, dtype=f32, rows=1, cols=32, v_row=1, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>) outs(%biasTile : !pto.tile_buf<loc=bias, dtype=f32, rows=1, cols=32, v_row=1, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+      } else {
+      }
+      //pto.set_flag[<PIPE_MTE1>, <PIPE_M>, <EVENT_ID0>]
+      //pto.wait_flag[<PIPE_MTE1>, <PIPE_M>, <EVENT_ID0>]
+      %16 = arith.cmpi eq, %arg5, %c0 : index
+      scf.if %16 {
+        scf.if %arg4 {
+          pto.tmatmul.bias ins(%aLeft, %bRight, %biasTile : !pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>, !pto.tile_buf<loc=bias, dtype=f32, rows=1, cols=32, v_row=1, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>) outs(%cAcc : !pto.tile_buf<loc=acc, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+        } else {
+          pto.tmatmul ins(%aLeft, %bRight : !pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>) outs(%cAcc : !pto.tile_buf<loc=acc, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+        }
+      } else {
+        pto.tmatmul.acc ins(%cAcc, %aLeft, %bRight : !pto.tile_buf<loc=acc, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=1024, pad=0>, !pto.tile_buf<loc=left, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=row_major, slayout=col_major, fractal=512, pad=0>) outs(%cAcc : !pto.tile_buf<loc=acc, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+      }
+      //pto.set_flag[<PIPE_M>, <PIPE_MTE2>, <EVENT_ID0>]
+      //pto.wait_flag[<PIPE_M>, <PIPE_MTE2>, <EVENT_ID0>]
+    }
+    //pto.set_flag[<PIPE_M>, <PIPE_FIX>, <EVENT_ID0>]
+    //pto.wait_flag[<PIPE_M>, <PIPE_FIX>, <EVENT_ID0>]
+
+    %11 = pto.partition_view %tvOut, offsets = [%c0, %c0], sizes = [%c32, %c32] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<32x32xf32>
+    pto.tstore ins(%cAcc : !pto.tile_buf<loc=acc, dtype=f32, rows=32, cols=32, v_row=32, v_col=32, blayout=col_major, slayout=row_major, fractal=1024, pad=0>) outs(%11 : !pto.partition_tensor_view<32x32xf32>)
+    return
+  }
+}

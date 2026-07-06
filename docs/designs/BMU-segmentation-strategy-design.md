@@ -104,12 +104,30 @@ tail_seg0 = tail_seg1 = tail_seg2 = tail_seg3 = 总需求
 
 对每个 BMU 管理的 scope（UB/L1/L0A/L0B/L0C/BT/FB）独立执行。
 
-### Step A — 静态需求
+### Step A — S 优先空间预留
+
+S（静态）规划使用 liveness-based 字节级地址复用（PlanMemory），空间效率远优于 BMU
+的 slice 量化 bump 分配——尤其对小 tile（例如 512B tile 在 BMU 占满一个 8KB slice，
+浪费 93.75%；在 S 里只占 512B 并可与非重叠 buffer 共址）。因此 **S 优先占用空间，
+BMU 动态段在 S 预留后的剩余空间内 carve-up**。
 
 ```
-static_bytes  = S 类 buffer 在各 program point 上的字节峰值   // 复用 MemLivenessAnalysis
-static_slices = ceil(static_bytes / slice)
+// 保守估计（当前实现）：S 类 buffer 字节求和，不看 liveness。安全偏大：
+// S 实际用量 ≤ 估计值，所以 BMU 可用空间不会被低估到挤掉 S。
+S_bytes_conservative = Σ (slotByteSize(alloc) × N)  对所有 S 类 alloc
+S_slices_reserved    = ceil(S_bytes_conservative / slice)
+bmu_available        = total_slices - S_slices_reserved
+
+// 精确版（后续 #21 liveness-aware）：
+// S_bytes = S 类 buffer 在各 program point 上的字节峰值   // 复用 MemLivenessAnalysis
+// S_slices_reserved = ceil(S_bytes / slice)
 ```
+
+Classify 规则相应简化：`placement=auto` 的多缓冲一律标 S（只有 `placement=bmu`
+→ H），不做容量判定——因为 S 和 BMU 共享同一块物理内存，如果 S 放不下，BMU
+（slice 量化更浪费）更放不下，不存在「S 放不下外溢到 BMU」的情形。进入 H/D
+的唯一原因是**语义**：`placement=bmu`（显式要求 BMU bump 分配）、数据依赖分支
+（D）、显式 `h_group_id`。
 
 ### Step B — 枚举 dynamic partition 及其容量
 
@@ -125,7 +143,7 @@ cap(p)         = live_peak(p) * slot_slices(p)      // 段容量，天然是 slo
 
 | 来源 | live_peak |
 |---|---|
-| multi-buffer 逐轮物化（§4.6 a-1） | `N`（N 深并发，每槽 1 个 `slot_slices`） |
+| multi-buffer 逐轮物化（§4.6 a-1） | `N`（最大并发槽数 = N：峰值 N 轮流水重叠、同时占 N 个槽，每槽 1 个 `slot_slices`） |
 | multi-buffer 整环物化（§4.6 a-2） | 1（整环打包成一次 alloc，`slot_slices = ceil(N·slot/slice)`） |
 | 通用 H 组（§4.6 b） | 「同时活的组数」，`slot_slices = group_slices` |
 | D 类 scratch | 该 size 类同时活的 alloc 数（liveness-aware；无 liveness 时回退为求和） |
@@ -148,9 +166,13 @@ cap(p)         = live_peak(p) * slot_slices(p)      // 段容量，天然是 slo
 - **|P| ≤ 4**：`p_i` 独占 `segment i`，一一对应。
 - **|P| > 4**：`p0,p1,p2` 各独占 `seg0/1/2`；`p3..` 合并进 **seg3「bin 段」**：
   - `bin_slice = max_{p in 合并组} slot_slices(p)`（统一粒度）。
-  - `bin_cap   = Σ cap(p)` 向上取整到 `bin_slice` 的整数倍。
   - 合并组内每次 alloc 的 `slice_count` **向上取整到 `bin_slice`**，使 seg3 内请求也 uniform
     → 仍无 stall，代价是内部碎片（`bin_slice - sliceCount` 的浪费）。
+  - `bin_cap = Σ_{p in 合并组} slots(p) · bin_slice`，其中 `slots(p) = cap(p) / slot_slices(p)`
+    是该 partition 的并发 slot 数。因为每个 slot 被取整到 `bin_slice`，段容量必须按 **取整后**
+    的 slot 数算，而不是 `Σ cap(p)`——后者只有在合并组内所有 `slot_slices(p)` 相等时才正确，
+    slot 大小不齐时会**欠配**（`slot_slices(p) < bin_slice` 的成员被算少了），可能溢出 seg3。
+    实现取此式（`PTOPlanBmuLayout.cpp` 阶段 1，`segCap[3] += slots · bin_slice`）。
 
 > bin 段是「4 段装不下所有 size」的确定回退：用内部碎片换取「无外部碎片 stall」，
 > 保证正确性优先。
@@ -168,17 +190,21 @@ t3 = t2 + cap(seg3)            // 空段令 cap = 0，tail 等于前一个（合
 由 §6 反馈环兜底（尾区放不下则 PlanMemory emit diagnostic → carve-up 收缩动态区或 reclassify），
 不在 carve-up 里预留额外余量。
 
-### Step F — 可行性与回退阶梯
+### Step F — 可行性
 
-可行条件：`t3 + static_slices ≤ total_slices`。不满足时按序回退：
+可行条件：`t3 ≤ bmu_available`（即 `t3 ≤ total_slices - S_slices_reserved`）。
 
-1. **N 协商**（§11.4）：缩小 multi-buffer 深度 `N`，`cap` 线性下降；按 `N → 偶数 → 2`
-   逐档降，emit user-level diagnostic 说明降档。
-2. **加大 bin 合并**：把更多低优先级 partition 并入 seg3，减少段数带来的对齐余量。
-3. **D partition 降级 S**：可静态规划的低优先级 D 降级到静态尾区（改回 `plan_class = "S"`，
-   走反馈环，见 §6）。
-4. **软失败**：仍不可行则 emit `pto.plan_memory_failed_buffers` diagnostic（不 `signalPassFailure`），
-   交 `pto-classify-buffers` 反馈环 reclassify（§4.5 反馈环）。
+S 已在 Step A 优先预留，BMU 动态段只能在 `bmu_available` 内分配。超出时
+`pto-plan-bmu-layout` emit 诊断并 `signalPassFailure`——因为 S 和 BMU 共享同一块
+物理内存，如果 BMU 在 S 预留后的剩余空间放不下，说明总量真的不够。不做单段回退
+（那会重新引入分段要消除的碎片化 stall，且总量不够时也救不了）。
+
+> **回退阶梯**（后续）：在 `signalPassFailure` 之前可按序尝试——
+> 1. N 协商（§11.4）：缩小 multi-buffer 深度 N；
+> 2. 加大 bin 合并；
+> 3. D partition 降级 S；
+> 4. 软失败 + 诊断。
+> 这些当前未实现，是后续优化方向。
 
 ### Step G — emit config + 记录映射
 
@@ -259,14 +285,16 @@ bump pointer（§11.6）。
 
 ## 8. 改动清单
 
-| 位置 | 改动 |
-|---|---|
-| `PTOBmu.h` | 新增 helper：partition key 计算、`bin_slice` / bin 归并、`S_capacity` / `S_base_offset` |
-| `PTOPlanBmuLayout.cpp` 阶段 1 | 用 §4 carve-up 替换 `scopeSlices` 求和；emit 差异化 tails；产出 `partition → segm` 映射 |
-| `PTOPlanBmuLayout.cpp` 阶段 3 | `BmuAllocOp` 的 `segm` 按映射填；bin 段 `slice_count` 取整 |
-| `PTOClassifyBuffers.cpp` | `scope_static_quota` 改用 `S_capacity` |
-| `PTOPlanMemory.cpp` | `InitMemSpecsFromModule` 容量收缩到尾区 + 基址偏移 `S_base_offset` |
-| `BmuConfigOp::verify` | 无需改（已支持任意合法 tails） |
+| 位置 | 改动 | 状态 |
+|---|---|---|
+| `PTOPlanBmuLayout.cpp` 阶段 1 | 用 §4 carve-up 替换 `scopeSlices` 求和；emit 差异化 tails；产出 `partition → segm` 映射 | ✅ 已落地 |
+| `PTOPlanBmuLayout.cpp` 阶段 3 | `BmuAllocOp` 的 `segm` 按映射填；bin 段 `slice_count` 取整 | ✅ 已落地 |
+| `PTOPlanMemory.cpp` | `InitMemSpecsFromModule` 容量收缩到尾区 + 基址偏移 `S_base_offset`（`ApplyBmuStaticTailShift`） | ✅ 已落地（见 §6） |
+| `PTOClassifyBuffers.cpp` | `scope_static_quota` 改用 `S_capacity` | ⏳ 待办（随反馈环，见 §6） |
+| `BmuConfigOp::verify` | 无需改（已支持任意合法 tails） | ✅ 无需改 |
+| `PTOBmu.h` | partition key / `bin_slice` 归并逻辑当前内联在阶段 1；未来若跨 pass 共享再抽 helper | ⚪ 可选 |
+
+> partition/bin 归并逻辑实现时保留在 `PTOPlanBmuLayout.cpp` 内（与阶段 1 内聚），未按早期设想抽到 `PTOBmu.h`。
 
 **新增 lit 测试**（建议）：
 

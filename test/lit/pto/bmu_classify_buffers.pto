@@ -7,15 +7,15 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // pto-classify-buffers tags each multi-buffer alloc with pto.plan_class.
-// rule 1: explicit placement (static->S, bmu->H); rule 2/3: auto capacity
-// decision (small->S, overflow->H). H allocs also get an h_group_id.
+// rule 1: explicit placement (static->S, bmu->H); rule 2/3: auto -> always S
+// (S gets space priority over BMU). H allocs also get an h_group_id.
 
 // RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-classify-buffers %s 2>&1 1>/dev/null | FileCheck %s
 // Without --pto-uses-bmu the pass is a no-op (no plan_class anywhere).
 // RUN: ptoas --pto-arch=a5 --mlir-print-ir-after=pto-classify-buffers %s 2>&1 1>/dev/null | FileCheck %s --check-prefix=NOBMU
 
 module {
-  // auto + small tile stays static.
+  // auto placement always stays S (S-first: static planning is more efficient).
   func.func @auto_small() {
     %c0 = arith.constant 0 : index
     %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 16x16xf16, count=2>
@@ -40,12 +40,9 @@ module {
   // CHECK: @explicit_bmu
   // CHECK: memref.alloc() {pto.h_group_id = 0 : i32, {{.*}}pto.plan_class = "H"}
 
-  // A 256x256xf16 pair is 256KB and the real UB total is 384KB (BMU.md), so it
-  // fits the scope and stays S. Capacity-driven H requires the static tail to
-  // be smaller than the scope total (a BMU carve-up, §4.7, or contention, rule
-  // 4); at classify time reservedSlices = 0 so nothing is promoted by size
-  // alone — a single multi-buffer that exceeds the total can't be BMU-allocated
-  // either.
+  // Even a large tile (256x256xf16 = 128KB, count=2 → 256KB) stays S with auto.
+  // S and BMU share the same physical memory; BMU's slice quantization would
+  // waste more space, so auto never promotes to H regardless of size.
   func.func @auto_fits() {
     %c0 = arith.constant 0 : index
     %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 256x256xf16, count=2>

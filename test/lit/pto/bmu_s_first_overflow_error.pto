@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// S-first feasibility error: plan-memory plans S with liveness (gets exact S
+// peak), exports tail_seg3 to plan-bmu-layout. If H/D demand > tail_seg3, the
+// pass reports an error. Here two S allocs of 128x128xf16 (32KB each) are
+// concurrent (both used by tadd) → S peak = 64KB = 8 slices → tail_seg3 = 40.
+// An H multi-buffer with 256x256xf16 count=2 needs ceil(2*128KB/8KB) = 32
+// slices → 32 > 40... actually fits. Let me use count=8 → 8*128KB = 1024KB →
+// ceil(1024KB/8KB) = 128 slices → 128 > 40 → error.
+// Actually for whole-ring: ceil(count*slotBytes/slice) = ceil(8*131072/8192) = 128.
+
+// RUN: not ptoas --pto-arch=a5 --pto-uses-bmu %s 2>&1 | FileCheck %s
+
+// CHECK: BMU dynamic segments for vec need
+
+module {
+  func.func @s_first_overflow(%gm : memref<128x128xf16, #pto.address_space<gm>>,
+                              %gm2 : memref<256x256xf16, #pto.address_space<gm>>,
+                              %out : memref<128x128xf16, #pto.address_space<gm>>) {
+    %c0 = arith.constant 0 : index
+    // Two concurrent S allocs → S peak = 64KB = 8 slices → tail = 40.
+    %s0 = pto.alloc_tile : !pto.tile_buf<vec, 128x128xf16>
+    %s1 = pto.alloc_tile : !pto.tile_buf<vec, 128x128xf16>
+    pto.tload ins(%gm : memref<128x128xf16, #pto.address_space<gm>>) outs(%s0 : !pto.tile_buf<vec, 128x128xf16>)
+    pto.tload ins(%gm : memref<128x128xf16, #pto.address_space<gm>>) outs(%s1 : !pto.tile_buf<vec, 128x128xf16>)
+    pto.tadd ins(%s0, %s1 : !pto.tile_buf<vec, 128x128xf16>, !pto.tile_buf<vec, 128x128xf16>) outs(%s0 : !pto.tile_buf<vec, 128x128xf16>)
+    pto.tstore ins(%s0 : !pto.tile_buf<vec, 128x128xf16>) outs(%out : memref<128x128xf16, #pto.address_space<gm>>)
+    // H multi-buffer: 256x256xf16 = 128KB per slot, count=4 → whole-ring
+    // needs ceil(4*128KB/8KB) = 64 slices → 64 > 40 → error.
+    %mb = pto.alloc_multi_tile : !pto.multi_tile_buf<vec, 256x256xf16, count=4, placement=bmu>
+    %sl = pto.multi_tile_get %mb[%c0]
+        : !pto.multi_tile_buf<vec, 256x256xf16, count=4, placement=bmu>
+       -> !pto.tile_buf<vec, 256x256xf16>
+    pto.tload ins(%gm2 : memref<256x256xf16, #pto.address_space<gm>>)
+              outs(%sl : !pto.tile_buf<vec, 256x256xf16>)
+    return
+  }
+}

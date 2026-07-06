@@ -17,7 +17,7 @@
 // multi-buffer (S) would otherwise be planned at 0/512; instead it lands at
 // 8192/8704, disjoint from the BMU segment.
 
-// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-memory %s 2>&1 1>/dev/null | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-uses-bmu --mlir-print-ir-after=pto-plan-bmu-layout %s 2>&1 1>/dev/null | FileCheck %s
 
 module {
   func.func @coexist(%gm0 : memref<16x16xf16, #pto.address_space<gm>>,
@@ -60,12 +60,12 @@ module {
   }
 }
 
-// The BMU H group reserves 1 slice.
+// S-first pipeline: plan-memory plans S with liveness reuse (two 512B tiles
+// share via liveness → S peak = 1024B = 1 slice) then sets tail_seg3 = 47.
+// S addresses are shifted to [47*8192, total): 385024 / 385536.
+// plan-bmu-layout then carves the H group in [0, 47*8192).
 // CHECK: pto.bmu_config <vec> tails = [1, 1, 1, 1]
-// H slots come from the runtime BMU base.
-// CHECK: %[[BASE:.*]] = pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0, count %{{.*}} : index -> i64
-// CHECK: pto.pointer_cast(%[[BASE]], %{{.*}})
-// S slots are shifted into the reserved tail above the 8192-byte BMU region.
-// CHECK-DAG: %[[S0:.*]] = arith.constant 8192 : i64
-// CHECK-DAG: %[[S1:.*]] = arith.constant 8704 : i64
-// CHECK: pto.pointer_cast(%[[S0]], %[[S1]])
+// CHECK: pto.bmu_alloc <vec>, <PIPE_MTE2>, segm 0
+// S slots are shifted into the reserved tail: tail_seg3=47, base = 47*8192 = 385024.
+// CHECK-DAG: arith.constant 385024 : i64
+// CHECK-DAG: arith.constant 385536 : i64

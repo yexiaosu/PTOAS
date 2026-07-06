@@ -426,6 +426,14 @@ void MemLivenessAnalysis::RecursionIR(Region *region, Liveness live) {
       return WalkResult::advance();
     } else if (isLocalMemPlan() && dyn_cast<memref::AllocOp>(op)) {
       auto allocOp = cast<memref::AllocOp>(op);
+      // Skip H/D allocs — those are handled by pto-plan-bmu-layout (which runs
+      // after this pass). Only plan S (static) and unannotated allocs.
+      if (auto cls = allocOp->getAttrOfType<StringAttr>(
+              mlir::pto::kPtoPlanClassAttrName)) {
+        if (cls.getValue() == mlir::pto::kPtoPlanClassHybrid ||
+            cls.getValue() == mlir::pto::kPtoPlanClassDynamic)
+          return WalkResult::advance();
+      }
       if (failed(CheckLocalBufferAllocOp(op))) {
         return WalkResult::interrupt();
       }
@@ -715,16 +723,8 @@ bool MemLivenessAnalysis::isSkippableOp(Operation *op) const {
   // still be exercised. The N-way physical fan-out lives on the
   // `pto.multi_buffer` attr of the underlying `memref.alloc` and is a
   // follow-up.
-  // BMU H-class allocs are materialized by `pto-plan-bmu-layout` (which runs
-  // before this pass) into `pto.bmu_alloc` + a multi-address `pto.pointer_cast`
-  // and freed with `pto.bmu_free`, configured by `pto.bmu_config`. Those
-  // buffers are already addressed by the hardware BMU, so the static planner
-  // must leave them alone. In the static (S) flow `pto.pointer_cast` is only
-  // created *after* this analysis, so skipping it here is a no-op for S.
   return isa<func::ReturnOp, scf::YieldOp, pto::YieldOp, memref::DimOp,
-             mlir::pto::SlotMarkerOp, mlir::pto::PointerCastOp,
-             mlir::pto::BmuAllocOp, mlir::pto::BmuFreeOp,
-             mlir::pto::BmuConfigOp>(op);
+             mlir::pto::SlotMarkerOp>(op);
 }
 
 LogicalResult
@@ -2300,48 +2300,75 @@ LogicalResult MemPlan::InitMemSpecsFromModule(func::FuncOp funcOp) {
     applySpec(kA5);
   }
 
-  // BMU static-tail coexistence (BMU design §4.7). When pto-plan-bmu-layout
-  // carved BMU dynamic segments out of a buffer kind it left a `pto.bmu_config`
-  // whose tail_seg3 slices form the BMU region [0, tail_seg3*slice); the static
-  // ("S") allocs planned here must occupy the reserved tail above it. For such a
-  // scope the BMU.md CoreV920 geometry is authoritative (it describes the buffer
-  // the BMU manages), so we override the arch spec with the reserved-tail size
-  // and record the base offset for ApplyBmuStaticTailShift(). Scopes without a
-  // bmu_config keep the arch spec untouched (non-BMU funcs are unchanged).
-  auto setScopeSpaceBits = [this](pto::AddressSpace scope, int64_t bits) {
-    switch (scope) {
-    case pto::AddressSpace::VEC: ubSpaceSize = bits; break;
-    case pto::AddressSpace::MAT: l1SpaceSize = bits; break;
-    case pto::AddressSpace::LEFT: l0aSpaceSize = bits; break;
-    case pto::AddressSpace::RIGHT: l0bSpaceSize = bits; break;
-    case pto::AddressSpace::ACC: l0cSpaceSize = bits; break;
-    case pto::AddressSpace::BIAS: biasSpaceSize = bits; break;
-    case pto::AddressSpace::SCALING: scalingSpaceSize = bits; break;
-    default: break;
-    }
-  };
-  funcOp.walk([&](pto::BmuConfigOp cfg) {
-    pto::AddressSpace scope = cfg.getBufferAttr().getAddressSpace();
-    uint64_t sliceBytes = pto::bmuSliceBytes(scope);
-    if (sliceBytes == 0)
-      return; // non-BMU scope; nothing to reserve.
-    uint64_t baseBytes =
-        static_cast<uint64_t>(cfg.getTailSeg3()) * sliceBytes;
-    // A scope is configured once; if several configs exist, the largest BMU
-    // region wins so the static tail never overlaps any BMU segment.
-    uint64_t &recorded = bmuStaticTailBaseBytes[scope];
-    recorded = std::max(recorded, baseBytes);
-    uint64_t scopeTotalBytes = pto::bmuScopeTotalBytes(scope);
-    uint64_t tailBytes =
-        scopeTotalBytes > recorded ? scopeTotalBytes - recorded : 0;
-    setScopeSpaceBits(scope, static_cast<int64_t>(tailBytes) * kBitsPerByte);
-  });
+  // S-first pipeline: plan-memory now runs BEFORE plan-bmu-layout. No
+  // bmu_config exists yet — S gets the full arch-spec capacity. After planning,
+  // ComputeBmuStaticTail() will derive tail_seg3 from the actual S peak usage
+  // and shift the addresses up so S occupies the tail above the BMU region.
   return success();
 }
 
 void MemPlan::ApplyBmuStaticTailShift() {
-  if (bmuStaticTailBaseBytes.empty())
+  if (!pto::usesBmu(func_->getParentOfType<ModuleOp>()))
     return;
+
+  // S-first: plan-memory runs before plan-bmu-layout. S addresses were planned
+  // in [0, S_capacity) using the full arch-spec scope. Now compute the actual S
+  // peak per scope from buffer2Offsets, derive tail_seg3 = total - S_slices,
+  // and shift all S addresses into [tail_seg3*slice, total). Export tail_seg3 as
+  // a func attr so plan-bmu-layout knows its available budget.
+  //
+  // 1. Scan buffer2Offsets to find S peak bytes per BMU scope.
+  std::map<pto::AddressSpace, uint64_t> scopePeakBytes;
+  for (auto &kv : buffer2Offsets) {
+    auto ty = dyn_cast<MemRefType>(kv.first.getType());
+    if (!ty)
+      continue;
+    auto as = dyn_cast_or_null<pto::AddressSpaceAttr>(ty.getMemorySpace());
+    if (!as)
+      continue;
+    pto::AddressSpace scope = as.getAddressSpace();
+    uint64_t sliceBytes = pto::bmuSliceBytes(scope);
+    if (sliceBytes == 0)
+      continue; // non-BMU scope
+    // Each entry in kv.second is a planned byte offset for one slot of this
+    // buffer. The buffer's byte size at that offset is slotByteSize.
+    auto bufTy = cast<MemRefType>(kv.first.getType());
+    uint64_t elemBytes =
+        pto::getPTOStorageElemByteSize(bufTy.getElementType());
+    uint64_t bufBytes = elemBytes;
+    if (bufTy.hasStaticShape())
+      for (int64_t d : bufTy.getShape())
+        bufBytes *= static_cast<uint64_t>(d);
+    for (uint64_t off : kv.second) {
+      uint64_t end = off + bufBytes;
+      scopePeakBytes[scope] = std::max(scopePeakBytes[scope], end);
+    }
+  }
+
+  if (scopePeakBytes.empty())
+    return;
+
+  // 2. Compute tail_seg3 per scope and shift addresses.
+  MLIRContext *ctx = func_->getContext();
+  SmallVector<NamedAttribute> tailAttrs;
+  for (auto &[scope, peakBytes] : scopePeakBytes) {
+    uint64_t sliceBytes = pto::bmuSliceBytes(scope);
+    uint64_t totalSlices = pto::bmuTotalSlices(scope);
+    uint64_t sSlices =
+        sliceBytes > 0 ? (peakBytes + sliceBytes - 1) / sliceBytes : 0;
+    uint64_t tail = totalSlices > sSlices ? totalSlices - sSlices : 0;
+    uint64_t baseBytes = tail * sliceBytes;
+    bmuStaticTailBaseBytes[scope] = baseBytes;
+
+    std::string attrName =
+        "pto.bmu_tail_" + std::string(pto::stringifyAddressSpace(scope));
+    tailAttrs.push_back(NamedAttribute(
+        StringAttr::get(ctx, attrName),
+        IntegerAttr::get(IntegerType::get(ctx, 32),
+                         static_cast<int32_t>(tail))));
+  }
+
+  // Shift all S addresses by +baseBytes so they sit above the BMU region.
   for (auto &kv : buffer2Offsets) {
     auto ty = dyn_cast<MemRefType>(kv.first.getType());
     if (!ty)
@@ -2355,6 +2382,10 @@ void MemPlan::ApplyBmuStaticTailShift() {
     for (uint64_t &offset : kv.second)
       offset += it->second;
   }
+
+  // 3. Export tail_seg3 per scope as func attrs for plan-bmu-layout.
+  for (auto &na : tailAttrs)
+    func_->setAttr(na.getName(), na.getValue());
 }
 
 void MemPlan::RollBackForAllocFail(StatusWrapper &statusWrapper,

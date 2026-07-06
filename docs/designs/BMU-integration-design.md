@@ -169,7 +169,7 @@ H 模式是 S + D 长处的并集：外层 ping-pong 用 BMU bump pointer 隐式
 
 | 输入形态 | 对应模式（第一版默认） | 备注 |
 |---|---|---|
-| `alloc_multi_tile`（显式 multi-buffer，§1.4） | **S**（沿用 N-way 静态布局）；S 容量不够时回退 **H** | 组即 IR 节点，无需识别；S 路径保住 const-addr disjoint sync 等优化 |
+| `alloc_multi_tile`（显式 multi-buffer，§1.4） | `placement=auto` → **S**（S 优先：静态 liveness 复用更省空间）；`placement=bmu` → **H** | 组即 IR 节点，无需识别；S 路径保住 const-addr disjoint sync 等优化 |
 | `double_buffer_a/b/c = true` + `LowerPipelineLoops` 复制（pypto 旧路径） | **S**（两份 alloc 用现有 `relationPongEntry` 排布） | 第一版保守；phase 4 才尝试用 scf.for iter_args 识别为 H |
 | `double_buffer_*` 但 S 失败（容量够但布局失败） | **H** | fallback：把两份 alloc 视为一组 H |
 | 容量峰值满足但 PlanMemory 静态布局失败 | **D** | 走 BMU runtime alloc 绕开布局求解 |
@@ -331,15 +331,14 @@ ModuleOp pass，**对应规划 pipeline §4.3 第 (1) 步**。在每个 `memref.
 |---|---|---|---|
 | 0 | A2/A3，或 A5 但 module attr `pto.uses_bmu = false` | S | always |
 | 1 | `MultiTileBufType.placement` 显式指定 `kStatic` / `kBmu` | 按显式值（kBmu→H，组 id 取 alloc 自身） | phase 2 |
-| 2 | `alloc_multi_tile` 产出 (`pto.multi_buffer` attr 在场) 且 `N * sizeof(slotType) > scope_static_quota` 或 dry-run overflow | H（组 id 取 alloc 自身） | phase 2 |
-| 3 | `alloc_multi_tile` 产出且 S 容量满足 | S（保住 const-addr disjoint sync 优化） | phase 2 |
+| 2/3 | `alloc_multi_tile` 产出 (`pto.multi_buffer` attr 在场) 且 `placement=auto` | **S**（S 优先：静态 liveness 复用比 BMU slice 量化更省空间，尤其小 tile；S 和 BMU 共享同一物理内存，S 放不下 BMU 也放不下，不存在外溢。只有 `placement=bmu` 显式指定时才走 H） | phase 2 |
 | 4 | 与同 scope 其它 buffer 的并发字节总和 > scope 容量（dry-run 检测） | D | phase 3 |
 | 5 | 处于运行时数据依赖的 `scf.if` 分支、生命周期不跨分支 | D | phase 4 |
 | 6 | 参与 pypto 的 `multibuffer-unroll-num` loop（典型 ping-pong pair） | **S**（phase 2-3 保守）或 H（phase 4+） | phase 2 默认 S |
 | 7 | `scf.for` iter_args / yield 揭示的 alias 组（隐式 multi-buffer） | H（同 group_id） | phase 4 |
 | 8 | 默认 | S | always |
 
-规则 1-3 是 multi-buffer PR 集成的入口；规则 4-8 是 BMU 主线通用工作。`scope_static_quota` = `tail_seg3 * slice_size`，来自 `pto-plan-bmu-layout` 第一阶段。
+规则 1-3 是 multi-buffer PR 集成的入口；规则 4-8 是 BMU 主线通用工作。S 优先空间预留：`plan-bmu-layout` 先保守估算 S 类字节需求（求和，无 liveness），BMU 动态段在剩余空间 `bmu_available = total - S_slices_reserved` 内 carve-up。
 
 **反馈环**：本 pass 第一遍跑只用规则 1（不依赖 PlanMemory 实际尝试）。如果后续 `pto-plan-memory` 阶段触发 `EmitPlanMemoryFailureInfo` 内部信号（不再 emit user-level error），把失败 entry 的 alloc 反查并 reclassify 成 D，重跑 layout pipeline。这把现 PTOAS 的"硬 fail"换成"软回退"。
 
@@ -394,7 +393,7 @@ H 组有两类来源，对应不同的 IR 形态。
 
 物化：
 
-1. segment 容量 = N 个**单 slot** 的 slice 数：`tail_seg3 = N * ceil(sizeof(slotType) / slice_bytes)`，保证 N 深并发。
+1. segment 容量 = N 个**单 slot** 的 slice 数：`tail_seg3 = N * ceil(sizeof(slotType) / slice_bytes)`，保证最大并发槽数 N（峰值 N 轮流水重叠、同时占 N 个槽）。
 2. 在每轮 slot 首次写入点 emit `pto.bmu_alloc <scope>, <producerPipe>, count = ceil(sizeof(slotType)/slice_bytes)`，得本轮 `%slot_base`。
 3. 该 slot 的 `pto.pointer_cast` 直接用 `%slot_base`（单地址，无 index 偏移）。
 4. 在该 slot 最后消费点 emit `pto.bmu_free %slot_base`（free 的 pipe 见下方约束）。
@@ -600,13 +599,13 @@ ptoas (--pto-level=level1/2):
 
 | # | 假设（简版） | 位置 | 判读方式 |
 |---|---|---|---|
-| H1 | `BUF FREE` 是否严格后于同 pipe 先前所有指令 | **复用 `pto-isa/tests/npu/a5/src/st/testcase/tbuf` baseline**（不改 kernel） | 跑 `case_float_pingpong_baseline_32x128`，读 device trace 里 `retire(ubuf_free<PIPE_V>(y))` vs `retire(TADD on V)`，以及 `retire(ubuf_free<PIPE_MTE3>(z))` vs `retire(TSTORE on MTE3)`。两组 same-pipe pair 都能直接看 |
+| H1 | `BUF FREE` 是否严格后于同 pipe 先前所有指令 | **复用 `pto-isa/tests/npu/a5/src/st/testcase/tbuf` baseline**（不改 kernel） | 跑 `case_float_pingpong_baseline_32x128`，读 device trace 里 `retire(__ubuf_free<PIPE_V>(y))` vs `retire(TADD on V)`，以及 `retire(__ubuf_free<PIPE_MTE3>(z))` vs `retire(TSTORE on MTE3)`。两组 same-pipe pair 都能直接看 |
 | H2 | alloc stall 期间，同 pipe 上 **stall 之前已发射** 的 long-latency 指令是否继续 retire | 新增 testcase `pto-isa/tests/npu/a5/src/st/testcase/bmu_h2_alloc_stall/`，case `case_stall_drains_prior_work_32x128` | 1-slice segment 强制下一次 alloc 必 stall；stall 前发射一条 long-latency `TLOAD`。读 trace 比较 `retire(TLOAD into A)` 与 `retire(alloc B)`：若前者落在 stall 窗口内 → pipe 继续推进；若两者几乎同时 retire → pipe 被 stall 冻结 |
 | H3 | alloc 唤醒条件：**任意 free** / **总量满足 N** / **凑够连续 N**（三选一） | 新增 testcase `pto-isa/tests/npu/a5/src/st/testcase/bmu_h3_wake_condition/`，case `case_wake_condition_32x128` | 4-slice segment + 4 × 1-slice alloc 填满 + stall 2-slice alloc；V 依次 free C、A、B，间插 spacer。读 trace 看 `retire(alloc E)` 紧跟哪次 free：C 后 → 任意 free 唤醒；A 后 → 总量满足；B 后 → 凑够连续（与硬件方说法一致） |
 
 三个 testcase 与 tbuf 并列，独立 CMakeLists / main / kernel / gen_data；不污染 tbuf。
 
-H1 的简化方法学：tbuf 的 `tadd_kernel_func` 末尾本来就有 `ubuf_free<PIPE_V>(y/x)` 紧跟在 V 上的 `TADD` 之后，以及 `ubuf_free<PIPE_MTE3>(z)` 紧跟在 MTE3 上的 `TSTORE` 之后。同 pipe 上「非 free 指令 → free」两组 pair 自然在 trace 里出现，**无需任何代码改动**。
+H1 的简化方法学：tbuf 的 `tadd_kernel_func` 末尾本来就有 `__ubuf_free<PIPE_V>(y/x)` 紧跟在 V 上的 `TADD` 之后，以及 `__ubuf_free<PIPE_MTE3>(z)` 紧跟在 MTE3 上的 `TSTORE` 之后。同 pipe 上「非 free 指令 → free」两组 pair 自然在 trace 里出现，**无需任何代码改动**。
 
 输出：硬件行为表，回填到本文 §2.2。三条假设全部验证为成立。
 
@@ -615,7 +614,7 @@ H1 的简化方法学：tbuf 的 `tadd_kernel_func` 末尾本来就有 `ubuf_fre
 **目标**：为后续 phase 提供基础 IR 与 codegen 能力，不改 PlanMemory / Sync。
 
 - 新增 `BmuConfigOp` / `BmuAllocOp` / `BmuFreeOp`（ODS + verifier，§4.4）
-- 新增 `PTOToEmitC` lowering pattern：`mov_x2spr<BMU_SEGM_*>(...)` / `ubuf_alloc / cbuf_alloc / ca_alloc / ...` / `ubuf_free / ...`
+- 新增 `PTOToEmitC` lowering pattern：`set_bmu_segm_<ub|l1|l0a|l0b|l0c|bt|fb>(...)` / `__ubuf_alloc / __cbuf_alloc / __ca_alloc / ...` / `__ubuf_free / ...`（BT 的 `__bt_alloc/__bt_free` 直接用 `uint64_t`，无 `__bt__` 指针）
 - 新增 module attr `pto.uses_bmu`，CLI flag `--pto-uses-bmu` 控制；A2/A3 上永远 false
 - 类型扩展：`MultiTileBufType` 增加可选 `placement` 字段（kAuto / kStatic / kBmu，§4.4），A2/A3 上 `kBmu` verifier 报错
 - 测试：手写 `.pto` 文件含三种 BMU op，过 `ptoas --emit-cpp` 看输出；multi-buffer placement 字段 parse/print 测试

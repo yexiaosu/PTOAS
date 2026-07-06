@@ -1884,20 +1884,21 @@ int mlir::pto::compilePTOASModule(
 
   pm.addPass(pto::createPTOViewToMemrefPass());
 
-  // BMU memory planning (A5 + uses_bmu only; no-op otherwise): classify each
-  // alloc into S/D/H, then materialize H allocs into BMU ops before the static
-  // planner runs.
+  // BMU memory planning (A5 + uses_bmu only; no-op otherwise).
+  // S-first pipeline: classify → plan-memory (S only, liveness) → plan-bmu-layout (H/D).
+  // plan-memory plans S allocs with liveness-based reuse (more space-efficient
+  // than BMU's slice-quantized bump allocation), computes exact S peak usage,
+  // derives tail_seg3 per scope, and shifts S addresses into the tail. Then
+  // plan-bmu-layout carves H/D segments in [0, tail_seg3) using the precise
+  // remainder — no conservative S estimate needed.
   if (effectiveLevel != PTOBuildLevel::Level3) {
     pm.addPass(pto::createPTOClassifyBuffersPass());
-    pm.addPass(pto::createPTOPlanBmuLayoutPass());
-  }
-
-  if (effectiveLevel != PTOBuildLevel::Level3) {
     PlanMemoryOptions planMemoryOption;
     planMemoryOption.memMode = MemPlanMode::LOCAL_MEM_PLAN;
     planMemoryOption.enableGlobalReuse = false;
     planMemoryOption.enablePrintMemoryAllocatedSize = false;
     pm.addPass(pto::createPlanMemoryPass(planMemoryOption));
+    pm.addPass(pto::createPTOPlanBmuLayoutPass());
   }
   pm.addPass(pto::createPTOResolveReservedBuffersPass());
 

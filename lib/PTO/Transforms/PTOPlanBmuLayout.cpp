@@ -45,8 +45,8 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
@@ -68,7 +68,7 @@ using namespace mlir;
 
 namespace {
 
-static pto::AddressSpace allocScope(memref::AllocOp alloc) {
+static pto::AddressSpace getAllocScope(memref::AllocOp alloc) {
   auto ty = cast<MemRefType>(alloc.getType());
   if (auto as = dyn_cast_or_null<pto::AddressSpaceAttr>(ty.getMemorySpace()))
     return as.getAddressSpace();
@@ -277,19 +277,26 @@ struct PTOPlanBmuLayoutPass
       SmallVector<pto::SlotMarkerOp> sms;
       if (!collectPingPongShape(alloc, bind, sms))
         continue;
-      Region *loopBody = enclosingLoopBody(sms.front());
+      // Per-advance materializes one INDEPENDENT bmu_alloc per slot_marker (see
+      // stage 3a). That is sound only when the multi-buffer is touched through a
+      // single rotating slot per iteration. Two or more slot_markers means either
+      //   * a cross-iteration prefetch (distinct indices: write slot[(i+1)%N] now,
+      //     read it next iteration), or
+      //   * aliasing views of one slot (same index used by separate get's),
+      // both of which rely on the physical slot persisting/aliasing -- exactly
+      // what per-slot_marker allocation severs (the consume would read a fresh,
+      // never-written buffer). Fall back to whole-ring (a-2), which keeps the N
+      // slots persistent for the whole loop. See test bmu_multi_tile_h_inloop_
+      // prefetch.pto and design doc ptoas-multi-buffer-explicit-design.md §7.2.
+      if (sms.size() != 1)
+        continue;
+      pto::SlotMarkerOp sm = sms.front();
+      Region *loopBody = enclosingLoopBody(sm);
       if (!loopBody || !loopBody->hasOneBlock())
         continue;
-      bool ok = true;
-      for (pto::SlotMarkerOp sm : sms) {
-        if (enclosingLoopBody(sm) != loopBody ||
-            !slotStaysInIteration(sm, loopBody)) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok)
-        perAdvance[alloc] = {bind, std::move(sms), loopBody};
+      if (!slotStaysInIteration(sm, loopBody))
+        continue;
+      perAdvance[alloc] = {bind, std::move(sms), loopBody};
     }
 
     // Stage 1 (segmentation strategy §4 carve-up). Instead of summing all
@@ -300,41 +307,41 @@ struct PTOPlanBmuLayoutPass
     // from H (long-lived slots) stops D churn from pushing H's bump pointer.
     //
     // Capacity per partition is the conservative sum of its members' concurrent
-    // slice demand (no liveness analysis — the strategy doc lists that as a
-    // later optimization; summing is always safe and keeps tail_seg3 == the old
-    // total demand, so the static tail [tail_seg3, total) that pto-plan-memory
-    // reserves is unchanged). Per-advance multi-buffers need N * perSlotSlices
-    // (N independent in-flight slots); whole-ring packs the N slots into one.
+    // slice demand (no liveness yet — a later optimization). Per-advance
+    // multi-buffers need N * perSlotSlices (N = max concurrent slot count:
+    // up to N pipeline iterations overlap, each holding one slot); whole-ring
+    // packs the N slots into one contiguous allocation.
     struct PartEntry {
-      char cls;       // 'H' (long-lived slot) or 'D' (scratch)
-      uint64_t slot;  // uniform per-alloc slice granularity (partition key)
-      uint64_t cap;   // concurrent slices held (sum of members)
-      uint64_t slots; // concurrent slot count = cap / slot
-      uint64_t count; // #members (sort tiebreak)
+      char planClass;        // 'H' (long-lived slot) or 'D' (scratch)
+      uint64_t slicePerSlot; // slices one slot occupies (partition key)
+      uint64_t capSlices;    // total concurrent slices held = slicePerSlot * slotCnt
+      uint64_t slotCnt;      // concurrent slot count
+      uint64_t memberCnt;    // #members (sort tiebreak)
     };
     llvm::MapVector<pto::AddressSpace, SmallVector<PartEntry>> scopeParts;
     // (scope, cls, slot) -> index into scopeParts[scope], to accumulate members.
     std::map<std::tuple<int, char, uint64_t>, size_t> partIndex;
-    auto addMember = [&](pto::AddressSpace scope, char cls, uint64_t slot,
-                         uint64_t cap) {
-      if (slot == 0)
+    auto addMember = [&](pto::AddressSpace scope, char cls,
+                         uint64_t slicePerSlot, uint64_t slotCnt) {
+      if (slicePerSlot == 0)
         return;
-      auto key = std::make_tuple(static_cast<int>(scope), cls, slot);
+      uint64_t cap = slicePerSlot * slotCnt;
+      auto key = std::make_tuple(static_cast<int>(scope), cls, slicePerSlot);
       SmallVector<PartEntry> &vec = scopeParts[scope];
       auto it = partIndex.find(key);
       if (it == partIndex.end()) {
         partIndex[key] = vec.size();
-        vec.push_back({cls, slot, cap, cap / slot, 1});
+        vec.push_back({cls, slicePerSlot, cap, slotCnt, 1});
       } else {
         PartEntry &e = vec[it->second];
-        e.cap += cap;
-        e.slots += cap / slot;
-        e.count += 1;
+        e.capSlices += cap;
+        e.slotCnt += slotCnt;
+        e.memberCnt += 1;
       }
     };
 
     for (memref::AllocOp alloc : mbHAllocs) {
-      pto::AddressSpace scope = allocScope(alloc);
+      pto::AddressSpace scope = getAllocScope(alloc);
       uint64_t n =
           alloc->getAttrOfType<IntegerAttr>(pto::kPtoMultiBufferAttrName)
               .getValue()
@@ -343,24 +350,24 @@ struct PTOPlanBmuLayoutPass
       uint64_t sliceBytes = pto::bmuSliceBytes(scope);
       if (perAdvance.count(alloc)) {
         uint64_t perSlot = ceilDiv(slotBytes, sliceBytes);
-        addMember(scope, 'H', perSlot, n * perSlot);
+        addMember(scope, 'H', perSlot, n);
       } else {
-        uint64_t slot = ceilDiv(n * slotBytes, sliceBytes);
-        addMember(scope, 'H', slot, slot);
+        uint64_t ringSlices = ceilDiv(n * slotBytes, sliceBytes);
+        addMember(scope, 'H', ringSlices, 1);
       }
     }
     for (auto &kv : hGroups) {
-      pto::AddressSpace scope = allocScope(kv.second.front());
+      pto::AddressSpace scope = getAllocScope(kv.second.front());
       uint64_t groupBytes = 0;
       (void)assignGroupOffsets(kv.second, groupBytes);
-      uint64_t slot = ceilDiv(groupBytes, pto::bmuSliceBytes(scope));
-      addMember(scope, 'H', slot, slot);
+      uint64_t groupSlices = ceilDiv(groupBytes, pto::bmuSliceBytes(scope));
+      addMember(scope, 'H', groupSlices, 1);
     }
     for (memref::AllocOp alloc : dAllocs) {
-      pto::AddressSpace scope = allocScope(alloc);
-      uint64_t slot =
+      pto::AddressSpace scope = getAllocScope(alloc);
+      uint64_t slotSlices =
           ceilDiv(slotByteSize(alloc), pto::bmuSliceBytes(scope));
-      addMember(scope, 'D', slot, slot);
+      addMember(scope, 'D', slotSlices, 1);
     }
 
     // Per-scope: sort partitions (§4 Step C), assign <=4 segments, compute
@@ -373,37 +380,45 @@ struct PTOPlanBmuLayoutPass
     };
     std::map<std::tuple<int, char, uint64_t>, SegInfo> segmentOf;
 
+    // S-first: plan-memory already ran and planned S allocs with liveness-based
+    // reuse. It exported the precise tail_seg3 per scope as func attrs
+    // (pto.bmu_tail_<scope>). BMU dynamic segments carve within [0, tail_seg3).
     Block &entry = func.getBody().front();
     rewriter.setInsertionPointToStart(&entry);
     for (auto &kv : scopeParts) {
       pto::AddressSpace scope = kv.first;
       SmallVector<PartEntry> parts = kv.second;
       uint64_t totalSlices = pto::bmuTotalSlices(scope);
+      // Read the tail_seg3 that plan-memory computed from exact S peak usage.
+      std::string tailAttrName =
+          "pto.bmu_tail_" + std::string(pto::stringifyAddressSpace(scope));
+      uint64_t bmuAvailable = totalSlices; // default: no S in this scope
+      if (auto tailAttr = func->getAttrOfType<IntegerAttr>(tailAttrName))
+        bmuAvailable = static_cast<uint64_t>(tailAttr.getInt());
 
       // Step C priority: H before D, then larger cap, then more churn, then
       // slot size (last key only for deterministic ordering).
       llvm::stable_sort(parts, [](const PartEntry &a, const PartEntry &b) {
-        if (a.cls != b.cls)
-          return a.cls == 'H';
-        if (a.cap != b.cap)
-          return a.cap > b.cap;
-        if (a.count != b.count)
-          return a.count > b.count;
-        return a.slot > b.slot;
+        if (a.planClass != b.planClass)
+          return a.planClass == 'H';
+        if (a.capSlices != b.capSlices)
+          return a.capSlices > b.capSlices;
+        if (a.memberCnt != b.memberCnt)
+          return a.memberCnt > b.memberCnt;
+        return a.slicePerSlot > b.slicePerSlot;
       });
 
       // Step D: <=4 partitions map 1:1 to segments; the overflow bin-merges
       // into seg3 with a common `binSlice` granularity (its members round their
       // alloc up to binSlice, so seg3 stays uniform at the cost of internal
       // fragmentation). A merged slot occupies binSlice slices, so seg3 needs
-      // `sum(slots) * binSlice` — not `sum(cap)` (which under-provisions when
-      // the merged slot sizes differ; the strategy doc's Σcap formula is only
-      // correct when they are equal).
+      // `sum(slotCnt) * binSlice` — not `sum(capSlices)` (which under-provisions
+      // when the merged slot sizes differ).
       bool bin = parts.size() > 4;
       uint64_t binSlice = 0;
       if (bin)
         for (size_t i = 3; i < parts.size(); ++i)
-          binSlice = std::max(binSlice, parts[i].slot);
+          binSlice = std::max(binSlice, parts[i].slicePerSlot);
 
       uint64_t segCap[4] = {0, 0, 0, 0};
       SmallVector<std::tuple<char, uint64_t, SegInfo>> records;
@@ -411,12 +426,12 @@ struct PTOPlanBmuLayoutPass
       for (size_t i = 0; i < parts.size(); ++i) {
         const PartEntry &p = parts[i];
         if (!bin || i < 3) {
-          segCap[i] += p.cap;
+          segCap[i] += p.capSlices;
           records.push_back(
-              {p.cls, p.slot, SegInfo{static_cast<uint32_t>(i), false, 0}});
+              {p.planClass, p.slicePerSlot, SegInfo{static_cast<uint32_t>(i), false, 0}});
         } else {
-          segCap[3] += p.slots * binSlice;
-          records.push_back({p.cls, p.slot, SegInfo{3u, true, binSlice}});
+          segCap[3] += p.slotCnt * binSlice;
+          records.push_back({p.planClass, p.slicePerSlot, SegInfo{3u, true, binSlice}});
         }
       }
 
@@ -425,19 +440,16 @@ struct PTOPlanBmuLayoutPass
       uint64_t t2 = t1 + segCap[2];
       uint64_t t3 = t2 + segCap[3];
 
-      // Step F feasibility: the dynamic tail must leave room for the static tail
-      // (pto-plan-memory reserves [tail_seg3, total)). The full fallback ladder
-      // (N negotiation, D->S downgrade) lives in other passes; here, if bin
-      // rounding pushed tail_seg3 past the buffer, drop back to the legacy
-      // single-segment layout (all demand in seg0) — never worse than before.
-      if (totalSlices != 0 && t3 > totalSlices) {
-        uint64_t sum = 0;
-        for (const PartEntry &p : parts)
-          sum += p.cap;
-        t0 = t1 = t2 = t3 = sum;
-        records.clear();
-        for (const PartEntry &p : parts)
-          records.push_back({p.cls, p.slot, SegInfo{0u, false, 0}});
+      // S-first feasibility: BMU segments must fit in the remainder after
+      // reserving space for S. bmuAvailable = totalSlices - sReservedSlices.
+      if (totalSlices != 0 && t3 > bmuAvailable) {
+        func.emitError()
+            << "pto-plan-bmu-layout: BMU dynamic segments for "
+            << pto::stringifyAddressSpace(scope) << " need " << t3
+            << " slices but only " << bmuAvailable
+            << " available (tail_seg3 from plan-memory S planning)";
+        signalPassFailure();
+        return;
       }
 
       for (auto &rec : records)
@@ -476,9 +488,9 @@ struct PTOPlanBmuLayoutPass
       return pto::PipeAttr::get(ctx, pto::bmuFreePipeFor(s));
     };
 
-    // Emit a bmu_alloc at `alloc`'s site and a matching bmu_free before every
-    // return. base / cnt dominate the returns because these allocs live at
-    // function scope.
+    // Emit a bmu_alloc at `alloc`'s site and a matching bmu_free. Function-scope
+    // allocs free before every return; nested allocs free before the enclosing
+    // region's terminator (where base is still in scope).
     auto emitAllocAndFree = [&](memref::AllocOp alloc, uint64_t sliceCount,
                                 pto::AddressSpaceAttr bufferAttr,
                                 uint32_t segm) -> Value {
@@ -510,7 +522,7 @@ struct PTOPlanBmuLayoutPass
 
     // Stage 3a: multi-buffer H allocs.
     for (memref::AllocOp alloc : mbHAllocs) {
-      pto::AddressSpace scope = allocScope(alloc);
+      pto::AddressSpace scope = getAllocScope(alloc);
       auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
       uint64_t n =
           alloc->getAttrOfType<IntegerAttr>(pto::kPtoMultiBufferAttrName)
@@ -574,16 +586,40 @@ struct PTOPlanBmuLayoutPass
     }
 
     // Stage 3b: general H groups -> one group base + per-member static offset.
+    mlir::DominanceInfo dom(func);
     for (auto &kv : hGroups) {
       SmallVector<memref::AllocOp> &members = kv.second;
-      pto::AddressSpace scope = allocScope(members.front());
+      pto::AddressSpace scope = getAllocScope(members.front());
       auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
       uint64_t groupBytes = 0;
       SmallVector<uint64_t> offsets = assignGroupOffsets(members, groupBytes);
       uint64_t sliceCount = ceilDiv(groupBytes, pto::bmuSliceBytes(scope));
       auto [segm, effCount] = segmFor(scope, 'H', sliceCount);
-      // Anchor the shared allocation at the first member's site.
-      Value base = emitAllocAndFree(members.front(), effCount, bufferAttr, segm);
+      // The shared base is emitted once and every member reads `base + offset`, so
+      // the anchor op must DOMINATE all members. Blindly anchoring at walk-order
+      // front is ill-formed when members live in incomparable regions (e.g. one in
+      // an scf.if branch and another after it): base would not dominate them, and
+      // emitAllocAndFree's region-terminator free could even precede a member.
+      // Pick a member that dominates all the others; if none exists, bail loudly
+      // instead of emitting invalid IR.
+      memref::AllocOp anchor;
+      for (memref::AllocOp cand : members) {
+        if (llvm::all_of(members, [&](memref::AllocOp m) {
+              return m == cand ||
+                     dom.dominates(cand.getOperation(), m.getOperation());
+            })) {
+          anchor = cand;
+          break;
+        }
+      }
+      if (!anchor) {
+        members.front()->emitError(
+            "pto-plan-bmu-layout: H group members have no common dominator; "
+            "shared-base BMU materialization is unsupported");
+        signalPassFailure();
+        return;
+      }
+      Value base = emitAllocAndFree(anchor, effCount, bufferAttr, segm);
       for (auto [member, offset] : llvm::zip(members, offsets)) {
         Location loc = member.getLoc();
         rewriter.setInsertionPoint(member);
@@ -600,7 +636,7 @@ struct PTOPlanBmuLayoutPass
 
     // Stage 2: D-class allocs -> pure dynamic single-address alloc/free.
     for (memref::AllocOp alloc : dAllocs) {
-      pto::AddressSpace scope = allocScope(alloc);
+      pto::AddressSpace scope = getAllocScope(alloc);
       auto bufferAttr = pto::AddressSpaceAttr::get(ctx, scope);
       uint64_t sliceCount =
           ceilDiv(slotByteSize(alloc), pto::bmuSliceBytes(scope));

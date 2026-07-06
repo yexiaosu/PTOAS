@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AllocToPointerCast.h"
+#include "PTO/IR/PTOBmu.h"
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -105,6 +106,14 @@ static std::pair<Value, Value> getDynamicValidShapeValues(memref::AllocOp op) {
 
 LogicalResult MemrefAllocaOpToPointerCastOpPattern::matchAndRewrite(
     memref::AllocOp op, PatternRewriter &rewriter) const {
+  // Skip H/D allocs — those are handled by pto-plan-bmu-layout, not the
+  // static planner. They must remain as memref.alloc until plan-bmu-layout
+  // materializes them into bmu_alloc + pointer_cast.
+  if (auto cls = op->getAttrOfType<StringAttr>(kPtoPlanClassAttrName)) {
+    StringRef c = cls.getValue();
+    if (c == kPtoPlanClassHybrid || c == kPtoPlanClassDynamic)
+      return failure();
+  }
   const auto &currentMemRefType = cast<BaseMemRefType>(op.getType());
   TileBufConfigAttr configAttr = inferBindTileConfig(op);
   SmallVector<uint64_t> offsets = getAllocatedOffsets(

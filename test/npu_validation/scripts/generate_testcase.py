@@ -1625,6 +1625,7 @@ def generate_testcase(
     run_mode: str,
     soc_version: str,
     aicore_arch: Optional[str] = None,
+    mem_base: Optional[str] = None,
 ):
     sample_root = _resolve_sample_root(input_cpp)
     if output_root:
@@ -2333,6 +2334,10 @@ endif()
         mem_base_define = "REGISTER_BASE"
     if uses_prefetch_async_runtime and not is_a5_soc:
         mem_base_define = "MEMORY_BASE"
+    # Explicit override for SoCs the soc-string heuristic can't classify (it only
+    # knows A5 -> REGISTER_BASE vs A2/A3 -> MEMORY_BASE), e.g. Ascend960.
+    if mem_base:
+        mem_base_define = mem_base
 
     # CCE printing support is gated behind `--cce-enable-print` on some bisheng
     # toolchains. Only enable it when kernels emit printf.
@@ -2638,6 +2643,14 @@ def main():
         default=None,
         help="Override AICore arch passed to bisheng (e.g. dav-c220-vec|dav-c220-cube|dav-c310-vec|dav-c310-cube)",
     )
+    parser.add_argument(
+        "--mem-base",
+        default=None,
+        choices=["MEMORY_BASE", "REGISTER_BASE"],
+        help="Override the pto-isa memory-base define. The soc-string heuristic "
+             "only classifies A5 (REGISTER_BASE) vs A2/A3 (MEMORY_BASE); set this "
+             "explicitly for other SoCs (e.g. Ascend960).",
+    )
     args = parser.parse_args()
 
     output_root = Path(args.output_root) if args.output_root else None
@@ -2649,6 +2662,7 @@ def main():
         args.run_mode,
         args.soc_version,
         aicore_arch=args.aicore_arch,
+        mem_base=args.mem_base,
     )
 
 

@@ -11,6 +11,8 @@
 
 本设计参考 PR615 的若干基础设施（多地址 `pto.pointer_cast`、`set_flag_dyn` / `wait_flag_dyn`、`MAX_MULTI_BUFFER_NUM = 16` 等），但 IR 表面、用户接口、同步推导路径都是独立的，不在 PR615 之上叠加。
 
+§4–§8 描述的物理地址规划是架构无关路径：a2 / a3 上 `alloc_multi_tile` 一律走 `PTOPlanMemory` 的 N-way 静态布局（§5.2）。a5 引入 BMU（Buffer Management Unit，缓冲管理单元）硬件后，`alloc_multi_tile` 多一条运行时分配路径，见 §9。BMU 的完整设计（S/D/H 三种规划模式、通用 H 组、函数尾 barrier 优化等）见 `BMU-integration-design.md`；本文 §9 只覆盖 `alloc_multi_tile` 这一条输入路径。
+
 ## 2. 设计目标
 
 1. **显式表达 multi-buffer**：前端在 alloc 处声明"这块逻辑 tile 有 N 个物理槽位"。
@@ -442,7 +444,157 @@ lit test/lit/pto/multi_tile_prefetch_insert_sync.pto
 lit test/lit/pto/multi_tile_prefetch_gss.pto
 ```
 
-## 9. 当前实现状态 & 后续
+## 9. a5 上的 alloc_multi_tile 处理（BMU 路径）
+
+### 9.1 为什么 a5 需要另一条路径
+
+a2 / a3 上，`alloc_multi_tile` 的 N 份物理槽位由 `PTOPlanMemory` 编译期定死（§5.2），地址是常量。a5 新增 BMU 硬件：本地内存（UB / L1 / L0A / L0B / L0C / BT / FB）按 slice 粒度切成最多 4 个 segment，每个 segment 内由硬件 bump pointer 运行时分配 / 回收 slice（`BUF ALLOC` / `BUF FREE`）。
+
+`alloc_multi_tile` 是 BMU **H 模式（动态外壳 + 静态内核）** 最自然的输入——一个 `alloc_multi_tile` 本身就是一个共生死组，组即 IR 节点，不需要额外的组识别。因此 a5 上 `alloc_multi_tile` 可改由 BMU 运行时分配基址，组内 N 个 slot 仍按编译期相对偏移排布。是否走这条路径由 §9.2 的 `placement` 字段与 §9.3 的分类规则决定。
+
+### 9.2 `placement` 字段 —— 路径选择开关
+
+`!pto.multi_tile_buf` 类型新增可选 `placement` 字段（默认 `auto`），前端 / 调试时可强制路径：
+
+```mlir
+!pto.multi_tile_buf<vec, 16x16xf16, count=2>                    // placement=auto（默认，可省略）
+!pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=static>  // 强制静态 N-way
+!pto.multi_tile_buf<vec, 16x16xf16, count=2, placement=bmu>     // 强制 BMU
+```
+
+对应 C++ 枚举 `mlir::pto::MultiBufPlacement`：
+
+| 枚举值 | IR 关键字 | 语义 |
+|---|---|---|
+| `kAuto` | `auto` | 分类器决定 S（静态）还是 H（BMU），见 §9.3 |
+| `kStatic` | `static` | 强制 S 模式，沿用 §5.2 的 N-way 静态布局 |
+| `kBmu` | `bmu` | 强制 H 模式，走 BMU 运行时分配；仅 a5，a2/a3 上 verifier 报错 |
+
+`PTOViewToMemref` 把该字段透传为下沉后 `memref.alloc` 上的 `pto.multi_buf_placement` 属性（`auto` / `static` / `bmu`），供跑在 memref 层的分类器读取。相关常量集中在 `include/PTO/IR/PTOBmu.h`。
+
+### 9.3 分类：`alloc_multi_tile` 归 S 还是 H
+
+`pto-classify-buffers`（ModuleOp pass）给每个本地 `memref.alloc` 打 `pto.plan_class`（`S` / `D` / `H`），H 类附带 `pto.h_group_id`。`alloc_multi_tile` 只涉及 S 与 H 两类，按优先级命中：
+
+| 规则 | 条件 | 输出 | 状态 |
+|---|---|---|---|
+| 0 | a2/a3，或 a5 但 module 无 `pto.uses_bmu` | S（保持不标注，走原静态路径） | ✅ |
+| 1 | `placement` 显式（`static`→S，`bmu`→H） | S 或 H | ✅ |
+| 2/3 | `placement=auto`（或缺省） | S | ✅ |
+
+> **注（已简化）**：早期规则 2/3 会按「`N × slotBytes` 超 scope 静态配额 → H」做容量判定；
+> 现已移除（`PTOClassifyBuffers.cpp`：`hybrid = (placement == "bmu")`）。理由：S 走
+> `PTOPlanMemory` 的 liveness-based 字节级地址复用，比 BMU 的 slice 量化 bump 分配省得多
+> （512B tile 在 BMU 要占满一个 8KB slice，S 里只占 512B 且可与不重叠 buffer 共址）；且
+> **S 与 BMU 共享同一块物理内存**——S 放不下的、更浪费的 BMU 也放不下，不存在「S 溢出到
+> BMU」。因此进入 H 的**唯一**原因是语义（显式 `placement=bmu`）。空间层面改由
+> `pto-plan-bmu-layout` **S 优先预留、BMU 段从剩余空间 carve-up**
+> （见 `BMU-segmentation-strategy-design.md` §4 Step A/F）。
+
+`D`（纯动态）与通用 H 组（规则 4–8）属 BMU 主线的非 multi-buffer 输入，不在本节范围。整条 BMU 路径由 module attr `pto.uses_bmu`（CLI `--pto-uses-bmu`）+ a5 架构双重 gating，且仅在 `--pto-level=level1|level2` 生效（level3 本地内存由上层拥有，`PTOPlanMemory` 不跑）。
+
+### 9.4 Pipeline（a5 增量）
+
+在 §5 的架构无关流水上插入两个 BMU pass；其余顺序不变。
+
+```
+pto-view-to-memref        透传 placement → memref.alloc {pto.multi_buf_placement}
+        ↓
+pto-classify-buffers  (新) 打 plan_class = S/D/H (+ h_group_id)          ── a5 + uses_bmu 才非 no-op
+        ↓
+pto-plan-bmu-layout   (新) 按 (class,sliceCount) partition 切段（≤4 段，见分段策略文档）+ emit bmu_config；H 类物化为 bmu_alloc/free + base+offset cast
+        ↓
+pto-plan-memory           改：只规划 S 类；scope 可用容量收窄为 (total_slices − tail_seg3) * slice_size —— BMU 段之上的静态尾区 [tail_seg3·slice, total)，S 基址整体上移 tail_seg3·slice（ApplyBmuStaticTailShift）
+        ↓
+InsertSync / GSS          改：识别 SSA-base+offset 地址；bmu_alloc/free 视作 sync-transparent；函数尾 barrier 条件化
+        ↓
+pto-resolve-buffer-select 不变：读多地址 cast 第 k 个 operand，operand 是常量还是 arith.addi 都支持
+        ↓
+PTOToEmitC                新增 bmu_config / bmu_alloc / bmu_free 的 lower
+```
+
+接入点在 `tools/ptoas/ptoas.cpp`：`createPTOClassifyBuffersPass` 与 `createPTOPlanBmuLayoutPass` 排在 `createPTOViewToMemrefPass` 之后、`createPlanMemoryPass` 之前，与 PlanMemory 同受 `level != Level3` gating。Sync 仍跑在 `PTOResolveBufferSelect` 之前（§5 不变量）。
+
+### 9.5 BMU 运行时 op
+
+`pto-plan-bmu-layout` 把 H 类 alloc 物化为三个新 op（`include/PTO/IR/PTOOps.td`，"Resource & Sync" 段）：
+
+| op | 关键操作数 / 结果 | 语义 |
+|---|---|---|
+| `pto.bmu_config` | `buffer`；`tail_seg0..3`（slice 单位，非降序） | kernel 入口每 buffer kind 一次，配置 4 个 segment tail；`tail_seg3` 之后留给静态尾区 |
+| `pto.bmu_alloc` | `buffer`, `pipe`, `segm`, `count` → `i64 base_addr` | 在 `pipe` 上从 segment `segm` 取 `count` 连续 slice，返回基址；凑不出连续段则按 `.pipe` stall |
+| `pto.bmu_free` | `buffer`, `pipe`, `base_addr`, `count` | 回收 `[base, base+count)`；非阻塞，在 `pipe` 先前指令 retire 后执行 |
+
+IR 形态：
+
+```mlir
+pto.bmu_config vec tails = [2, 2, 2, 2]
+%base = pto.bmu_alloc vec, #pto.pipe<MTE2>, segm 0, count %cnt : index -> i64
+pto.bmu_free vec, #pto.pipe<MTE3>, base %base, count %cnt : i64, index
+```
+
+alloc / free 的 pipe 由 buffer kind 唯一确定，取自 `PTOBmu.h` 的 `bmuAllocPipeFor` / `bmuFreePipeFor`（op verifier 与 layout pass 共用同一真值源，不漂移）。例如 vec：alloc→MTE2、free→MTE3。alloc 与 free 落在不同 pipe，故生产者→消费者的跨 pipe 数据依赖仍由 InsertSync 的 set/wait_flag 保护——BMU 不做跨 pipe 数据同步。
+
+### 9.6 H 物化：整环与逐轮
+
+`alloc_multi_tile` 带 `pto.multi_buffer = N` 属性，组成员是它的 N 个 slot（天然同 size，自然满足「同 size 归段」约束）。两种物化形态：
+
+**（a-2）整环（whole-ring，函数级一次 alloc）—— baseline**：一次 `bmu_alloc` 得 `%base`，N 个 `arith.addi %base, k*slotBytes` 拼成多地址 `pto.pointer_cast`；`slot_marker` 不动，下游 `PTOResolveBufferSelect` 仍按 slot 索引选第 k 个 operand。
+
+```mlir
+// PTOViewToMemref 产出
+%a = memref.alloc() { pto.multi_buffer = 2 : i32, pto.plan_class = "H" }
+     : memref<16x16xf16, #pto.address_space<vec>>
+%s_mem = pto.slot_marker %a[%k] : ... -> ...
+
+// pto-plan-bmu-layout 改写为
+%cnt  = arith.constant <ceil(N*slotBytes/sliceBytes)> : index
+%base = pto.bmu_alloc vec, #pto.pipe<MTE2>, segm 0, count %cnt : index -> i64
+%a0   = arith.addi %base, %c0     : i64
+%a1   = arith.addi %base, %cS     : i64          // cS = slotBytes
+%cast = pto.pointer_cast(%a0, %a1) : memref<16x16xf16, #pto.address_space<vec>>
+%s_mem = pto.slot_marker %cast[%k] : ... -> ...
+pto.bmu_free vec, #pto.pipe<MTE3>, base %base, count %cnt : i64, index
+```
+
+整环只提供函数级容量分时，不产生 per-iteration backpressure，因此拿不到硬件隐式 reuse 同步收益，作用是正确性回退 + 保住 baseline 行为。
+
+**（a-1）逐轮（per-advance，循环内 alloc/free）—— 首选**：当所有 slot 使用落在一个循环体内、且槽生命周期在迭代内闭合（纯 produce→consume 的 ping-pong）时，每轮首写点 emit 一个 `bmu_alloc`（`count = ceil(slotBytes/sliceBytes)`）、末次消费点 emit `bmu_free`。此时每轮 alloc 即本轮唯一槽，绕开多槽 index 选择；复用边界的反向 WAR 由下一次 `bmu_alloc` 的 backpressure stall 隐式承担，省掉 S 模式必须显式发的反向 `wait_flag`。代价是 alloc 粒度至少 1 slice，`slotBytes < sliceBytes` 时比整环更占 slice。
+
+### 9.7 与同步 / lowering 的衔接
+
+`SlotAffineAnalysis`、`getMultiBufferEventIdInfo`、dyn flag（`set_flag_dyn` / `wait_flag_dyn`）等 §5.4 机制在 H 路径下零改动可用——slot SSA 比较与基址形式正交。BMU 特有增量：
+
+- **SSA-base+offset 识别**（`PTOIRTranslator`）：多地址 cast 的 operand 从常量变为 `arith.addi %base, const`。`BaseMemInfo` 的地址项记 `(baseSSA, offset)`：同源 base 按 offset+size range 判 overlap（组内 slot），不同源 base 默认 disjoint（不同 `bmu_alloc`），一常一 SSA 保守判 overlap。
+- **`bmu_alloc` / `bmu_free` sync-transparent**：不带 OpPipeInterface、地址经多地址 cast 追踪，InsertSync 直接 advance 穿透。
+- **dyn flag 越过 stall alloc**：`set_flag_dyn` 与同 pipe `bmu_alloc` 相邻时须 hoist 到 alloc 前，避免 waiter 阻塞 alloc 等待的资源而死锁（逐轮物化下的承重路径；整环下为 latent no-op）。
+- **函数尾 barrier 条件化**：用尾部 `bmu_free` 覆盖的 pipe 集合降级 / 跳过 `pto.barrier <PIPE_ALL>`。当前 free 落在消费者 pipe，与生产者 pipe 恒不相交，skip 档暂不可达，实际落到 partial 或 full。
+
+EmitC（`PTOToEmitC`）lower 到 ccec intrinsic：`bmu_config` → `set_bmu_segm_<ub|l1|l0a|l0b|l0c|bt|fb>(...)`；`bmu_alloc` → `__ubuf_alloc<PIPE, segm> / __cbuf_alloc / __ca_alloc / ...`；`bmu_free` → `__ubuf_free<PIPE> / ...`。
+
+### 9.8 a5/BMU 实现状态与限制
+
+| 阶段 | 状态 | 文件 |
+|---|---|---|
+| `placement` 字段（auto/static/bmu）+ `MultiBufPlacement` 枚举，a2/a3 拒 `bmu` | ✅ | `include/PTO/IR/PTOTypeDefs.td`, `include/PTO/IR/PTO.h` |
+| `pto.uses_bmu` module attr + `--pto-uses-bmu` flag | ✅ | `tools/ptoas/ptoas.cpp` |
+| `pto.bmu_config` / `pto.bmu_alloc` / `pto.bmu_free` op + verifier | ✅ | `include/PTO/IR/PTOOps.td`, `lib/PTO/IR/PTO.cpp` |
+| `pto-classify-buffers`（规则 0/1/2/3/5/8） | ✅ | `lib/PTO/Transforms/PTOClassifyBuffers.cpp` |
+| `pto-plan-bmu-layout`：scope 切段 + multi-buffer H 物化 + 通用 H 组布局 | ✅ | `lib/PTO/Transforms/PTOPlanBmuLayout.cpp` |
+| `PTOPlanMemory` H 容量收窄（tail_seg3 静态尾区共存） | ✅ | `lib/PTO/Transforms/PTOPlanMemory.cpp` |
+| InsertSync：SSA-base+offset 识别 / alloc-free sync-transparent / dyn flag hoist / 尾 barrier 条件化 | ✅ | `lib/PTO/Transforms/InsertSync/` |
+| GSS slot-aware 复用于 H 路径 | ✅ | `lib/PTO/Transforms/GraphSyncSolver/` |
+| BMU op → ccec intrinsic lowering | ✅ | `lib/PTO/Transforms/PTOToEmitC.cpp` |
+| lit 测试（`bmu_*` / `multi_tile_buf_placement*`）：parse/print、verifier、分类、切段、H const/dyn slot 端到端、整环 baseline、逐轮、两组 disjoint、尾 barrier 各档 | ✅ | `test/lit/pto/bmu_*.pto`, `test/lit/pto/multi_tile_buf_placement*.pto` |
+
+当前限制：
+
+- 分类规则 4（并发字节 dry-run → D）、6（pypto multibuffer-unroll pair → H）、7（`scf.for` iter_args 隐式 H 组）尚未落地：规则 4 缺 scope 级 liveness 分析，规则 6 保守留 S，规则 7 受 loop-carried memref IR 下游不支持所阻。
+- 尾 barrier skip 档在「free 落消费者 pipe」下不可达（§9.7）；需改为「实际最后消费者 pipe」才能复活。
+- 逐轮物化的 `set_flag_dyn` hoist 目前为 latent no-op，随 per-advance 全面启用才成为承重路径。
+- 仅 level1/2、a5 + `uses_bmu` 生效；D 类与通用 H 组的其余场景属 BMU 主线，非本节 multi-buffer 输入范围。
+
+## 10. 当前实现状态 & 后续
 
 ### 已实现（截至本批次）
 
