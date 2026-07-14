@@ -138,7 +138,8 @@ private:
   /// 判断两个节点是否存在 RAW/WAR/WAW 依赖
   bool IsMemInfoHasDependency(CompoundInstanceElement *nowCompound,
                               CompoundInstanceElement *frontCompound,
-                              DepBaseMemInfoPairVec &depBaseMemInfosVec);
+                              DepBaseMemInfoPairVec &depBaseMemInfosVec,
+                              bool isBackward = false);
  
   /// 实际创建 SyncOperation 对象并插入列表
   void InsertSyncOperation(CompoundInstanceElement *nowCompound,

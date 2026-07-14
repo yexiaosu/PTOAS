@@ -545,8 +545,13 @@ struct PTOPlanBmuLayoutPass
           rewriter.setInsertionPoint(sm);
           Value cnt = rewriter.create<arith::ConstantIndexOp>(
               loc, static_cast<int64_t>(effSlot));
-          Value base = rewriter.create<pto::BmuAllocOp>(
+          auto bmuAllocOp = rewriter.create<pto::BmuAllocOp>(
               loc, i64Ty, allocPipeAttr(scope), bufferAttr, segm, cnt);
+          // Carry the multi-buffer depth so InsertSync's GetEventIdNum can
+          // recover N from a single-address per-advance pointer_cast.
+          bmuAllocOp->setAttr(pto::kPtoMultiBufferAttrName,
+                              rewriter.getI32IntegerAttr(static_cast<int32_t>(n)));
+          Value base = bmuAllocOp.getResult();
           auto pc = rewriter.create<pto::PointerCastOp>(
               loc, alloc.getType(), ValueRange(base), Value(), Value(), cfg);
           // Reproduce the slot's result type by cloning the func-scope bind_tile
@@ -554,10 +559,14 @@ struct PTOPlanBmuLayoutPass
           IRMapping map;
           map.map(info.bind.getSource(), pc.getResult());
           Operation *newBind = rewriter.clone(*info.bind.getOperation(), map);
+          // Keep slot_marker alive for sync analysis: it carries the slot index
+          // %k that InsertSync needs for dyn event-id derivation. Rewire its
+          // source to the cloned bind; ResolveBufferSelect will naturally remove
+          // it later (single-address pointer_cast → identity pass-through).
+          sm.getSourceMutable().assign(newBind->getResult(0));
           rewriter.setInsertionPoint(term);
           rewriter.create<pto::BmuFreeOp>(term->getLoc(), freePipeAttr(scope),
                                           bufferAttr, base, cnt);
-          rewriter.replaceOp(sm, newBind->getResult(0));
         }
         rewriter.eraseOp(info.bind);
         rewriter.eraseOp(alloc);

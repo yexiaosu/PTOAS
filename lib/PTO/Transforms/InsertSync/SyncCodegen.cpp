@@ -138,42 +138,6 @@ static bool hasNeighborBarrier(Block *block, Block::iterator ip,
   return nextBarrier && nextBarrier.getPipe() == pipeAttr;
 }
 
-// BMU design §4.8c: a pto.bmu_alloc stalls subsequent same-pipe instructions
-// until it can reserve its slices. A set_flag(_dyn) issued *after* such a
-// stalling alloc would never fire, deadlocking any waiter that must run to free
-// those slices. Return the nearest pto.bmu_alloc on `pipe` that follows `ip` in
-// the same block before the next barrier, so the caller can hoist the set ahead
-// of it. Scanning only forward within the block keeps the hoist safe: the set's
-// slot SSA is produced at/before the current insertion point and therefore
-// dominates any alloc found later in the same block. Under the current H-path
-// materialization (one function-scope bmu_alloc per buffer, ahead of every dyn
-// flag) this finds nothing; it engages once per-iteration alloc lands.
-static Operation *findFollowingStallAllocOnPipe(Block *block, Block::iterator ip,
-                                                pto::PIPE pipe) {
-  for (auto it = ip; it != block->end(); ++it) {
-    if (isa<pto::BarrierOp>(&*it))
-      return nullptr;
-    if (auto alloc = dyn_cast<pto::BmuAllocOp>(&*it))
-      if (alloc.getPipe().getPipe() == pipe)
-        return alloc;
-  }
-  return nullptr;
-}
-
-// If a set (not wait) flag would land ahead of a same-pipe stalling bmu_alloc,
-// move the insertion point to just before that alloc (BMU design §4.8c).
-static void hoistSetFlagBeforeStallAlloc(IRRewriter &rewriter,
-                                         SyncOperation *sync,
-                                         pto::PipeAttr srcPipe) {
-  if (sync->isSyncWaitType())
-    return;
-  Block *block = rewriter.getInsertionBlock();
-  if (!block)
-    return;
-  if (Operation *stallAlloc = findFollowingStallAllocOnPipe(
-          block, rewriter.getInsertionPoint(), srcPipe.getPipe()))
-    rewriter.setInsertionPoint(stallAlloc);
-}
 
 // A5 rejects an explicit standalone PIPE_V barrier — intra-pipe V ordering is
 // guaranteed by hardware, so the backend refuses a per-V barrier. Any pipe for
@@ -427,7 +391,6 @@ void SyncCodegen::CreateSetWaitOpForSingleBuffer(IRRewriter &rewriter,
                         beforeInsert || op->hasTrait<OpTrait::IsTerminator>());
   auto srcPipe = getPipeAttr(rewriter, sync->GetActualSrcPipe());
   auto dstPipe = getPipeAttr(rewriter, sync->GetActualDstPipe());
-  hoistSetFlagBeforeStallAlloc(rewriter, sync, srcPipe);
   auto eventId = getEventAttr(rewriter, sync->eventIds[0]);
   createSetOrWaitFlagOp(rewriter, op, sync, srcPipe, dstPipe, eventId);
 }
@@ -440,9 +403,6 @@ void SyncCodegen::CreateSetWaitOpForMultiBuffer(IRRewriter &rewriter,
   auto dstPipe = getPipeAttr(rewriter, sync->GetActualDstPipe());
   setSyncInsertionPoint(rewriter, op,
                         beforeInsert || op->hasTrait<OpTrait::IsTerminator>());
-  // BMU design §4.8c: keep a set_flag_dyn ahead of any same-pipe stalling
-  // bmu_alloc that follows it in this block (deadlock avoidance).
-  hoistSetFlagBeforeStallAlloc(rewriter, sync, srcPipe);
   Location loc = op->getLoc();
 
   // If the analysis did not plumb a slot SSA (e.g. multi-buffer alloc

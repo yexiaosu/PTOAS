@@ -12,6 +12,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOMultiBuffer.h"
 #include "PTO/Transforms/InsertSync/InsertSyncAnalysis.h"
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/InsertSync/SyncCommon.h"
@@ -197,6 +198,8 @@ static bool containsExactAccess(const SmallVector<const BaseMemInfo *> &infos,
 }
 
 } // namespace
+
+static int readMultiBufferFromBmuAlloc(Value v);
 
 static constexpr unsigned kPipeStateSize =
     static_cast<unsigned>(PipelineType::PIPE_LAST) + 1U;
@@ -568,7 +571,8 @@ void InsertSyncAnalysis::MemAnalyze(
   }
 
   DepBaseMemInfoPairVec depVec;
-  if (!IsMemInfoHasDependency(nowCompound, frontCompound, depVec)) {
+  if (!IsMemInfoHasDependency(nowCompound, frontCompound, depVec,
+                              /*isBackward=*/forEndIndex.has_value())) {
     return;
   }
 
@@ -608,7 +612,8 @@ void InsertSyncAnalysis::MemAnalyze(
 bool InsertSyncAnalysis::IsMemInfoHasDependency(
     CompoundInstanceElement *nowCompound,
     CompoundInstanceElement *frontCompound,
-    DepBaseMemInfoPairVec &depBaseMemInfosVec) {
+    DepBaseMemInfoPairVec &depBaseMemInfosVec,
+    bool isBackward) {
   bool hasDependency = false;
   hasDependency |= memAnalyzer_.DepBetween(nowCompound->useVec, frontCompound->defVec,
                                           depBaseMemInfosVec);
@@ -634,6 +639,23 @@ bool InsertSyncAnalysis::IsMemInfoHasDependency(
         hasDependency = true;
       }
     }
+  }
+
+  // BMU backward-sync elision. In backward (cross-iteration) analysis, both
+  // sides of a dep pair point to the SAME BaseMemInfo (the backward scan
+  // self-compares the same CompoundInstanceElement). For BMU per-advance
+  // buffers (bmu_alloc carries pto.multi_buffer=N), cross-iteration WAR is
+  // serialized by hardware (alloc exclusivity + free drain + alloc stall),
+  // so compiler-inserted backward set/wait_flag is redundant.
+  if (isBackward && hasDependency) {
+    depBaseMemInfosVec.erase(
+        std::remove_if(depBaseMemInfosVec.begin(), depBaseMemInfosVec.end(),
+            [](const auto &pair) {
+              return pair.first && pair.first->baseBuffer &&
+                     readMultiBufferFromBmuAlloc(pair.first->baseBuffer) > 1;
+            }),
+        depBaseMemInfosVec.end());
+    hasDependency = !depBaseMemInfosVec.empty();
   }
 
   return hasDependency;
@@ -713,15 +735,36 @@ void InsertSyncAnalysis::InsertSyncOperation(
     setOp->SetDepSyncIRIndex(frontCompound->GetIndex());
     waitOp->SetDepSyncIRIndex(frontCompound->GetIndex());
 
-    // Back-edge dependencies may require multi-buffer event IDs. When N
-    // dyn event IDs are warranted, also plumb the per-side slot SSA so
-    // codegen can lower into `pto.set_flag_dyn` / `pto.wait_flag_dyn`.
-    if (forEndIndex.has_value()) {
+    // Multi-buffer event IDs. Back-edge (cross-iteration) deps always check.
+    // Forward (same-iteration) deps also check for BMU per-advance buffers:
+    // per-advance allocs a new address each iteration, so the backward sync
+    // (dyn event ID on the WAR dep) does not truly serialize adjacent
+    // iterations (no real WAR on different addresses). Without dyn event IDs
+    // on the forward sync too, the next iteration's set_flag overwrites the
+    // current iteration's unconsumed event → data hazard.
+    // Per-advance is identified by: baseSSAs non-empty (BMU-managed) AND
+    // baseAddresses.size() == 1 (single-address pointer_cast). Whole-ring
+    // (baseAddresses.size() == N) keeps static forward event IDs — its
+    // backward sync genuinely serializes (same physical addresses).
+    bool needDynEventId = forEndIndex.has_value();
+    if (!needDynEventId) {
+      // Per-advance: the bmu_alloc carries pto.multi_buffer=N (set by
+      // plan-bmu-layout only for per-advance materialization). Trace from
+      // the dep pair's baseBuffer back to the bmu_alloc to check.
+      auto isPerAdvanceBuf = [](const BaseMemInfo *info) {
+        return info && info->baseBuffer &&
+               readMultiBufferFromBmuAlloc(info->baseBuffer) > 1;
+      };
+      for (const auto &pair : depBaseMemInfosVec) {
+        if (isPerAdvanceBuf(pair.first) || isPerAdvanceBuf(pair.second)) {
+          needDynEventId = true;
+          break;
+        }
+      }
+    }
+    if (needDynEventId) {
       int eventIdNum = GetEventIdNum(depBaseMemInfosVec);
       if (eventIdNum > 1) {
-        // Each dep pair has (now=consumer, front=producer). The producer's
-        // slot SSA gates the `set_flag_dyn`; the consumer's gates the
-        // `wait_flag_dyn`. Walk the first viable dep pair to extract them.
         Value producerSlot;
         Value consumerSlot;
         for (auto &pair : depBaseMemInfosVec) {
@@ -733,10 +776,6 @@ void InsertSyncAnalysis::InsertSyncOperation(
             break;
         }
         if (!producerSlot || !consumerSlot) {
-          // No slot SSA threaded through -- fall back to single event id.
-          // This keeps non-multi-buffer codepaths untouched even if their
-          // baseAddresses happen to have multiple entries for some other
-          // reason (e.g. memref subview).
           eventIdNum = 1;
         } else {
           setOp->slotSSAExpr = producerSlot;
@@ -905,6 +944,40 @@ SmallVector<Value> InsertSyncAnalysis::GetMemInfoBuffers(
   return result;
 }
 
+// Trace from a Value back through bind_tile / slot_marker / pointer_cast to
+// a pto.bmu_alloc and read its pto.multi_buffer attr (the multi-buffer depth N).
+// Returns 1 if the chain does not land on a bmu_alloc with that attr.
+static int readMultiBufferFromBmuAlloc(Value v) {
+  for (int hops = 0; v && hops < 16; ++hops) {
+    Operation *op = v.getDefiningOp();
+    if (!op)
+      break;
+    if (isa<pto::BmuAllocOp>(op)) {
+      if (auto attr = op->getAttrOfType<IntegerAttr>(
+              pto::kPtoMultiBufferAttrName))
+        return static_cast<int>(attr.getInt());
+      break;
+    }
+    if (auto pc = dyn_cast<pto::PointerCastOp>(op)) {
+      if (pc.getAddrs().size() == 1) {
+        v = pc.getAddrs().front();
+        continue;
+      }
+      break;
+    }
+    if (auto bind = dyn_cast<pto::BindTileOp>(op)) {
+      v = bind.getSource();
+      continue;
+    }
+    if (auto sm = dyn_cast<pto::SlotMarkerOp>(op)) {
+      v = sm.getSource();
+      continue;
+    }
+    break;
+  }
+  return 1;
+}
+
 int InsertSyncAnalysis::GetEventIdNum(
     const DepBaseMemInfoPairVec &depBaseMemInfosVec) {
   // A back-edge dependency benefits from N dynamic event IDs whenever at
@@ -913,30 +986,46 @@ int InsertSyncAnalysis::GetEventIdNum(
   // populated:
   //   - kSingle / const-slot              : size == 1
   //   - dyn-slot (PTOIRTranslator default) : size == N (all slots, conservative)
-  // For the alias to even reach this point both sides share a root, so the
-  // slot count derived from either side's full address set should be the
-  // same N. We pick the max to be robust against accidental narrowing.
+  // For BMU per-advance buffers, baseAddresses.size() is 1 (single-address
+  // pointer_cast), but the multi-buffer depth N is carried on the bmu_alloc
+  // op's pto.multi_buffer attr. We fall back to reading that when the
+  // address-based detection yields 1.
   int eventIdNum = 1;
   for (const auto &pair : depBaseMemInfosVec) {
-    bool isLocalA =
-        pair.first && (pair.first->scope == pto::AddressSpace::MAT ||
-                       pair.first->scope == pto::AddressSpace::VEC);
-    bool isLocalB =
-        pair.second && (pair.second->scope == pto::AddressSpace::MAT ||
-                        pair.second->scope == pto::AddressSpace::VEC);
-    if (!isLocalA && !isLocalB)
+    // Multi-buffer event IDs apply to any on-chip local memory scope, not
+    // just MAT/VEC. L0A (LEFT), L0B (RIGHT), L0C (ACC), BT (BIAS), FB
+    // (SCALING) can all host multi-buffer allocs via BMU.
+    auto isOnChipLocal = [](const BaseMemInfo *info) {
+      if (!info) return false;
+      switch (info->scope) {
+      case pto::AddressSpace::VEC:
+      case pto::AddressSpace::MAT:
+      case pto::AddressSpace::LEFT:
+      case pto::AddressSpace::RIGHT:
+      case pto::AddressSpace::ACC:
+      case pto::AddressSpace::BIAS:
+      case pto::AddressSpace::SCALING:
+        return true;
+      default:
+        return false;
+      }
+    };
+    if (!isOnChipLocal(pair.first) && !isOnChipLocal(pair.second))
       continue;
     size_t aN = pair.first ? pair.first->baseAddresses.size() : 1;
     size_t bN = pair.second ? pair.second->baseAddresses.size() : 1;
     int pairN = static_cast<int>(std::max(aN, bN));
+    // BMU per-advance: single-address pointer_cast but bmu_alloc carries N.
+    if (pairN <= 1) {
+      int aBmu = pair.first ? readMultiBufferFromBmuAlloc(pair.first->baseBuffer) : 1;
+      int bBmu = pair.second ? readMultiBufferFromBmuAlloc(pair.second->baseBuffer) : 1;
+      pairN = std::max(aBmu, bBmu);
+    }
     if (pairN <= 1)
       continue;
     if (eventIdNum == 1) {
       eventIdNum = pairN;
     } else if (eventIdNum != pairN) {
-      // Multiple dep pairs disagreeing on N: fall back to single event id
-      // for safety. With more work this could be relaxed by per-pair
-      // multi-buffer reasoning.
       return 1;
     }
   }
