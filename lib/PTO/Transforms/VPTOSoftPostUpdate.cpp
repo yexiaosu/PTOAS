@@ -794,11 +794,29 @@ static bool canScaleInitialOffset(Value strideOperand, int64_t elemBytes,
   return constant && *constant % (elemBytes / unitBytes) == 0;
 }
 
+// Reproduce the index-to-i32 truncation performed by vlds/vsts lowering before
+// using an Element-class offset in pto.addptr.  A direct index -> i32 -> index
+// round trip is canonicalized away by arith, so route through i64 + trunci to
+// keep the narrowing explicit.  The final signed index_cast preserves negative
+// offsets in the same way as the existing lowering.
+static Value truncateElementOffsetToI32(Value offset, Location loc,
+                                        OpBuilder &builder) {
+  if (!offset.getType().isIndex())
+    return offset;
+  Value offsetI64 =
+      builder.create<arith::IndexCastOp>(loc, builder.getI64Type(), offset);
+  Value offsetI32 =
+      builder.create<arith::TruncIOp>(loc, builder.getI32Type(), offsetI64);
+  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                            offsetI32);
+}
+
 // Create the address reached by one memory op before post-update rewriting.
 // The builder must already point at the desired insertion location.
 static Value createInitialPtr(Value base, Value strideOperand,
-                              int64_t elemBytes, int64_t unitBytes,
-                              Location loc, OpBuilder &builder) {
+                              StrideUnit strideUnit, int64_t elemBytes,
+                              int64_t unitBytes, Location loc,
+                              OpBuilder &builder) {
   if (!strideOperand)
     return base;
   auto constSo = getConstantIntValue(strideOperand);
@@ -807,7 +825,10 @@ static Value createInitialPtr(Value base, Value strideOperand,
   if (!canScaleInitialOffset(strideOperand, elemBytes, unitBytes))
     return nullptr;
 
-  Value scaledOffset = strideOperand;
+  Value scaledOffset =
+      strideUnit == StrideUnit::Element
+          ? truncateElementOffsetToI32(strideOperand, loc, builder)
+          : strideOperand;
   if (unitBytes != elemBytes) {
     if (unitBytes % elemBytes == 0) {
       Value soIndex = strideOperand;
@@ -830,8 +851,9 @@ static Value createInitialPtr(Value base, Value strideOperand,
 // the first iteration. Values defined in the loop are first materialized at the
 // loop entry, then the shared unit conversion above is applied.
 static Value computeInitialPtr(Value base, Value strideOperand,
-                               int64_t elemBytes, int64_t unitBytes,
-                               scf::ForOp forOp, OpBuilder &builder) {
+                               StrideUnit strideUnit, int64_t elemBytes,
+                               int64_t unitBytes, scf::ForOp forOp,
+                               OpBuilder &builder) {
   Value baseAtEntry = materializeAtLoopEntry(base, forOp, builder);
   if (!baseAtEntry)
     return nullptr;
@@ -844,8 +866,8 @@ static Value computeInitialPtr(Value base, Value strideOperand,
     return nullptr;
 
   builder.setInsertionPoint(forOp);
-  return createInitialPtr(baseAtEntry, soAtEntry, elemBytes, unitBytes,
-                          forOp.getLoc(), builder);
+  return createInitialPtr(baseAtEntry, soAtEntry, strideUnit, elemBytes,
+                          unitBytes, forOp.getLoc(), builder);
 }
 
 // Rescale a per-iteration base delta from `pto.addptr` units (elements) into
@@ -1610,9 +1632,9 @@ static void processSequentialBlock(Block *block, DominanceInfo &dominance,
     run.strideValue = materializeSequential(available, run.strideType,
                                             first->op->getLoc(), builder);
     builder.setInsertionPoint(first->op);
-    run.currentPtr =
-        createInitialPtr(first->base, first->strideOperand, first->elemBytes,
-                         first->unitBytes, first->op->getLoc(), builder);
+    run.currentPtr = createInitialPtr(
+        first->base, first->strideOperand, first->info->strideUnit,
+        first->elemBytes, first->unitBytes, first->op->getLoc(), builder);
   }
 
   DenseMap<Operation *, unsigned> opToRun;
@@ -1758,8 +1780,8 @@ private:
       Value strideNew = materialize(finalExpr, strideType, op.getLoc(), forOp,
                                     constCache, builder);
 
-      Value initPtr = computeInitialPtr(base, strideOperand, *elemBytes,
-                                        unitBytes, forOp, builder);
+      Value initPtr = computeInitialPtr(base, strideOperand, info->strideUnit,
+                                        *elemBytes, unitBytes, forOp, builder);
       if (!initPtr)
         continue;
 
