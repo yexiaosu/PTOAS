@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-本文档设计一个新的 PTOAS pass——`VPTOSoftPostUpdate`，在 **MLIR 层**（LLVM lowering 之前）将非 Post-Update 形式的 VPTO 访存操作转换为 Post-Update 形式。首期目标指令为已支持 `updated_base` 的三个 op（`pto.vlds`、`pto.vsts`、`pto.vsstb`），后续扩展至更多访存指令（见第 2 节指令全景）。pass 覆盖两种场景：`scf.for` 循环内的固定步长访存模式（循环路径）和前端已展开的连续等差访存序列（顺序路径）。
+本文档设计一个新的 PTOAS pass——`VPTOSoftPostUpdate`，在 **MLIR 层**（LLVM lowering 之前）将非 Post-Update 形式的 VPTO 访存操作转换为 Post-Update 形式。首期目标指令为已支持 `updated_base` 的三个 op（`pto.vlds`、`pto.vsts`、`pto.vsstb`），后续扩展至更多访存指令（见第 2 节指令全景）。pass 覆盖两种场景：`scf.for` 循环间的固定步长访存模式（循环路径），以及同一 block 单次执行中的等步长访存 run（顺序路径）。
 
 循环路径示例：
 
@@ -106,33 +106,33 @@ bisheng 的 pass 工作在 LLVM IR 上，此时高级循环结构和 PTO 类型�
 | `pto.vsstb` 块步长存储 | 部分支持（独立开关） | ✓（统一框架） |
 | AIV 软件循环 | ✗（排除，因为 AIV 软件循环不被 `LoopInfo` 识别为真实硬件循环，SCEV 无法分析） | ✓（`scf.for` 统一表示，无此限制） |
 | 非循环顺序访问 | ✗（不支持） | ✓（顺序路径，见 4.3） |
+| 循环体内单次迭代的展开访问 | ✗（不支持） | ✓（循环路径未命中的剩余 op 由顺序路径处理） |
 | 显式 `arith.addi` 步长模式 | 可能 SCEV 失败 | ✓（直接匹配 `arith.addi`） |
 
 ## 4. 算法设计
 
 ### 4.1 整体流程
 
+pass 的驱动分为两个阶段。两个阶段都通过 `PostUpdateTable`（static `StringMap<PostUpdateOpInfo>`，维护第 2 章的指令集合及其地址操作数布局）识别候选，并共享地址单位换算、`StrideExpr`、合法性检查和 post-update op 构造逻辑：
+
 ```
-VPTOSoftPostUpdate pass:
-  单次遍历 pto.vecscope 内所有指令，对每条指令查询
-  PostUpdateSet（static DenseSet<OperationName>，维护第 2 章中的指令集合）:
-    若命中:
-      若在 scf.for 内 → 循环路径（分析与物化两阶段）：
-        阶段一 · 纯符号分析（不产生任何 IR）：
-          1. 累加器分析 —— offset 或 base 是否为 iter_arg 且 yield 中有显式递增？
-          2. 若累加器分析未命中 → delta 分析 —— stride 是否为循环不变量？
-        阶段二 · 判定与物化：
-          3. 合法性检查（含类型一致性、操作数可用性）
-          4. 在唯一插入点物化 stride，然后改写
-          5. 若产生了新的 iter_arg，向外层循环传播
-      若不在 scf.for 内 → 顺序路径：
-        从当前指令起向后扫描，收集连续的同类型、同 base、等差常量偏移的序列，
-        一次性链式改写为 post-update，迭代器跳过已处理的指令
+阶段一 · 循环路径：候选 op 直接位于某个 scf.for 的循环体内，并且在每次迭代中更新。
+    以 ForOp 为单位批量处理（同循环内多 op 合并 iter_arg）：
+      · 纯符号分析：先做累加器分析，未命中再做 delta 分析。
+      · 判定与物化：完成合法性检查后，在唯一插入点物化 stride 并改写；
+        若产生新的 iter_arg，则向外层循环传播。
+
+阶段二 · 顺序路径：循环路径完成后，重新收集 vecscope 内的全部 block，
+    包括 scf.for body、vecscope 体和 scf.if 分支体。只扫描仍为非 Post-Update
+    形式的剩余 op；以 block 为单位分桶，桶内按程序序寻找互不重叠的
+    maximal arithmetic runs，并链式改写。
 ```
+
+循环路径按内层到外层处理全部 `scf.for`。由于循环改写会 erase 并重建 ForOp，顺序路径必须在全部循环改写结束后重新收集 block 和候选 op，不能跨阶段保存 `Block *` 或 `Operation *`。这样循环路径已改写的 op 会因已有 `updated_base` 被自然跳过；循环路径未命中，以及原本位于 `scf.if` 等嵌套区域中的 op，仍可在单次 block 执行范围内参与顺序路径。
 
 ### 4.2 循环路径
 
-循环路径对 base 和 strideOperand **各自独立**分析：每个操作数先试 **累加器分析**（优先），未命中再退到 **delta 分析**（兜底），两者的结果最后合并为 `total_delta`。前者处理该操作数已通过 `iter_args` 显式累加的场景（stride 可以是任意已计算的值），后者处理从 IV 全新计算、无累加器的场景（stride 须为循环不变量）。因此同一条指令的 base 走累加器、strideOperand 走 delta 是允许的组合。
+循环路径对 base 和 strideOperand **各自独立**分析：每个操作数先试 **累加器分析**（优先），未命中再退到 **delta 分析**（兜底），两者的结果最后按 4.2.1 的公式合并为 `stride_new`。前者处理该操作数已通过 `iter_args` 显式累加的场景（stride 可以是任意已计算的值），后者处理从 IV 全新计算、无累加器的场景（stride 须为循环不变量）。因此同一条指令的 base 走累加器、strideOperand 走 delta 是允许的组合。
 
 两类指令（vlds/vsts 与 vsstb/vsldb）的分析和改写通过统一的地址描述符抽象，共享同一套分析流程。
 
@@ -140,30 +140,42 @@ VPTOSoftPostUpdate pass:
 
 #### 4.2.1 地址描述符
 
-每个候选 op 的有效地址可表示为 `base + weight * strideOperand`：
+每个候选 op 由 `PostUpdateOpInfo` 描述：base 与 strideOperand 的操作数下标，以及 strideOperand 的**单位**。
 
 ```
-struct OpAddressDescriptor {
-  Value base;            // dest / source
-  Value strideOperand;   // offset（vlds/vsts）/ repeat_stride（vsstb/vsldb）
-  int64_t weight;        // 1（vlds/vsts）/ 32（vsstb/vsldb）
+enum class StrideUnit { Element, Block, Byte };
+struct PostUpdateOpInfo {
+  int baseOperandIdx;
+  int strideOperandIdx;
+  StrideUnit strideUnit;
+  unsigned minResultsForPost;
 };
 ```
 
-| 指令 | base | strideOperand | weight | 有效地址 |
-|------|------|---------------|--------|---------|
-| vlds/vsts | source/destination | offset (Index) | 1 | base + offset |
-| vsstb/vsldb | destination/source | repeat_stride (I16) | 32 | dest + 32*repeat_stride |
+`delta(base)` 与 `strideOperand` 的单位不同，合并前必须先统一到字节。引入两个字节量：
 
-分析和改写的核心公式基于此描述符统一表达：
+- **`elemBytes`** = base 指针一个 `pto.addptr` 单位的字节数（由 `addPtrUnitBytes(base)` 求得，即 lowering 规约后的 GEP 元素类型宽度；非字节对齐的低精度打包类型无法确定，直接放弃候选）。
+- **`unitBytes`** = strideOperand 一个单位的字节数（由 `strideUnitBytes(unit, elemBytes)` 求得）。单位取值来自该 op 的 lowering：
+
+| 指令 | base | strideOperand | strideUnit | unitBytes | 有效地址 |
+|------|------|---------------|-----------|-----------|---------|
+| vlds/vsts | source/destination | offset (Index) | Element | elemBytes | base + offset |
+| vsstb/vsldb | destination/source | repeat_stride (I16) | Block | 32 | dest + (32/elemBytes)·repeat_stride |
+| sprsts/sprsti（Step 4） | destination | offset (I32) | Byte | 1 | dest + offset/elemBytes |
+
+> 新增指令时判断单位的方法：看它在 `VPTOLLVMEmitter.cpp` 的 lowering pattern 里，strideOperand 是否过 `convertElementOffsetToBytes`（→ Element），是否经 `packBlockRepeatStride` 透传控制字（→ Block），还是原样透传且 ISA 文档标注为字节（→ Byte）。
+
+分析和改写的核心公式统一以字节表达：
 
 ```
-total_delta = delta(base) + weight * delta(strideOperand)
-stride_new  = total_delta / weight    // 填入 post-update 的 strideOperand 槽
-init_ptr    = base_0 + weight * strideOperand_0   // 通过 pto.addptr 创建
+Δbytes     = elemBytes·delta(base) + unitBytes·delta(strideOperand)
+stride_new = Δbytes / unitBytes = (elemBytes/unitBytes)·delta(base) + delta(strideOperand)
+init_ptr   = pto.addptr(base_0,  (unitBytes/elemBytes)·strideOperand_0)   // 偏移以元素计
 ```
 
-约束：`total_delta` 必须整除 `weight`（weight=1 时自动满足，weight=32 时要求 `delta(base) % 32 == 0`，因为 `weight * delta(strideOperand)` 天然整除 32）。
+展开后可见**只有 `delta(base)` 被缩放,`delta(strideOperand)` 恒等透传**——这保证了 stride 保持符号形式,循环变化的增量对所有指令类别都仍受支持;当 `elemBytes == unitBytes`(Element 类)缩放因子为 1,不发射任何 IR,vlds/vsts 的行为与未引入缩放前逐字相同。
+
+约束（由 4.2.5 检查 3 统一裁定）：`(elemBytes/unitBytes)·delta(base)` 须为精确的整数缩放。`unitBytes % elemBytes == 0` 时，将 `delta(base)` 规范化为“常量 + Σ(系数 × SSA 叶子)”，要求常量和每个系数都能被 `unitBytes/elemBytes` 整除；`elemBytes % unitBytes == 0` 时乘 `elemBytes/unitBytes` 恒精确；互不整除则放弃。`init_ptr` 的 `(unitBytes/elemBytes)·strideOperand_0` 对称：Block 类恒精确（elemBytes 整除 32），Byte 类要求 `elemBytes | strideOperand_0`。
 
 #### 4.2.2 分析与物化分离
 
@@ -176,7 +188,7 @@ StrideExpr := Const(int64)                  // 类型在物化时按上下文决
             | Cast(op, e)                   // index_cast/index_castui，op 为克隆模板
 ```
 
-`StrideExpr` 在构造时即做常量折叠（`foldConst`），因此 `total_delta` 是否为常量、是否整除 `weight`、是否恒为零，全部在符号层判定，判定不依赖任何已生成的 IR。
+`StrideExpr` 在构造时即做常量折叠（`foldConst`），因此 `delta(base)` 缩放是否精确、`stride_new` 是否恒为零，全部在符号层判定，判定不依赖任何已生成的 IR。
 
 该划分是正确性要求，而非代码组织风格。以下三条性质依赖于它：
 
@@ -186,7 +198,7 @@ StrideExpr := Const(int64)                  // 类型在物化时按上下文决
 
 2. **递归可 memoize。** 纯函数的结果只取决于入参，`decomposeLinear` 与 `computeDelta` 按 `Value` 缓存，共享子表达式只分解一次，分解代价与定义链 DAG 的规模成线性关系。
 
-3. **被拒候选不留残留。** 合法性检查全部先于物化完成，放弃某个候选时 IR 尚未被触碰。`weight` 缩放这类中间运算也只存在于符号层，不会以 op 的形式落地。
+3. **被拒候选不留残留。** 合法性检查全部先于物化完成，放弃某个候选时 IR 尚未被触碰。`elemBytes/unitBytes` 缩放这类中间运算也只存在于符号层，不会以 op 的形式落地。
 
 #### 4.2.3 累加器分析（优先）
 
@@ -222,13 +234,12 @@ baseIncr = getIterArgIncrement(desc.base, forOp)      // NotIterArg → 回退 d
 soIncr   = getIterArgIncrement(desc.strideOperand, forOp)
 
 任一为 Failed → 放弃该候选
-否则 → total_delta = delta(base) + weight * delta(strideOperand)   // 符号相加
-        stride_new = total_delta / weight
+否则 → stride_new = (elemBytes/unitBytes)·delta(base) + delta(strideOperand)   // 见 4.2.1，符号相加
 ```
 
 不要求 stride 是常量或循环不变量；增量也不要求定义在候选 op 之前——不满足时由 4.2.5 的可用性检查决定克隆或放弃。
 
-**示例（vlds，weight=1）：**
+**示例（vlds，Element 类，elemBytes == unitBytes）：**
 
 ```mlir
 %base = pto.castptr %c0_i64 : i64 -> !pto.ptr<f32, ub>
@@ -240,7 +251,7 @@ scf.for %iv = %c0 to %c16 step %c1
   scf.yield %next_off
 }
 ```
-`baseIncr` = `NotIterArg`（回退 delta，得 `Const(0)`），`soIncr` = `{Ok, Leaf(%s)}`。`total_delta = Leaf(%s)`，`stride_new = %s / 1 = %s`。
+`baseIncr` = `NotIterArg`（回退 delta，得 `Const(0)`），`soIncr` = `{Ok, Leaf(%s)}`。elemBytes == unitBytes，`stride_new = (elemBytes/unitBytes)·0 + %s = %s`。
 
 注意 `%s` 在本例中定义于 `pto.vlds` 之前，但这不是前提：若 `%s` 定义在 `pto.vlds` 之后，4.2.5 会把它的定义链克隆到候选 op 之前，结果不变。
 
@@ -261,11 +272,10 @@ scf.for %iv = %c0 to %c16 step %c1
 | 其他 | `unknown`（放弃） |
 
 ```
-total_delta = delta(base) + weight * delta(strideOperand)
-stride_new  = total_delta / weight
+stride_new = (elemBytes/unitBytes)·delta(base) + delta(strideOperand)   // 见 4.2.1
 ```
 
-`stride_new` 须为循环不变量，`total_delta` 须整除 `weight`。
+`stride_new` 须为循环不变量，`(elemBytes/unitBytes)·delta(base)` 须为精确整数缩放（见 4.2.1 约束）。
 
 **正确性：** delta 表中的操作构成仿射函数的封闭运算集合。定义链仅由这些操作构成时，delta 计算不会遗漏。遇到表外操作时保守放弃。
 
@@ -279,9 +289,9 @@ delta 分析同样是纯符号的：表中每一行返回 `StrideExpr`，结果�
 
 2. **op 直接位于 `scf.for` 循环体内**（不嵌套在循环内的 `scf.if` 或其他控制流中），避免部分迭代问题。
 
-3. **`total_delta` 整除 `weight`。** weight=1 时自动满足。weight≠1 时，**当前实现要求整个 `total_delta` 是编译期常量**且整除 weight，不满足即放弃。
+3. **`(elemBytes/unitBytes)·delta(base)` 为精确整数缩放。** Element 类（elemBytes == unitBytes）自动满足；Block 类（`unitBytes % elemBytes == 0`，如 unitBytes=32）要求规范化 `delta(base)` 的常量项和每个 SSA 叶子系数都能被 `unitBytes/elemBytes` 整除；Byte 类（`elemBytes % unitBytes == 0`）乘 `elemBytes/unitBytes` 恒精确；互不整除则放弃。
 
-   这比理论下限保守。由于 `weight * delta(strideOperand)` 天然整除 weight，整除性其实只取决于 `delta(base)`——原则上 `delta(strideOperand)` 可以是任意符号表达式，只要 `delta(base)` 是能被 weight 整除的常量即可。放宽需要给 `StrideExpr` 增加结构化的整除判定（识别 `Mul(e, Const(k))` 一类形式），暂未实现；此处记录该取舍，以免文档与实现口径不一致。
+   关键在于**只有 `delta(base)` 参与缩放**：`delta(strideOperand)` 恒等透传、不要求整除也不要求是常量，因此循环变化的 strideOperand 增量对各类指令都受支持（如 vsstb 的 `repeat_stride` 为非常量 iter_arg 累加）。仿射规范化使 `8*k` 这类非常量 base delta 也能证明可被 8 精确缩放。
 
 4. **stride_new 为零时跳过。** 地址不前进，post-update 无收益。常量折叠使各项相消、合成结果恒为零的情形（如 base 每轮 +8、strideOperand 每轮 −8）同样能被识别。
 
@@ -297,7 +307,7 @@ delta 分析同样是纯符号的：表中每一行返回 `StrideExpr`，结果�
 
 1. **物化 stride。** 叶子全部循环不变时发射到循环外，否则发射到候选 op 之前。常量按 `(值, 类型)` 在同一循环内复用同一个 SSA 值——4.2.7 的分组按 `(base, stride_new)` 的 **Value 同一性** 判定，重复创建等值常量会把本可共享 `iter_arg` 的 op 拆成多组。
 
-2. 计算初始指针 `init_ptr = base_0 + weight * strideOperand_0`（通过 `pto.addptr`；若值为零则直接用 `base_0`）。
+2. 计算初始指针 `init_ptr = pto.addptr(base_0, (unitBytes/elemBytes)·strideOperand_0)`（见 4.2.1；若偏移为零则直接用 `base_0`）。
 3. 新增指针类型的 `iter_arg`，初始值为 `init_ptr`。
 4. 创建 Post-Update op：将 `strideOperand` 替换为 `stride_new`，base 替换为 iter_arg 的 block argument。其余操作数（block_stride、mask、dist 等）不变。
 5. 将 `updated_base` 通过 `scf.yield` 传出。
@@ -308,11 +318,11 @@ delta 分析同样是纯符号的：表中每一行返回 `StrideExpr`，结果�
 非 Post-Update：`dest + 32*repeat_stride + blk*32*block_stride`
 Post-Update：`dest_p + blk*32*block_stride`（repeat_stride 不参与存储地址），返回 `dest_p + 32*repeat_stride_p`
 
-Post-Update 模式下 `repeat_stride` 从地址偏移变为指针前进量，因此初始指针需吸收原始偏移 `32*rs_0`。
+Post-Update 模式下 `repeat_stride` 从地址偏移变为指针前进量，因此初始指针需吸收原始偏移 `32*rs_0` 字节，即 `pto.addptr` 偏移 `(32/elemBytes)*rs_0` 个元素（见 4.2.1）。
 
 #### 4.2.7 同一循环中的多个 Op
 
-两个 op 能共享同一个 `iter_arg`，当且仅当它们走**同一条地址序列**——起点 `init_ptr = base_0 + weight * strideOperand_0` 相同，且步长 `stride_new` 相同。
+两个 op 能共享同一个 `iter_arg`，当且仅当它们走**同一条地址序列**——起点 `init_ptr`（由 `base_0` 与 `strideOperand_0` 决定，见 4.2.1）相同，且步长 `stride_new` 相同。
 
 理想的分组键是 `(init_ptr, stride_new)`。但 `init_ptr` 不适合直接入键：分组按 **Value 同一性** 比较，而 `computeInitialPtr` 可能为每个候选各自物化一个 `pto.addptr`，起点数值相同也未必是同一个 SSA 值。因此改用决定 `init_ptr` 的**原始操作数**：分组键取 `(base, strideOperand, stride_new)`。操作数相同必然起点相同，这是一个充分条件——可能把本可合并的组拆开，但绝不会合并本应分开的组。
 
@@ -326,37 +336,89 @@ Post-Update 模式下 `repeat_stride` 从地址偏移变为指针前进量，因
 
 ### 4.3 顺序路径
 
-处理前端已展开循环（或非循环场景）中连续排列的同类访存指令。
+顺序路径处理同一 block 单次执行中的等步长访问，包括非循环代码，以及 `scf.for` body 中循环路径未命中的剩余 op。步长只需在本次 block 执行期间保持不变，可以是编译期常量，也可以是由 block argument、循环 IV、iter_arg 或其他已存在 SSA 值组成的仿射表达式。
 
-#### 4.3.1 序列检测
+顺序路径复用循环路径的 `StrideExpr`、`scaleBaseDelta` / `combineStride`、类型与可用性检查、pure 定义链克隆、初始指针计算和 post-update op 构造。新增逻辑仅包括 base 归一化、仿射表达式规范化以及 block 内 run 检测。
 
-同样使用地址描述符。遍历过程中命中一条不在 `scf.for` 内的候选 op 时，提取其描述符，然后向后扫描同一 block 内的后续指令，收集满足以下条件的最长序列：
+#### 4.3.1 有效地址分析
 
-- 同一 op 类型
-- 同一 base 操作数
-- 相邻 op 的有效地址 `base_i + weight * strideOperand_i` 构成等差数列
-- 等差公差整除 `weight`
+为比较 base 不同的候选，先沿 `pto.addptr` 链把每个 base 归一为：
 
-```mlir
-// vlds 示例（weight=1）：offset 构成等差
-%v0 = pto.vlds %base[%c0] : ...     // 有效地址 = base + 0
-%v1 = pto.vlds %base[%c64] : ...    // 有效地址 = base + 64
-%v2 = pto.vlds %base[%c128] : ...   // 有效地址 = base + 128
-// 公差 = 64，stride_new = 64 / 1 = 64
+```
+base_i = pto.addptr(rootBase, baseOffset_i)   // baseOffset_i 以元素计
 ```
 
-序列长度至少为 2 才值得变换。
+若 base 不是 `pto.addptr` 的结果，则 `rootBase = base`、`baseOffset = 0`。`baseOffset` 和 strideOperand 沿与循环路径相同的 `arith.addi`、`arith.subi`、常量乘法和 index cast 规则构造成 `StrideExpr`；无法继续分解的 SSA 值作为叶子保留。
 
-#### 4.3.2 合法性检查
+对同一 op 类型、同一 `rootBase` 的相邻候选 `i-1` 和 `i`，定义：
 
-1. **op 尚未处于 Post-Update 形式。**
-2. **公差整除 `weight`。**
-3. **stride_new 为编译期常量。**
-4. **序列中相邻指令之间无对同一 base 的别名写入。** 若序列中间插入了对 base 指向内存的写操作，序列在该处截断。
+```
+deltaBase   = baseOffset_i - baseOffset_(i-1)       // 元素
+deltaStride = strideOperand_i - strideOperand_(i-1) // strideOperand 单位
 
-#### 4.3.3 改写
+step = combineStride(deltaBase, deltaStride, elemBytes, unitBytes)
+     = (elemBytes/unitBytes)·deltaBase + deltaStride
+```
 
-计算 `init_ptr = base_0 + weight * strideOperand_0`（首条 op 的有效地址），`stride_new = 公差 / weight`。将序列中的每条 op 替换为 post-update 形式，前一条的 `updated_base` 作为后一条的 base，strideOperand 替换为 `stride_new`：
+`step` 始终以该 op 的 strideOperand 单位表示。单位换算和精确缩放直接复用 4.2.1 与 4.2.5 的规则，不能证明精确换算时放弃该相邻关系。
+
+为比较两个非常量 `step` 是否相同，将 `StrideExpr` 按加减、常量乘法进行展平和常量折叠，得到规范化仿射形式“常量 + Σ(系数 × SSA 叶子)”。相同叶子按 Value 同一性合并，系数为零的项删除。两个 step 的规范化形式完全相同，才视为固定公差；不支持的非仿射运算保守地作为叶子，仅在复用同一 SSA 值时才能匹配。
+
+该分析可识别 base 与 offset 相互补偿的模式。例如 Element 类指令的三个候选满足：
+
+```
+baseOffset:  x,      x + 16, x + 32
+offset:     -x,     48 - x, 96 - x
+有效偏移:    0,          64,      128
+```
+
+虽然 base 和 offset 都不是常量，但相邻地址的规范化 `step` 恒为 64。
+
+#### 4.3.2 分桶与 maximal runs
+
+在一个 block 内，将仍未改写的候选按 `(op 类型, rootBase)` 放入有序桶。不同桶的 op 可以在物理程序序中任意交错；每个桶只保留本桶候选的原始程序序。
+
+每个桶使用一次确定性的线性扫描，产生互不重叠的 maximal arithmetic runs：
+
+1. 以当前候选作为 run 起点，下一候选与它形成第一个非零、合法的 `step`。
+2. 后续候选与前一候选的 `step` 若和当前 run 的规范化 step 相同，则加入 run。
+3. 若 step 不同或无法分析，则当前 run 立即结束；破坏公差的候选作为下一个 run 的起点。
+4. 尚未形成合法 step 的两个候选若无法配对，丢弃前一个，以后一个重新尝试。
+5. run 长度达到 2 时即可确定 `step`，但长度至少为 3 才改写。已经归入已完成 run 的候选不再参与后续 run，因此不存在重叠、回溯或最长子序列冲突。
+
+该规则不追求全局最多命中，而是保证结果简单、线性、确定且符合程序序。
+
+```mlir
+// vlds 桶：中间可以穿插其他桶的 op
+%v0 = pto.vlds %base0[%off0] : ...  // 本桶地址 0
+pto.vsts %x, %other[%c0], %mask : ...
+%v1 = pto.vlds %base1[%off1] : ...  // 本桶地址 64
+%v2 = pto.vlds %base2[%off2] : ...  // 本桶地址 128
+// 本桶形成一个 step = 64 的 maximal run
+```
+
+> **与循环路径的关键区别（链式 vs 共享）。** 循环路径同组 op 共享一个 `iter_arg`、全用 pre-update 指针、**不**链式传递（4.2.7，同迭代内同地址）。顺序路径相反，**必须**链式传递（前一条的 `updated_base` 喂后一条，见 4.3.4）。因此两条交错的序列（vlds 链 + vsts 链）是两条**独立**的链，各自穿针，不能合并；按 `(op 类型, rootBase)` 分桶使每条链自然独立。
+
+#### 4.3.3 合法性检查
+
+1. **op 尚未处于 Post-Update 形式。** 循环路径已经改写的 op 自动排除。
+2. **地址可归一到同一 rootBase。** 只穿过 `pto.addptr`；其他指针变换不猜测别名关系。
+3. **step 可精确换算且非零。** 复用 4.2.5 的单位、常量折叠和目标类型可表示性检查。
+4. **step 在 run 头可用。** 复用 4.2.5 的叶子可用性检查；定义在 run 头之后的 pure 仿射定义链可克隆到 run 头之前，含副作用或无法支配的定义使该 run 放弃。
+5. **整条 run 先分析、后物化。** 所有候选通过检查后才创建常量、`pto.addptr` 或新 op，拒绝 run 不留下残余 IR。
+
+顺序路径不重排 op，也不改变访问地址和访问顺序，因此不同候选之间的内存读写不会截断 run，无需额外别名分析。
+
+#### 4.3.4 改写
+
+对每个 run，`stride_new` 就是 4.3.1 得到的规范化 `step`。初始指针直接从 run 首条 op 的实际操作数计算：
+
+```
+init_ptr = pto.addptr(first.base,
+                      (unitBytes/elemBytes)·first.strideOperand)
+```
+
+这里复用循环路径的精确单位换算；不需要从 `rootBase` 重新构造绝对地址。将 run 中每条 op 替换为 post-update 形式，前一条的 `updated_base` 作为后一条的 base，strideOperand 替换为 `stride_new`：
 
 ```mlir
 // vlds 变换后
@@ -365,7 +427,7 @@ Post-Update 模式下 `repeat_stride` 从地址偏移变为指针前进量，因
 %v2, %ptr3 = pto.vlds %ptr2[%c64] : ... -> ..., !pto.ptr<f32, ub>
 ```
 
-改写完成后，迭代器跳过已处理的指令。
+所有 run 在只读分析阶段确定后，先物化各自的 `stride_new` 和 `init_ptr`，再按原程序序替换候选 op，避免 erase op 使其他 run 保存的表达式失效。不同桶各自维护独立指针链，即使其 op 在原 block 中交错也互不影响。
 
 ## 5. Pass 集成
 
@@ -378,8 +440,6 @@ VPTOExpandWrapperOps
 CSE
 PTOInferVPTOVecScope
 → VPTOSoftPostUpdate（新增）        ← 在此处
-Canonicalizer
-CSE
 ...
 PrepareVPTOLLVMLoweringPass
 LowerVPTOOpsPass
@@ -428,18 +488,22 @@ def VPTOSoftPostUpdate : Pass<"vpto-soft-postupdate", "ModuleOp"> {
 
 ### Step 3：顺序路径
 
-16. 实现顺序路径的序列检测（4.3.1）和合法性检查（4.3.2）。
-17. 实现链式改写（4.3.3）和迭代器跳过逻辑。
-18. 添加顺序路径的 lit 测试。
+16. 抽取循环与顺序路径共享的 helper：精确 elemBytes/unitBytes 换算、`combineStride`、初始指针计算和 post-update op 泛型构造。
+17. 实现 base 归一化：沿 `pto.addptr` 得到 `(rootBase, baseOffset)`；复用 `StrideExpr` 构造规则，并增加仿射规范化、相等比较和按系数精确缩放，使两条路径都支持 `8*k` 一类可证明整除的非常量表达式。
+18. 调整驱动为两阶段：先内到外完成全部循环路径，再重新收集所有 block（包括 `scf.for` body）和剩余非 Post-Update op。
+19. 实现有序分桶与线性 maximal-run 检测：按 `(op 类型, rootBase)` 分桶，允许不同桶物理交错，run 互不重叠且不回溯。
+20. 复用循环路径的类型、精确换算、可用性和 pure 克隆检查，在整条 run 通过后物化 step 并链式改写。
+21. 更新 `Passes.td` 中 pass 描述，使其同时覆盖循环递推和 block 内顺序访问。
+22. 添加 `test/lit/vpto` 回归测试：固定 base 常量序列、变化 base 与 offset 抵消、非常量仿射 step、Block 类 `8*k` 精确缩放、for-body 循环路径未命中后转顺序路径、不同桶交错、多 maximal runs、公差破坏、零步长及无法精确换算的负向用例。
 
 ### Step 4：扩展指令覆盖
 
-19. 为 2.2 中的指令（`vldsx2`、`vsldb`、`plds`、`pldi` 等）添加 ODS `updated_base` 定义。
-20. 扩展 PostUpdateSet，使 pass 覆盖新指令。
-21. 补充对应的 LLVM lowering（post intrinsic callee）和 lit 测试。
+23. 为 2.2 中的指令（`vldsx2`、`vsldb`、`plds`、`pldi` 等）添加 ODS `updated_base` 定义。
+24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`（Element / Block / Byte）。
+25. 补充对应的 LLVM lowering（post intrinsic callee）和 lit 测试。
 
 ### Step 5：验证与开启
 
-22. 端到端验证：用 ptoas 编译，与 bisheng Post-Update 输出对比已知 kernel。
-23. NPU 验证：在硬件上运行 Post-Update kernel（通过现有 `test/vpto/cases/micro-op/vector-load-store/` 框架）。
-24. 将默认值切换为开启。
+26. 端到端验证：用 ptoas 编译，与 bisheng Post-Update 输出对比已知 kernel。
+27. NPU 验证：在硬件上运行 Post-Update kernel（通过现有 `test/vpto/cases/micro-op/vector-load-store/` 框架）。
+28. 将默认值切换为开启。

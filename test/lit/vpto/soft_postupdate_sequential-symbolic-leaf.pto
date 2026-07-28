@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-backend=vpto --pto-arch=a5 --enable-vpto-soft-postupdate --emit-vpto %s -o - | FileCheck %s
+
+// select is outside the supported affine grammar, but reusing the same SSA
+// value makes it a stable symbolic leaf. Because it is defined after the run
+// head, its pure definition is cloned before the first access.
+// CHECK-LABEL: func.func @late_pure_symbolic_leaf
+// CHECK: pto.vecscope
+// CHECK: [[STEP:%[a-zA-Z0-9_]+]] = arith.select
+// CHECK: %{{.*}}, [[L1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[[[STEP]]]
+// CHECK: %{{.*}}, [[L2:%[a-zA-Z0-9_]+]] = pto.vlds [[L1]][[[STEP]]]
+// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[L2]][[[STEP]]]
+
+// Distinct opaque SSA leaves are not assumed equal, so the candidate sequence
+// is conservatively left in non-post-update form.
+// CHECK-LABEL: func.func @distinct_symbolic_leaves
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[%c0]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[{{%.*}}]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[{{%.*}}]
+
+// A potentially trapping definition cannot be moved before the run head. The
+// run is rejected and no partial materialization is left behind.
+// CHECK-LABEL: func.func @late_non_speculatable_leaf
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[%c0]
+// CHECK: arith.divui
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[{{%.*}}]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[{{%.*}}]
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @late_pure_symbolic_leaf(%src: !pto.ptr<f32, ub>, %sink: !pto.ptr<f32, ub>, %cond: i1, %lhs: index, %rhs: index) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %v0 = pto.vlds %src[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v0, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %step = arith.select %cond, %lhs, %rhs : index
+      %v1 = pto.vlds %src[%step] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v1, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %step2 = arith.addi %step, %step : index
+      %v2 = pto.vlds %src[%step2] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v2, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  func.func @distinct_symbolic_leaves(%src: !pto.ptr<f32, ub>, %sink: !pto.ptr<f32, ub>, %numerator: index, %denom0: index, %denom1: index) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %step0 = arith.divui %numerator, %denom0 : index
+    %step1 = arith.divui %numerator, %denom1 : index
+    %sum = arith.addi %step0, %step1 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %v0 = pto.vlds %src[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v0, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %v1 = pto.vlds %src[%step0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v1, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %v2 = pto.vlds %src[%sum] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v2, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  func.func @late_non_speculatable_leaf(%src: !pto.ptr<f32, ub>, %sink: !pto.ptr<f32, ub>, %numerator: index, %denominator: index) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %v0 = pto.vlds %src[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v0, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %step = arith.divui %numerator, %denominator : index
+      %v1 = pto.vlds %src[%step] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v1, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %step2 = arith.addi %step, %step : index
+      %v2 = pto.vlds %src[%step2] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %v2, %sink[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+}
