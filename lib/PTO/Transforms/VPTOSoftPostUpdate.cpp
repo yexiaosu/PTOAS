@@ -1610,12 +1610,16 @@ static void processSequentialBlock(Block *block, DominanceInfo &dominance,
       run.stepForm = firstStep->form;
       for (size_t i = start; i < end; ++i)
         run.candidates.push_back(&candidates[i]);
-      if (validateSequentialRun(run, dominance))
+      if (validateSequentialRun(run, dominance)) {
         runs.push_back(std::move(run));
-
-      // Runs are deliberately non-overlapping. The candidate that broke the
-      // current stride becomes the start of the next run.
-      start = end;
+        // Accepted runs are deliberately non-overlapping. The candidate that
+        // broke the current stride becomes the start of the next run.
+        start = end;
+      } else {
+        // Reuse the rejected run's last candidate as the next head so it can
+        // form a new run with the candidate that broke the current stride.
+        start = end - 1;
+      }
     }
   }
 

@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-本文档设计一个新的 PTOAS pass——`VPTOSoftPostUpdate`，在 **MLIR 层**（LLVM lowering 之前）将非 Post-Update 形式的 VPTO 访存操作转换为 Post-Update 形式。首期目标指令为已支持 `updated_base` 的三个 op（`pto.vlds`、`pto.vsts`、`pto.vsstb`），后续扩展至更多访存指令（见第 2 节指令全景）。pass 覆盖两种场景：`scf.for` 循环间的固定步长访存模式（循环路径），以及同一 block 单次执行中的等步长访存 run（顺序路径）。
+本文档设计一个新的 PTOAS pass——`VPTOSoftPostUpdate`，在 **MLIR 层**（LLVM lowering 之前）将非 Post-Update 形式的 VPTO 访存操作转换为 Post-Update 形式。首期目标指令为已支持 `updated_base` 的三个 op（`pto.vlds`、`pto.vsts`、`pto.vsstb`），后续扩展至更多访存指令（见第 2 节指令全景）。pass 覆盖两种场景：`scf.for` 循环间的固定步长访存模式（循环路径），以及同一 block 单次执行中的 `SequentialRun`（顺序路径）。`SequentialRun` 指同一候选桶中按程序序连续、相邻候选的有效地址差均为同一个非零 `step` 的候选序列。
 
 循环路径示例：
 
@@ -125,7 +125,7 @@ pass 的驱动分为两个阶段。两个阶段都通过 `PostUpdateTable`（sta
 阶段二 · 顺序路径：循环路径完成后，重新收集 vecscope 内的全部 block，
     包括 scf.for body、vecscope 体和 scf.if 分支体。只扫描仍为非 Post-Update
     形式的剩余 op；以 block 为单位分桶，桶内按程序序寻找互不重叠的
-    maximal arithmetic runs，并链式改写。
+    最大 `SequentialRun`，并链式改写。
 ```
 
 循环路径按内层到外层处理全部 `scf.for`。由于循环改写会 erase 并重建 ForOp，顺序路径必须在全部循环改写结束后重新收集 block 和候选 op，不能跨阶段保存 `Block *` 或 `Operation *`。这样循环路径已改写的 op 会因已有 `updated_base` 被自然跳过；循环路径未命中，以及原本位于 `scf.if` 等嵌套区域中的 op，仍可在单次 block 执行范围内参与顺序路径。
@@ -336,9 +336,9 @@ Post-Update 模式下 `repeat_stride` 从地址偏移变为指针前进量，因
 
 ### 4.3 顺序路径
 
-顺序路径处理同一 block 单次执行中的等步长访问，包括非循环代码，以及 `scf.for` body 中循环路径未命中的剩余 op。步长只需在本次 block 执行期间保持不变，可以是编译期常量，也可以是由 block argument、循环 IV、iter_arg 或其他已存在 SSA 值组成的仿射表达式。
+顺序路径处理同一 block 单次执行中的等步长访问，包括非循环代码以及 `scf.for` body 中循环路径未命中的剩余 op。本节将同一 `(op 类型, rootBase)` 候选桶中按程序序连续、相邻候选的有效地址差均为同一个非零 `step` 的候选序列称为 `SequentialRun`。步长只需在本次 block 执行期间保持不变，可以是编译期常量，也可以是符号表达式。
 
-顺序路径复用循环路径的 `StrideExpr`、`scaleBaseDelta` / `combineStride`、类型与可用性检查、pure 定义链克隆、初始指针计算和 post-update op 构造。新增逻辑仅包括 base 归一化、仿射表达式规范化以及 block 内 run 检测。
+顺序路径复用循环路径的 `StrideExpr`、`scaleBaseDelta` / `combineStride`、类型与可用性检查、pure 定义链克隆、初始指针计算和 post-update op 构造。新增逻辑仅包括 base 归一化、以 SSA leaves 为变量的仿射规范化以及 block 内 `SequentialRun` 检测。
 
 #### 4.3.1 有效地址分析
 
@@ -348,7 +348,26 @@ Post-Update 模式下 `repeat_stride` 从地址偏移变为指针前进量，因
 base_i = pto.addptr(rootBase, baseOffset_i)   // baseOffset_i 以元素计
 ```
 
-若 base 不是 `pto.addptr` 的结果，则 `rootBase = base`、`baseOffset = 0`。`baseOffset` 和 strideOperand 沿与循环路径相同的 `arith.addi`、`arith.subi`、常量乘法和 index cast 规则构造成 `StrideExpr`；无法继续分解的 SSA 值作为叶子保留。
+- 若 base 不是 `pto.addptr` 的结果，则 `rootBase = base`、`baseOffset = 0`。
+- 若 base 来自 `pto.addptr`，则从它开始反向剥离连续的 `pto.addptr` 链：每经过一层就把该层 offset 累加到 `baseOffset`，并把该层输入指针作为新的待检查 root；直到 root 不再由 `pto.addptr` 定义，或下一层 `pto.addptr` 的元素单位与当前 base 不同。停止时的指针即 `rootBase`。因此只归一化元素单位一致的链，不跨越单位变化猜测换算关系。
+
+例如：
+
+```mlir
+%root = arith.select %cond, %lhs, %rhs : !pto.ptr<f32, ub>
+%p1 = pto.addptr %root, %a
+%p2 = pto.addptr %p1, %b
+%v = pto.vlds %p2[%c] : ...
+```
+
+在三者元素单位一致时归一化为：
+
+```
+rootBase   = %root
+baseOffset = %a + %b
+```
+
+随后将 `baseOffset` 与指令自身的 `%c` （strideOperand）一起用于有效地址 step 分析。`baseOffset` 和 strideOperand 沿与循环路径相同的 `arith.addi`、`arith.subi`、常量乘法和 index cast 规则构造成 `StrideExpr`；无法继续分解的 SSA 值作为叶子保留。
 
 对同一 op 类型、同一 `rootBase` 的相邻候选 `i-1` 和 `i`，定义：
 
@@ -362,7 +381,16 @@ step = combineStride(deltaBase, deltaStride, elemBytes, unitBytes)
 
 `step` 始终以该 op 的 strideOperand 单位表示。单位换算和精确缩放直接复用 4.2.1 与 4.2.5 的规则，不能证明精确换算时放弃该相邻关系。
 
-为比较两个非常量 `step` 是否相同，将 `StrideExpr` 按加减、常量乘法进行展平和常量折叠，得到规范化仿射形式“常量 + Σ(系数 × SSA 叶子)”。相同叶子按 Value 同一性合并，系数为零的项删除。两个 step 的规范化形式完全相同，才视为固定公差；不支持的非仿射运算保守地作为叶子，仅在复用同一 SSA 值时才能匹配。
+为比较两个非常量 `step` 是否相同，将 `StrideExpr` 按加减、常量乘法进行展平和常量折叠，得到规范化仿射形式“常量 + Σ(系数 × SSA 叶子)”。这里的“仿射”是相对于 SSA 叶子而言，并不要求叶子本身是原始输入的仿射函数。相同叶子按 Value 同一性合并，系数为零的项删除。两个 step 的规范化形式完全相同，才视为固定公差；不支持的非仿射运算保守地作为叶子，仅在复用同一 SSA 值时才能匹配。两个独立计算但语义上可能相等的非仿射结果是不同 Value，pass 不尝试证明它们等价。
+
+例如 `%s` 由 `arith.select` 产生，虽然该运算不属于上述仿射语法，但下面三个 offset 的相邻 step 都可规范化为同一个 opaque leaf `%s`，因此仍能形成 `SequentialRun`：
+
+```mlir
+%s = arith.select %cond, %lhs, %rhs : index
+// offset: 0, %s, %s + %s
+```
+
+若相邻 step 分别依赖两个独立的非仿射结果 `%s0` 与 `%s1`，即使两者运行时可能相等，也不会匹配，除非此前的规范化或 CSE 已使它们成为同一个 SSA Value。
 
 该分析可识别 base 与 offset 相互补偿的模式。例如 Element 类指令的三个候选满足：
 
@@ -374,17 +402,20 @@ offset:     -x,     48 - x, 96 - x
 
 虽然 base 和 offset 都不是常量，但相邻地址的规范化 `step` 恒为 64。
 
-#### 4.3.2 分桶与 maximal runs
+#### 4.3.2 分桶与 `SequentialRun`
 
 在一个 block 内，将仍未改写的候选按 `(op 类型, rootBase)` 放入有序桶。不同桶的 op 可以在物理程序序中任意交错；每个桶只保留本桶候选的原始程序序。
 
-每个桶使用一次确定性的线性扫描，产生互不重叠的 maximal arithmetic runs：
+`SequentialRun` 对应代码中的同名结构。无法再向后加入同 `step` 候选的 `SequentialRun` 称为最大 `SequentialRun`。
 
-1. 以当前候选作为 run 起点，下一候选与它形成第一个非零、合法的 `step`。
-2. 后续候选与前一候选的 `step` 若和当前 run 的规范化 step 相同，则加入 run。
-3. 若 step 不同或无法分析，则当前 run 立即结束；破坏公差的候选作为下一个 run 的起点。
+每个桶使用一次确定性的线性扫描，产生互不重叠的最大 `SequentialRun`：
+
+1. 以当前候选作为 `SequentialRun` 起点，下一候选与它形成第一个非零、合法的 `step`。
+2. 后续候选与前一候选的 `step` 若和当前 `SequentialRun` 的规范化 step 相同，则加入该 `SequentialRun`。
+3. 若 step 不同或无法分析，则当前候选 `SequentialRun` 立即结束；破坏公差的候选不加入该 `SequentialRun`。
 4. 尚未形成合法 step 的两个候选若无法配对，丢弃前一个，以后一个重新尝试。
-5. run 长度达到 2 时即可确定 `step`，但长度至少为 3 才改写。已经归入已完成 run 的候选不再参与后续 run，因此不存在重叠、回溯或最长子序列冲突。
+5. `SequentialRun` 长度达到 2 时即可确定 `step`，但长度至少为 3 且通过 4.3.3 的合法性检查才接受并改写。接受后，破坏公差的候选作为下一个 `SequentialRun` 的起点；拒绝后，从该候选 `SequentialRun` 的最后一个候选（`end - 1`）重新尝试，使其可与破坏公差的候选组成新 `SequentialRun`。
+6. 只有已接受 `SequentialRun` 的候选会被消费，且不再参与后续 `SequentialRun`，因此最终接受的 `SequentialRun` 互不重叠。被拒 `SequentialRun` 最多复用一个尾候选，不进行内部回溯或最长子序列搜索。
 
 该规则不追求全局最多命中，而是保证结果简单、线性、确定且符合程序序。
 
@@ -394,7 +425,7 @@ offset:     -x,     48 - x, 96 - x
 pto.vsts %x, %other[%c0], %mask : ...
 %v1 = pto.vlds %base1[%off1] : ...  // 本桶地址 64
 %v2 = pto.vlds %base2[%off2] : ...  // 本桶地址 128
-// 本桶形成一个 step = 64 的 maximal run
+// 本桶形成一个 step = 64 的最大 SequentialRun
 ```
 
 > **与循环路径的关键区别（链式 vs 共享）。** 循环路径同组 op 共享一个 `iter_arg`、全用 pre-update 指针、**不**链式传递（4.2.7，同迭代内同地址）。顺序路径相反，**必须**链式传递（前一条的 `updated_base` 喂后一条，见 4.3.4）。因此两条交错的序列（vlds 链 + vsts 链）是两条**独立**的链，各自穿针，不能合并；按 `(op 类型, rootBase)` 分桶使每条链自然独立。
@@ -404,21 +435,21 @@ pto.vsts %x, %other[%c0], %mask : ...
 1. **op 尚未处于 Post-Update 形式。** 循环路径已经改写的 op 自动排除。
 2. **地址可归一到同一 rootBase。** 只穿过 `pto.addptr`；其他指针变换不猜测别名关系。
 3. **step 可精确换算且非零。** 复用 4.2.5 的单位、常量折叠和目标类型可表示性检查。
-4. **step 在 run 头可用。** 复用 4.2.5 的叶子可用性检查；定义在 run 头之后的 pure 仿射定义链可克隆到 run 头之前，含副作用或无法支配的定义使该 run 放弃。
-5. **整条 run 先分析、后物化。** 所有候选通过检查后才创建常量、`pto.addptr` 或新 op，拒绝 run 不留下残余 IR。
+4. **step 在 `SequentialRun` 头部可用。** 复用 4.2.5 的叶子可用性检查；定义在 `SequentialRun` 头部之后的 pure 定义链（包括产生 opaque leaf 的非仿射运算）可克隆到头部之前，含副作用、不可安全提前或无法支配的定义使该 `SequentialRun` 放弃。
+5. **整条 `SequentialRun` 先分析、后物化。** 所有候选通过检查后才创建常量、`pto.addptr` 或新 op，拒绝 `SequentialRun` 不留下残余 IR。
 
-顺序路径不重排 op，也不改变访问地址和访问顺序，因此不同候选之间的内存读写不会截断 run，无需额外别名分析。
+顺序路径不重排 op，也不改变访问地址和访问顺序，因此不同候选之间的内存读写不会截断 `SequentialRun`，无需额外别名分析。
 
 #### 4.3.4 改写
 
-对每个 run，`stride_new` 就是 4.3.1 得到的规范化 `step`。初始指针直接从 run 首条 op 的实际操作数计算：
+对每个 `SequentialRun`，`stride_new` 就是 4.3.1 得到的规范化 `step`。初始指针直接从 `SequentialRun` 首条 op 的实际操作数计算：
 
 ```
 init_ptr = pto.addptr(first.base,
                       (unitBytes/elemBytes)·first.strideOperand)
 ```
 
-这里复用循环路径的精确单位换算；不需要从 `rootBase` 重新构造绝对地址。将 run 中每条 op 替换为 post-update 形式，前一条的 `updated_base` 作为后一条的 base，strideOperand 替换为 `stride_new`：
+这里复用循环路径的精确单位换算；不需要从 `rootBase` 重新构造绝对地址。将 `SequentialRun` 中每条 op 替换为 post-update 形式，前一条的 `updated_base` 作为后一条的 base，strideOperand 替换为 `stride_new`：
 
 ```mlir
 // vlds 变换后
@@ -427,7 +458,7 @@ init_ptr = pto.addptr(first.base,
 %v2, %ptr3 = pto.vlds %ptr2[%c64] : ... -> ..., !pto.ptr<f32, ub>
 ```
 
-所有 run 在只读分析阶段确定后，先物化各自的 `stride_new` 和 `init_ptr`，再按原程序序替换候选 op，避免 erase op 使其他 run 保存的表达式失效。不同桶各自维护独立指针链，即使其 op 在原 block 中交错也互不影响。
+所有 `SequentialRun` 在只读分析阶段确定后，先物化各自的 `stride_new` 和 `init_ptr`，再按原程序序替换候选 op，避免 erase op 使其他 `SequentialRun` 保存的表达式失效。不同桶各自维护独立指针链，即使其 op 在原 block 中交错也互不影响。
 
 ## 5. Pass 集成
 
@@ -486,15 +517,15 @@ def VPTOSoftPostUpdate : Pass<"vpto-soft-postupdate", "ModuleOp"> {
 14. ~~实现物化阶段：类型一致性检查、叶子可用性检查（必要时克隆 pure 定义链）、常量按 `(值, 类型)` 复用。~~
 15. ~~补充回归测试：增量定义在消费者之后、多增量组合、weight=32 非常量增量的负向用例。~~
 
-### Step 3：顺序路径
+### ~~Step 3：顺序路径~~（已完成）
 
-16. 抽取循环与顺序路径共享的 helper：精确 elemBytes/unitBytes 换算、`combineStride`、初始指针计算和 post-update op 泛型构造。
-17. 实现 base 归一化：沿 `pto.addptr` 得到 `(rootBase, baseOffset)`；复用 `StrideExpr` 构造规则，并增加仿射规范化、相等比较和按系数精确缩放，使两条路径都支持 `8*k` 一类可证明整除的非常量表达式。
-18. 调整驱动为两阶段：先内到外完成全部循环路径，再重新收集所有 block（包括 `scf.for` body）和剩余非 Post-Update op。
-19. 实现有序分桶与线性 maximal-run 检测：按 `(op 类型, rootBase)` 分桶，允许不同桶物理交错，run 互不重叠且不回溯。
-20. 复用循环路径的类型、精确换算、可用性和 pure 克隆检查，在整条 run 通过后物化 step 并链式改写。
-21. 更新 `Passes.td` 中 pass 描述，使其同时覆盖循环递推和 block 内顺序访问。
-22. 添加 `test/lit/vpto` 回归测试：固定 base 常量序列、变化 base 与 offset 抵消、非常量仿射 step、Block 类 `8*k` 精确缩放、for-body 循环路径未命中后转顺序路径、不同桶交错、多 maximal runs、公差破坏、零步长及无法精确换算的负向用例。
+16. ~~抽取循环与顺序路径共享的 helper：精确 elemBytes/unitBytes 换算、`combineStride`、初始指针计算和 post-update op 泛型构造。~~
+17. ~~实现 base 归一化：沿 `pto.addptr` 得到 `(rootBase, baseOffset)`；复用 `StrideExpr` 构造规则，并增加仿射规范化、相等比较和按系数精确缩放，使两条路径都支持 `8*k` 一类可证明整除的非常量表达式。~~
+18. ~~调整驱动为两阶段：先内到外完成全部循环路径，再重新收集所有 block（包括 `scf.for` body）和剩余非 Post-Update op。~~
+19. ~~实现有序分桶与线性 `SequentialRun` 检测：按 `(op 类型, rootBase)` 分桶，允许不同桶物理交错；接受的 `SequentialRun` 互不重叠，被拒 `SequentialRun` 从 `end - 1` 保留一个尾候选重试。~~
+20. ~~复用循环路径的类型、精确换算、可用性和 pure 克隆检查，在整条 `SequentialRun` 通过后物化 step 并链式改写。~~
+21. ~~更新 `Passes.td` 中 pass 描述，使其同时覆盖循环递推和 block 内顺序访问。~~
+22. ~~添加 `test/lit/vpto` 回归测试：固定 base 常量序列、变化 base 与 offset 抵消、非常量仿射 step、Block 类 `8*k` 精确缩放、for-body 循环路径未命中后转顺序路径、不同桶交错、多个最大 `SequentialRun`、公差破坏、零步长及无法精确换算的负向用例。~~
 
 ### Step 4：扩展指令覆盖
 
