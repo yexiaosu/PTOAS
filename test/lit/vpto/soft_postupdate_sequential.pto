@@ -8,11 +8,12 @@
 
 // RUN: ptoas --pto-backend=vpto --pto-arch=a5 --enable-vpto-soft-postupdate --emit-vpto %s -o - | FileCheck %s
 
-// Three fixed-base accesses form one post-update chain.
+// Three fixed-base accesses form one pointer chain. The last access is normal
+// with zero stride, so it does not produce an unused updated pointer.
 // CHECK-LABEL: func.func @sequential_constant
 // CHECK: %{{.*}}, [[P1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[{{%.*}}] {dist = "NORM"}
 // CHECK: %{{.*}}, [[P2:%[a-zA-Z0-9_]+]] = pto.vlds [[P1]][{{%.*}}] {dist = "NORM"}
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[P2]][{{%.*}}] {dist = "NORM"}
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[P2]][%c0] {dist = "NORM"}
 
 // A pair determines a step but does not meet the minimum run length.
 // CHECK-LABEL: func.func @sequential_two_only
@@ -30,7 +31,7 @@
 // CHECK-SAME: ({{.*}}, [[STEP:%[a-zA-Z0-9_]+]]: index
 // CHECK: %{{.*}}, [[A1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[[[STEP]]]
 // CHECK: %{{.*}}, [[A2:%[a-zA-Z0-9_]+]] = pto.vlds [[A1]][[[STEP]]]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[A2]][[[STEP]]]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[A2]][%c0]
 
 // Base and offset both vary, but their combined address step is fixed.
 // CHECK-LABEL: func.func @sequential_base_offset_cancel
@@ -38,7 +39,7 @@
 // CHECK: [[INIT:%[a-zA-Z0-9_]+]] = pto.addptr
 // CHECK: %{{.*}}, [[C1:%[a-zA-Z0-9_]+]] = pto.vlds [[INIT]][{{%.*}}]
 // CHECK: %{{.*}}, [[C2:%[a-zA-Z0-9_]+]] = pto.vlds [[C1]][{{%.*}}]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[C2]][{{%.*}}]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[C2]][%c0]
 
 // Loop analysis cannot use the zero inter-iteration stride, so the sequential
 // fallback still chains the accesses within one iteration.
@@ -46,7 +47,7 @@
 // CHECK: scf.for
 // CHECK: %{{.*}}, [[F1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[{{%.*}}]
 // CHECK: %{{.*}}, [[F2:%[a-zA-Z0-9_]+]] = pto.vlds [[F1]][{{%.*}}]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[F2]][{{%.*}}]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[F2]][%c0]
 
 // Different buckets may be physically interleaved. Each root keeps its own
 // independent pointer chain.
@@ -55,19 +56,19 @@
 // CHECK: [[Y1:%[a-zA-Z0-9_]+]] = pto.vsts {{.*}}, {{%.*}}[{{%.*}}],
 // CHECK: %{{.*}}, [[X2:%[a-zA-Z0-9_]+]] = pto.vlds [[X1]][{{%.*}}]
 // CHECK: [[Y2:%[a-zA-Z0-9_]+]] = pto.vsts {{.*}}, [[Y1]][{{%.*}}],
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[X2]][{{%.*}}]
-// CHECK: %{{.*}} = pto.vsts {{.*}}, [[Y2]][{{%.*}}],
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[X2]][%c0]
+// CHECK: {{^ *}}pto.vsts {{.*}}, [[Y2]][%c0],
 
 // A stride break ends the first maximal run; the breaking candidate starts a
 // second, non-overlapping run.
 // CHECK-LABEL: func.func @sequential_maximal_runs
 // CHECK: %{{.*}}, [[R1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[{{%.*}}]
 // CHECK: %{{.*}}, [[R2:%[a-zA-Z0-9_]+]] = pto.vlds [[R1]][{{%.*}}]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[R2]][{{%.*}}]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[R2]][%c0]
 // CHECK: [[INIT2:%[a-zA-Z0-9_]+]] = pto.addptr {{%.*}}, %c200
 // CHECK: %{{.*}}, [[R3:%[a-zA-Z0-9_]+]] = pto.vlds [[INIT2]][{{%.*}}]
 // CHECK: %{{.*}}, [[R4:%[a-zA-Z0-9_]+]] = pto.vlds [[R3]][{{%.*}}]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[R4]][{{%.*}}]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[R4]][%c0]
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
   func.func @sequential_constant(%src: !pto.ptr<f32, ub>, %sink: !pto.ptr<f32, ub>) attributes {pto.kernel} {

@@ -14,7 +14,7 @@
 // CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds {{%.*}}[%c0]
 // CHECK: %{{.*}}, [[Z1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[%c64]
 // CHECK: %{{.*}}, [[Z2:%[a-zA-Z0-9_]+]] = pto.vlds [[Z1]][%c64]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[Z2]][%c64]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[Z2]][%c0]
 
 // A valid pair that is too short is not rewritten. The candidate that breaks
 // that tentative run becomes the head of the next run.
@@ -24,7 +24,7 @@
 // CHECK: [[INIT:%[a-zA-Z0-9_]+]] = pto.addptr {{%.*}}, %c200
 // CHECK: %{{.*}}, [[S1:%[a-zA-Z0-9_]+]] = pto.vlds [[INIT]][%c32]
 // CHECK: %{{.*}}, [[S2:%[a-zA-Z0-9_]+]] = pto.vlds [[S1]][%c32]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[S2]][%c32]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[S2]][%c0]
 
 // If a two-candidate tentative run is rejected, its second candidate must be
 // retried as the head of an overlapping later run.
@@ -33,7 +33,7 @@
 // CHECK: [[INIT:%[a-zA-Z0-9_]+]] = pto.addptr {{%.*}}, %c64
 // CHECK: %{{.*}}, [[O1:%[a-zA-Z0-9_]+]] = pto.vlds [[INIT]][%c136]
 // CHECK: %{{.*}}, [[O2:%[a-zA-Z0-9_]+]] = pto.vlds [[O1]][%c136]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[O2]][%c136]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[O2]][%c0]
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
   func.func @restart_after_zero_pair(%src: !pto.ptr<f32, ub>, %sink: !pto.ptr<f32, ub>) attributes {pto.kernel} {

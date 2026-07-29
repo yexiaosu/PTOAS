@@ -1331,6 +1331,25 @@ static Operation *createPostUpdateOp(Operation *op,
   return builder.create(state);
 }
 
+// Build the normal form of an op while preserving every operand, attribute,
+// and original result. Unlike createPostUpdateOp, no updated base is appended.
+static Operation *createNormalOp(Operation *op, const PostUpdateOpInfo &info,
+                                 Value base, Value zeroStride,
+                                 OpBuilder &builder) {
+  OperationState state(op->getLoc(), op->getName());
+  for (auto [i, operand] : llvm::enumerate(op->getOperands())) {
+    if (static_cast<int>(i) == info.baseOperandIdx)
+      state.addOperands(base);
+    else if (static_cast<int>(i) == info.strideOperandIdx)
+      state.addOperands(zeroStride);
+    else
+      state.addOperands(operand);
+  }
+  state.addTypes(op->getResultTypes());
+  state.addAttributes(op->getAttrs());
+  return builder.create(state);
+}
+
 // Apply post-update rewrites to a single scf.for.
 // Returns the new ForOp if any rewrites were applied, null otherwise.
 static scf::ForOp applyPostUpdateRewrites(scf::ForOp forOp,
@@ -1555,6 +1574,7 @@ struct SequentialRun {
   AffineForm stepForm;
   Type strideType;
   Value strideValue;
+  Value zeroStride;
   Value currentPtr;
 };
 
@@ -1683,6 +1703,8 @@ static void processSequentialBlock(Block *block, DominanceInfo &dominance,
     builder.setInsertionPoint(first->op);
     run.strideValue = materializeSequential(available, run.strideType,
                                             first->op->getLoc(), builder);
+    run.zeroStride = materializeSequential(makeConst(0), run.strideType,
+                                           first->op->getLoc(), builder);
     builder.setInsertionPoint(first->op);
     run.currentPtr = createInitialPtr(
         first->base, first->strideOperand, first->info->strideUnit,
@@ -1703,11 +1725,15 @@ static void processSequentialBlock(Block *block, DominanceInfo &dominance,
     SequentialRun &run = runs[it->second];
     const PostUpdateOpInfo *info = getPostUpdateInfo(op);
     builder.setInsertionPoint(op);
-    Operation *newOp =
-        createPostUpdateOp(op, *info, run.currentPtr, run.strideValue, builder);
+    bool isLast = op == run.candidates.back()->op;
+    Operation *newOp = isLast ? createNormalOp(op, *info, run.currentPtr,
+                                               run.zeroStride, builder)
+                              : createPostUpdateOp(op, *info, run.currentPtr,
+                                                   run.strideValue, builder);
     for (unsigned result = 0; result < op->getNumResults(); ++result)
       op->getResult(result).replaceAllUsesWith(newOp->getResult(result));
-    run.currentPtr = newOp->getResult(newOp->getNumResults() - 1);
+    if (!isLast)
+      run.currentPtr = newOp->getResult(newOp->getNumResults() - 1);
     op->erase();
   }
 }

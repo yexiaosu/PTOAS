@@ -16,7 +16,7 @@
 // CHECK: [[STEP:%[a-zA-Z0-9_]+]] = arith.select
 // CHECK: %{{.*}}, [[L1:%[a-zA-Z0-9_]+]] = pto.vlds {{%.*}}[[[STEP]]]
 // CHECK: %{{.*}}, [[L2:%[a-zA-Z0-9_]+]] = pto.vlds [[L1]][[[STEP]]]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[L2]][[[STEP]]]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[L2]][%c0]
 
 // Distinct opaque SSA leaves are not assumed equal, so the candidate sequence
 // is conservatively left in non-post-update form.

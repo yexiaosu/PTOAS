@@ -15,7 +15,7 @@
 // CHECK: [[INIT:%[a-zA-Z0-9_]+]] = pto.addptr
 // CHECK: %{{.*}}, [[P1:%[a-zA-Z0-9_]+]] = pto.vlds [[INIT]][%c64]
 // CHECK: %{{.*}}, [[P2:%[a-zA-Z0-9_]+]] = pto.vlds [[P1]][%c64]
-// CHECK: %{{.*}}, %{{.*}} = pto.vlds [[P2]][%c64]
+// CHECK: {{^ *}}%{{[^, ]+}} = pto.vlds [[P2]][%c0]
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
   func.func @multilevel_base_chain(%src: !pto.ptr<f32, ub>, %sink: !pto.ptr<f32, ub>, %x: index, %y: index) attributes {pto.kernel} {

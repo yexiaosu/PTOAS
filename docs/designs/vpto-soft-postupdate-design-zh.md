@@ -456,16 +456,16 @@ init_ptr = pto.addptr(first.base,
                       (unitBytes/elemBytes)·first.strideOperand)
 ```
 
-这里复用循环路径的精确单位换算；不需要从 `rootBase` 重新构造绝对地址。将 `SequentialRun` 中每条 op 替换为 post-update 形式，前一条的 `updated_base` 作为后一条的 base，strideOperand 替换为 `stride_new`：
+这里复用循环路径的精确单位换算；不需要从 `rootBase` 重新构造绝对地址。`SequentialRun` 的前 `N-1` 条 op 替换为 post-update 形式，前一条的 `updated_base` 作为后一条的 base，strideOperand 替换为 `stride_new`。最后一条不再产生无人使用的 `updated_base`，而是保留 normal 形式：base 使用第 `N-1` 条返回的指针，strideOperand 替换为同类型零值。
 
 ```mlir
 // vlds 变换后
 %v0, %ptr1 = pto.vlds %init_ptr[%c64] : ... -> ..., !pto.ptr<f32, ub>
 %v1, %ptr2 = pto.vlds %ptr1[%c64] : ... -> ..., !pto.ptr<f32, ub>
-%v2, %ptr3 = pto.vlds %ptr2[%c64] : ... -> ..., !pto.ptr<f32, ub>
+%v2 = pto.vlds %ptr2[%c0] : ... -> ...
 ```
 
-所有 `SequentialRun` 在只读分析阶段确定后，先物化各自的 `stride_new` 和 `init_ptr`，再按原程序序替换候选 op，避免 erase op 使其他 `SequentialRun` 保存的表达式失效。不同桶各自维护独立指针链，即使其 op 在原 block 中交错也互不影响。
+所有 `SequentialRun` 在只读分析阶段确定后，先物化各自的 `stride_new`、零 stride 和 `init_ptr`，再按原程序序替换候选 op，避免 erase op 使其他 `SequentialRun` 保存的表达式失效。不同桶各自维护独立指针链，即使其 op 在原 block 中交错也互不影响。
 
 ## 5. Pass 集成
 

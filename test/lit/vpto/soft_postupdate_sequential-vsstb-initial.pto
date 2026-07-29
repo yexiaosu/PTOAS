@@ -14,7 +14,7 @@
 // CHECK: [[INIT:%[a-zA-Z0-9_]+]] = pto.addptr {{%.*}}, %c32
 // CHECK: [[P1:%[a-zA-Z0-9_]+]] = pto.vsstb {{.*}}, [[INIT]], %c2_i16, %c3_i16, {{.*}} -> !pto.ptr<f32,
 // CHECK: [[P2:%[a-zA-Z0-9_]+]] = pto.vsstb {{.*}}, [[P1]], %c2_i16, %c3_i16, {{.*}} -> !pto.ptr<f32,
-// CHECK: %{{.*}} = pto.vsstb {{.*}}, [[P2]], %c2_i16, %c3_i16, {{.*}} -> !pto.ptr<f32,
+// CHECK: {{^ *}}pto.vsstb {{.*}}, [[P2]], %c2_i16, %c0_i16, {{.*}} : {{.*}}!pto.mask<b32>{{ *$}}
 
 // A base delta of 320000 f32 elements is 40000 blocks. The resulting stride
 // does not fit i16, so analysis rejects the run without materializing it.
