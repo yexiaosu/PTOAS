@@ -37,7 +37,7 @@ bisheng 内部将候选指令分为两个处理分支：
 |------|----------|-------------------|----------------|
 | Auto | `pto.vlds` | `llvm.hivm.vldsx1.v{N}{ty}` | `llvm.hivm.vldsx1.post.v{N}{ty}` |
 | Auto | `pto.vsts` | `llvm.hivm.vstsx1.v{N}{ty}` | `llvm.hivm.vstsx1.post.v{N}{ty}` |
-| Auto | `pto.vsstb` | `llvm.hivm.vsstb` | `llvm.hivm.vsstb.post` |
+| Auto | `pto.vsstb` | `llvm.hivm.vsstb.v{N}{llvmTy}` | `llvm.hivm.vsstb.post.v{N}{llvmTy}` |
 
 LLVM lowering 时根据 op 是否有 `updated_base` 结果来选择生成 post 或非 post intrinsic。
 
@@ -45,17 +45,17 @@ LLVM lowering 时根据 op 是否有 `updated_base` 结果来选择生成 post �
 
 这些指令结构上可支持 `updated_base`，但当前 ODS 定义中没有该可选返回值。
 
-| 分支 | PTOAS Op | 当前 Intrinsic | 备注 |
-|------|----------|---------------|------|
-| Auto | `pto.vldsx2` | `llvm.hivm.vldsx2.v{N}{ty}` | `vlds` 的双向量变体 |
-| Auto | `pto.vsldb` | `llvm.hivm.vsldb` | `vsstb` 的加载对称体（块步长加载） |
-| Auto | `pto.plds` | `llvm.hivm.plds.b8` | predicate mask 加载（strided） |
-| Auto | `pto.pldi` | `llvm.hivm.pldi.b8` | predicate mask 加载（interleaved） |
-| Auto | `pto.psts` | `llvm.hivm.psts.b8` | predicate mask 存储（strided） |
-| Auto | `pto.psti` | `llvm.hivm.psti.b8` | predicate mask 存储（interleaved） |
-| Auto | `pto.vstas` | `llvm.hivm.vstas` | align 存储（带 offset） |
-| Auto | `pto.sprsts` | `llvm.hivm.sprsts` | 标量 predicate 寄存器存储（strided） |
-| Auto | `pto.sprsti` | `llvm.hivm.sprsti` | 标量 predicate 寄存器存储（interleaved） |
+| PTOAS Op | Post intrinsic | 返回 ABI | 参数与 offset/stride |
+|----------|----------------|----------|----------------------|
+| `pto.vldsx2` | `llvm.hivm.vldsx2.post.v{N}{llvmTy}` | `{low, high, updated_base}` | `(base, byte_offset, dist, 1)`；元素 offset 转字节 |
+| `pto.vsldb` | `llvm.hivm.vsldb.post.v{N}{llvmTy}` | `{vector, updated_base}` | `(base, packed_stride, 1, mask)`；stride 原样传入 |
+| `pto.plds` | `llvm.hivm.plds.post.b8` | `{mask, updated_base}` | `(base, offset, DS=2, 1)`；offset 原样传入 |
+| `pto.pldi` | `llvm.hivm.pldi.post.b8` | `{mask, updated_base}` | `(base, offset, US=1, 1)`；offset 原样传入 |
+| `pto.psts` | `llvm.hivm.psts.post.b8` | `updated_base` | `(mask, base, offset, PK=1, 1)`；offset 原样传入 |
+| `pto.psti` | `llvm.hivm.psti.post.b8` | `updated_base` | `(mask, base, offset, NORM=0, 1)`；offset 原样传入 |
+| `pto.sprsts` | `llvm.hivm.sprsts.post` | `updated_base` | `(SPR_AR=74, base, offset, 1)`；offset 原样传入 |
+| `pto.sprsti` | `llvm.hivm.sprsti.post` | `updated_base` | `(SPR_AR=74, base, offset, 1)`；offset 原样传入 |
+| `pto.vstas` | `llvm.hivm.vstas.post` | `updated_base` | `(align, base, byte_offset, 1)`；元素 offset 转字节 |
 
 ### 2.3 Stateful Post-Update 指令（Mechanism B：align 状态穿针）
 
@@ -160,8 +160,11 @@ struct PostUpdateOpInfo {
 | 指令 | base | strideOperand | strideUnit | unitBytes | 有效地址 |
 |------|------|---------------|-----------|-----------|---------|
 | vlds/vsts | source/destination | offset (Index) | Element | elemBytes | base + offset |
+| vldsx2（Step 4） | source | offset (Index) | Element | elemBytes | base + offset |
 | vsstb/vsldb | destination/source | repeat_stride (I16) | Block | 32 | dest + (32/elemBytes)·repeat_stride |
+| plds/pldi/psts/psti（Step 4） | source/destination | offset (Index) | Byte | 1 | base + offset/elemBytes |
 | sprsts/sprsti（Step 4） | destination | offset (I32) | Byte | 1 | dest + offset/elemBytes |
+| vstas（Step 4） | destination | offset (I32) | Element | elemBytes | dest + offset |
 
 > 新增指令时判断单位的方法：看它在 `VPTOLLVMEmitter.cpp` 的 lowering pattern 里，strideOperand 是否过 `convertElementOffsetToBytes`（→ Element），是否经 `packBlockRepeatStride` 透传控制字（→ Block），还是原样透传且 ISA 文档标注为字节（→ Byte）。
 
@@ -529,9 +532,10 @@ def VPTOSoftPostUpdate : Pass<"vpto-soft-postupdate", "ModuleOp"> {
 
 ### Step 4：扩展指令覆盖
 
-23. 为 2.2 中的指令（`vldsx2`、`vsldb`、`plds`、`pldi` 等）添加 ODS `updated_base` 定义。
+23. 为 2.2 中的 9 条指令添加 ODS `updated_base` 定义。
 24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`（Element / Block / Byte）。
-25. 补充对应的 LLVM lowering（post intrinsic callee）和 lit 测试。
+25. 两套 emitter 同步补充 post lowering，并添加 normal/post 成对、完整类型
+    集合、返回顺序、mode 常量和 offset 单位的 lit 回归。
 
 ### Step 5：验证与开启
 
