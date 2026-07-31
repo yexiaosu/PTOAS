@@ -42,20 +42,17 @@ bisheng 内部将候选指令分为两个处理分支：
 | Auto | `pto.vsts` | `llvm.hivm.vstsx1.v{N}{ty}` | `llvm.hivm.vstsx1.post.v{N}{ty}` |
 | Auto | `pto.psts` | `llvm.hivm.psts.b8` | `llvm.hivm.psts.post.b8` |
 | Auto | `pto.psti` | `llvm.hivm.psti.b8` | `llvm.hivm.psti.post.b8` |
+| Auto | `pto.sprsts` | `llvm.hivm.sprsts` | `llvm.hivm.sprsts.post` |
+| Auto | `pto.sprsti` | `llvm.hivm.sprsti` | `llvm.hivm.sprsti.post` |
+| Auto | `pto.vstas` | `llvm.hivm.vstas` | `llvm.hivm.vstas.post` |
 | Auto | `pto.vsldb` | `llvm.hivm.vsldb.v{N}{llvmTy}` | `llvm.hivm.vsldb.post.v{N}{llvmTy}` |
 | Auto | `pto.vsstb` | `llvm.hivm.vsstb.v{N}{llvmTy}` | `llvm.hivm.vsstb.post.v{N}{llvmTy}` |
 
 LLVM lowering 时根据 op 是否有 `updated_base` 结果来选择生成 post 或非 post intrinsic。
 
-### 2.2 PTOAS 有 Op 但尚未实现 Post variant 的指令
+### 2.2 Step 4 完成状态
 
-这些指令结构上可支持 `updated_base`，但当前 ODS 定义中没有该可选返回值。
-
-| PTOAS Op | Post intrinsic | 返回 ABI | 参数与 offset/stride |
-|----------|----------------|----------|----------------------|
-| `pto.sprsts` | `llvm.hivm.sprsts.post` | `updated_base` | `(SPR_AR=74, base, offset, 1)`；offset 原样传入 |
-| `pto.sprsti` | `llvm.hivm.sprsti.post` | `updated_base` | `(SPR_AR=74, base, offset, 1)`；offset 原样传入 |
-| `pto.vstas` | `llvm.hivm.vstas.post` | `updated_base` | `(align, base, byte_offset, 1)`；元素 offset 转字节 |
+Step 4 范围内的 9 条指令均已实现 `updated_base` 与对应 post intrinsic lowering。
 
 ### 2.3 Stateful Post-Update 指令（Mechanism B：align 状态穿针）
 
@@ -530,12 +527,11 @@ def VPTOSoftPostUpdate : Pass<"vpto-soft-postupdate", "ModuleOp"> {
 21. ~~更新 `Passes.td` 中 pass 描述，使其同时覆盖循环递推和 block 内顺序访问。~~
 22. ~~添加 `test/lit/vpto` 回归测试：固定 base 常量序列、变化 base 与 offset 抵消、非常量仿射 step、Block 类 `8*k` 精确缩放、for-body 循环路径未命中后转顺序路径、不同桶交错、多个最大 `SequentialRun`、公差破坏、零步长及无法精确换算的负向用例。~~
 
-### Step 4：扩展指令覆盖
+### ~~Step 4：扩展指令覆盖~~（已完成）
 
-23. 为 2.2 中的指令添加 ODS `updated_base` 定义（已完成 `vldsx2`、`vsldb`、`plds`、`pldi`、`psts`、`psti`）。
-24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`；立即数形式只接受可证明为常量的 stride。
-25. 两套 emitter 同步补充 post lowering，并添加 normal/post 成对、完整类型
-    集合、返回顺序、mode 常量和 offset 单位的 lit 回归。
+23. ~~为 9 条扩展指令添加 ODS `updated_base` 定义。~~
+24. ~~扩展 `PostUpdateTable`，按 4.2.1 配置 `StrideUnit`；立即数形式仅接受满足其约束的常量 stride。~~
+25. ~~两套 emitter 同步补充 post lowering，并添加返回 ABI、mode 常量、offset 单位、类型约束和 pass 改写的 lit 回归。~~
 
 ### Step 5：验证与开启
 
