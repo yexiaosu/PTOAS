@@ -1577,6 +1577,7 @@ def plds(buf, offset, *, dist="NORM"):
     return wrap_surface_value(
         _pto.PldsOp(
             result_type,
+            None,
             unwrap_surface_value(buf),
             _coerce_index(offset, context="plds(buf, offset)"),
             _normalize_predicate_dist(
@@ -1592,6 +1593,7 @@ def psts(mask_value, buf, offset, *, dist="NORM"):
     """``pto.psts`` – store a predicate mask to UB memory."""
     _infer_mask_metadata(mask_value, context="psts(mask, buf, offset)")
     _pto.PstsOp(
+        None,
         unwrap_surface_value(mask_value),
         unwrap_surface_value(buf),
         _coerce_index(offset, context="psts(mask, buf, offset)"),

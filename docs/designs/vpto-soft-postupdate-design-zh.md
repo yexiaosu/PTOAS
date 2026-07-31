@@ -37,7 +37,11 @@ bisheng 内部将候选指令分为两个处理分支：
 |------|----------|-------------------|----------------|
 | Auto | `pto.vlds` | `llvm.hivm.vldsx1.v{N}{ty}` | `llvm.hivm.vldsx1.post.v{N}{ty}` |
 | Auto | `pto.vldsx2` | `llvm.hivm.vldsx2.v{N}{llvmTy}` | `llvm.hivm.vldsx2.post.v{N}{llvmTy}` |
+| Auto | `pto.plds` | `llvm.hivm.plds.b8` | `llvm.hivm.plds.post.b8` |
+| Auto | `pto.pldi` | `llvm.hivm.pldi.b8` | `llvm.hivm.pldi.post.b8` |
 | Auto | `pto.vsts` | `llvm.hivm.vstsx1.v{N}{ty}` | `llvm.hivm.vstsx1.post.v{N}{ty}` |
+| Auto | `pto.psts` | `llvm.hivm.psts.b8` | `llvm.hivm.psts.post.b8` |
+| Auto | `pto.psti` | `llvm.hivm.psti.b8` | `llvm.hivm.psti.post.b8` |
 | Auto | `pto.vsldb` | `llvm.hivm.vsldb.v{N}{llvmTy}` | `llvm.hivm.vsldb.post.v{N}{llvmTy}` |
 | Auto | `pto.vsstb` | `llvm.hivm.vsstb.v{N}{llvmTy}` | `llvm.hivm.vsstb.post.v{N}{llvmTy}` |
 
@@ -49,10 +53,6 @@ LLVM lowering 时根据 op 是否有 `updated_base` 结果来选择生成 post �
 
 | PTOAS Op | Post intrinsic | 返回 ABI | 参数与 offset/stride |
 |----------|----------------|----------|----------------------|
-| `pto.plds` | `llvm.hivm.plds.post.b8` | `{mask, updated_base}` | `(base, offset, DS=2, 1)`；offset 原样传入 |
-| `pto.pldi` | `llvm.hivm.pldi.post.b8` | `{mask, updated_base}` | `(base, offset, US=1, 1)`；offset 原样传入 |
-| `pto.psts` | `llvm.hivm.psts.post.b8` | `updated_base` | `(mask, base, offset, PK=1, 1)`；offset 原样传入 |
-| `pto.psti` | `llvm.hivm.psti.post.b8` | `updated_base` | `(mask, base, offset, NORM=0, 1)`；offset 原样传入 |
 | `pto.sprsts` | `llvm.hivm.sprsts.post` | `updated_base` | `(SPR_AR=74, base, offset, 1)`；offset 原样传入 |
 | `pto.sprsti` | `llvm.hivm.sprsti.post` | `updated_base` | `(SPR_AR=74, base, offset, 1)`；offset 原样传入 |
 | `pto.vstas` | `llvm.hivm.vstas.post` | `updated_base` | `(align, base, byte_offset, 1)`；元素 offset 转字节 |
@@ -532,8 +532,8 @@ def VPTOSoftPostUpdate : Pass<"vpto-soft-postupdate", "ModuleOp"> {
 
 ### Step 4：扩展指令覆盖
 
-23. 为 2.2 中的指令添加 ODS `updated_base` 定义（已完成 `vldsx2`、`vsldb`）。
-24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`（已完成 `vldsx2`、`vsldb`）。
+23. 为 2.2 中的指令添加 ODS `updated_base` 定义（已完成 `vldsx2`、`vsldb`、`plds`、`pldi`、`psts`、`psti`）。
+24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`；立即数形式只接受可证明为常量的 stride。
 25. 两套 emitter 同步补充 post lowering，并添加 normal/post 成对、完整类型
     集合、返回顺序、mode 常量和 offset 单位的 lit 回归。
 

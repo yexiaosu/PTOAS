@@ -1895,12 +1895,14 @@ def PTO_PldsOp : PTO_VectorMicroOp<"plds", [
     Index:$offset,
     StrAttr:$dist
   );
-  let results = (outs PTO_MaskTypeConstraint:$result);
+  let results = (outs PTO_MaskTypeConstraint:$result,
+                      Optional<PTO_BufferLikeType>:$updated_base);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
     $source `[` $offset `]` `,` $dist attr-dict `:` type($source) `,` type($offset) `->` type($result)
+    (`,` type($updated_base)^)?
   }];
 }
 
@@ -1912,12 +1914,14 @@ def PTO_PldiOp : PTO_VectorMicroOp<"pldi", [
     Index:$offset,
     StrAttr:$dist
   );
-  let results = (outs PTO_MaskTypeConstraint:$result);
+  let results = (outs PTO_MaskTypeConstraint:$result,
+                      Optional<PTO_BufferLikeType>:$updated_base);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
     $source `[` $offset `]` `,` $dist attr-dict `:` type($source) `,` type($offset) `->` type($result)
+    (`,` type($updated_base)^)?
   }];
 }
 
@@ -1930,12 +1934,13 @@ def PTO_PstiOp : PTO_VectorMicroOp<"psti", [
     Index:$offset,
     StrAttr:$dist
   );
-  let results = (outs);
+  let results = (outs Optional<PTO_BufferLikeType>:$updated_base);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
     $value `,` $destination `[` $offset `]` `,` $dist attr-dict `:` type($value) `,` type($destination) `,` type($offset)
+    (`->` type($updated_base)^)?
   }];
 }
 
@@ -2716,12 +2721,13 @@ def PTO_PstsOp : PTO_VectorMicroOp<"psts", [
     StrAttr:$dist
   );
 
-  let results = (outs);
+  let results = (outs Optional<PTO_BufferLikeType>:$updated_base);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
     $value `,` $destination `[` $offset `]` `,` $dist attr-dict `:` type($value) `,` type($destination) `,` type($offset)
+    (`->` type($updated_base)^)?
   }];
 }
 
