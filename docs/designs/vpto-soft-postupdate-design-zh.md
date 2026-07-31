@@ -36,7 +36,9 @@ bisheng 内部将候选指令分为两个处理分支：
 | 分支 | PTOAS Op | 非 Post intrinsic | Post intrinsic |
 |------|----------|-------------------|----------------|
 | Auto | `pto.vlds` | `llvm.hivm.vldsx1.v{N}{ty}` | `llvm.hivm.vldsx1.post.v{N}{ty}` |
+| Auto | `pto.vldsx2` | `llvm.hivm.vldsx2.v{N}{llvmTy}` | `llvm.hivm.vldsx2.post.v{N}{llvmTy}` |
 | Auto | `pto.vsts` | `llvm.hivm.vstsx1.v{N}{ty}` | `llvm.hivm.vstsx1.post.v{N}{ty}` |
+| Auto | `pto.vsldb` | `llvm.hivm.vsldb.v{N}{llvmTy}` | `llvm.hivm.vsldb.post.v{N}{llvmTy}` |
 | Auto | `pto.vsstb` | `llvm.hivm.vsstb.v{N}{llvmTy}` | `llvm.hivm.vsstb.post.v{N}{llvmTy}` |
 
 LLVM lowering 时根据 op 是否有 `updated_base` 结果来选择生成 post 或非 post intrinsic。
@@ -47,8 +49,6 @@ LLVM lowering 时根据 op 是否有 `updated_base` 结果来选择生成 post �
 
 | PTOAS Op | Post intrinsic | 返回 ABI | 参数与 offset/stride |
 |----------|----------------|----------|----------------------|
-| `pto.vldsx2` | `llvm.hivm.vldsx2.post.v{N}{llvmTy}` | `{low, high, updated_base}` | `(base, byte_offset, dist, 1)`；元素 offset 转字节 |
-| `pto.vsldb` | `llvm.hivm.vsldb.post.v{N}{llvmTy}` | `{vector, updated_base}` | `(base, packed_stride, 1, mask)`；stride 原样传入 |
 | `pto.plds` | `llvm.hivm.plds.post.b8` | `{mask, updated_base}` | `(base, offset, DS=2, 1)`；offset 原样传入 |
 | `pto.pldi` | `llvm.hivm.pldi.post.b8` | `{mask, updated_base}` | `(base, offset, US=1, 1)`；offset 原样传入 |
 | `pto.psts` | `llvm.hivm.psts.post.b8` | `updated_base` | `(mask, base, offset, PK=1, 1)`；offset 原样传入 |
@@ -532,8 +532,8 @@ def VPTOSoftPostUpdate : Pass<"vpto-soft-postupdate", "ModuleOp"> {
 
 ### Step 4：扩展指令覆盖
 
-23. 为 2.2 中的 9 条指令添加 ODS `updated_base` 定义。
-24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`（Element / Block / Byte）。
+23. 为 2.2 中的指令添加 ODS `updated_base` 定义（已完成 `vldsx2`、`vsldb`）。
+24. 扩展 `PostUpdateTable`，为每条新指令按 4.2.1 的方法确定 `StrideUnit`（已完成 `vldsx2`、`vsldb`）。
 25. 两套 emitter 同步补充 post lowering，并添加 normal/post 成对、完整类型
     集合、返回顺序、mode 常量和 offset 单位的 lit 回归。
 
