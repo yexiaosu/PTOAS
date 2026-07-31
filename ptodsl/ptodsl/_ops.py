@@ -424,6 +424,7 @@ def vldsx2(source, offset_or_dist, dist=None, *, result_vreg_type=None):
         op = _pto.Vldsx2Op(
             result_type,
             result_type,
+            None,
             unwrap_surface_value(source),
             _index_zero(),
             _normalize_dist_token(
@@ -443,6 +444,7 @@ def vldsx2(source, offset_or_dist, dist=None, *, result_vreg_type=None):
     op = _pto.Vldsx2Op(
         result_type,
         result_type,
+        None,
         unwrap_surface_value(source),
         _coerce_index(offset_or_dist, context="vldsx2(ptr, offset, dist)"),
         _normalize_dist_token(
@@ -1036,6 +1038,7 @@ def vsldb(source, block_stride, repeat_stride, mask):
     return wrap_surface_value(
         _pto.VsldbOp(
             result_type,
+            None,
             unwrap_surface_value(source),
             _coerce_i16(block_stride, context="vsldb(..., block_stride, repeat_stride, mask)"),
             _coerce_i16(repeat_stride, context="vsldb(..., block_stride, repeat_stride, mask)"),
