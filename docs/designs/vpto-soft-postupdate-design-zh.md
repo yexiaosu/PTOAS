@@ -540,7 +540,7 @@ PrepareVPTOLLVMLoweringPass
 LowerVPTOOpsPass
 ```
 
-PTOAS 的 VPTO 后端默认启用这组 MLIR pass，可以通过 `--enable-vpto-soft-postupdate=false` 显式关闭。由于同一优化不应在 MLIR 与 LLVM 层重复执行，PTOAS 调用 Bisheng 编译 VPTO device LLVM IR 时默认显式传入 `-mllvm -hiipu-vf-soft-postupdate=false`；只有诊断或对照场景显式指定 `--enable-bisheng-soft-postupdate` 时才重新开启 Bisheng 实现。
+PTOAS 的 VPTO 后端默认启用这组 MLIR pass，可以通过 `--enable-vpto-soft-postupdate=false` 显式关闭。由于同一优化不应在 MLIR 与 LLVM 层重复执行，PTOAS 调用 Bisheng 编译 VPTO device LLVM IR 时默认显式关闭 Bisheng 公开 LLVM 选项 `-mllvm --cce-vf-enable-auto-postupdate=false` 与 `-mllvm --cce-vf-enable-blockldst-auto-postupdate=false`。`hiipu-vf-soft-postupdate` 仅作为 Bisheng 内部 pass 名出现，不能作为 LLVM 命令行选项传递给 CANN 9.1 Bisheng。只有诊断或对照场景显式指定 `--enable-bisheng-soft-postupdate` 时，PTOAS 才会把上述两个公开选项改为 `true`，重新开启 Bisheng 的普通 vector load/store 与 block load/store 自动 post-update 路径。
 
 默认开启由两层测试约束：lit 直接对 runtime case 的 `kernel.pto` 检查 post form、拒绝形态和 witness 清理，`test/vpto` 再通过 simulator 或 NPU 对完整输出做 `COMPARE_STRICT=1` 比较。重点场景包括源类型/i16 域回绕拒绝、i16/i32 正例、同循环混合提交与回滚、负向递推、嵌套循环、共享 chain 以及不同地址单位隔离。
 
