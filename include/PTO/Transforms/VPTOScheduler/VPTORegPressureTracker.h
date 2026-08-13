@@ -28,7 +28,6 @@ struct VPTORegPressureEvaluation {
   SmallVector<int64_t> delta;
   SmallVector<int64_t> projected;
   SmallVector<int64_t> projectedExcess;
-  double weightedDelta = 0.0;
 };
 
 class VPTORegPressureTracker {

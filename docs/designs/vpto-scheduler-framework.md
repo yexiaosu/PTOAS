@@ -1,535 +1,674 @@
-# VPTO 调度分析框架
+# VPTO 调度框架设计与实现
 
-本文描述当前分支中 [PTOAS issue #1143](https://github.com/hw-native-sys/PTOAS/issues/1143) 阶段一框架的实际实现。当前 pass 构建 region、依赖 DAG、目标资源模型和寄存器压力报告，但不选择新顺序，也不修改 IR。
+本文描述当前 VPTO 调度框架的完整实现。原阶段一的语义归一化、region、依赖 DAG、目标模型和分析 tracker，与原阶段二的确定性 list scheduler、结果验证、model replay 和 IR 重排已经组成同一条流水线，因此本文按当前组件关系统一说明，不再分别维护两套设计。
 
-## 1. 集成位置、作用范围与模式
+本文只陈述当前代码已经实现的行为。尚未实现或需要基于实测数据调整的内容集中列在最后一节。
 
-调度 pass 位于 `prepareVPTOForEmission` 的最终 `CSE` 之后、`PTOValidateVPTOEmissionIR` 之前：
+## 1. 目标与作用范围
 
-```text
-sync lowering / SIMT lowering
-  -> wrapper expansion / vecscope inference / optional soft-postupdate
-  -> LICM / loop-counter narrowing / canonicalize / CSE
-  -> VPTOSchedulerPass
-  -> PTOValidateVPTOEmissionIR
-```
+VPTO scheduler 在 emission-ready VPTO 上工作，目标是：
 
-此时调度器看到 emission-ready VPTO SSA，且仍处于下游硬件寄存器分配之前。pass 调度范围严格限制为模块内 `pto.vecscope` 和`pto.strict_vecscope` 的 body。本文后续使用“vecscope”统称 `pto.vecscope` 和 `pto.strict_vecscope`。每个 vecscope body 是独立调度范围；pass 不跨 vecscope 移动或联合分析操作。body 中若存在其他嵌套 region，其 block 仍属于该 vecscope，并按深度优先顺序分析。
+- 用统一的 operation-local scheduling semantics 构建 block-local region；
+- 为 SSA、memory、隐式状态和同步建立 correctness dependency DAG；
+- 在 `analyze` 模式下输出可复现的原顺序分析；
+- 在 `on` 模式下执行确定性的 top-down list scheduling；
+- 在修改 IR 前验证调度结果，并用全新状态重放结果；
+- 当模型不完整、预算超限或内部检查失败时，只跳过当前 region。
 
-`ptoas` 选项为 `--vpto-scheduler=<off|analyze|on>`：
+当前实现只支持 A5 Vector kernel module，只处理 `pto.vecscope` 和 `pto.strict_vecscope` 内的 operation。它不跨 block、vecscope 或 scheduling boundary 调度。
 
-| 模式 | 当前行为 |
-| --- | --- |
-| `off` | 默认值；driver 不加入 pass。独立运行 pass 时也立即返回。 |
-| `analyze` | 构建分析并向标准错误输出报告；IR 不变。 |
-| `on` | 当前与 `analyze` 完全相同，仅报告中的 `mode` 字段不同；IR 不变。 |
+## 2. 流水线集成与模式
 
-driver 只允许在 A5 上显式启用 `analyze` 或 `on`。pass 本身要求当前模块或某个祖先模块声明 `pto.target_arch = "a5"`；属性缺失或有效值不是 A5 时均失败。
+### 2.1 集成位置
 
-独立运行方式：
-
-```bash
-pto-test-opt input.pto '-pto-vpto-scheduler=mode=analyze'
-```
-
-## 2. 组件和数据流
+在 `ptoas` 的 VPTO emission preparation 中，scheduler 位于最后一轮 canonicalization/CSE 之后、emission IR verifier 之前：
 
 ```text
-VPTOSchedulerPass
-  -> collect pto.vecscope / pto.strict_vecscope
-  -> VPTOSchedulingOpInterface / operation classifier
+wrapper expansion / vecscope inference / loop normalization
+  -> canonicalize
+  -> CSE
+  -> VPTO scheduler
+  -> emission IR validation
+```
+
+因此 scheduler 看到的是已经完成主要结构化 lowering、但尚未交给下游代码生成的 VPTO。
+
+### 2.2 Pass 约束
+
+`pto-vpto-scheduler` 是 `ModuleOp` pass：
+
+- `mode=off` 时立即返回，不要求 target 属性；
+- `mode=analyze` 或 `mode=on` 时，当前 module 或祖先 module 必须具有 `pto.target_arch = "a5"`；
+- 存在 kernel kind 且不是 Vector 时跳过该 module；
+- 未标注 kernel kind 的 module 可用于独立 pass 测试；
+- pass 遍历 module 内的 `func.func`，每个函数只处理其 vecscope 内部。
+
+函数中的所有 vecscope 会先被收集。处理某个 vecscope 时，遍历其 region 中的 block 和普通嵌套 region，但不递归进入另一个 vecscope；嵌套 vecscope 由它自己的处理入口负责，避免重复分析。
+
+### 2.3 模式行为
+
+| 模式 | 行为 | 是否修改 IR |
+| --- | --- | --- |
+| `off` | 不运行调度 pass | 否 |
+| `analyze` | 构建 region/DAG，按原顺序运行分析 tracker，输出完整报告 | 否 |
+| `on` | 构建 region/DAG，调度、验证、重放并应用结果 | 是，仅限验证通过的 region |
+
+Pass 自身的默认模式是 `off`。`ptoas` driver 根据有效架构计算默认值：
+
+- A5 且用户没有显式传递 `--vpto-scheduler`：`on`；
+- 其他架构且用户没有显式传递该选项：`off`；
+- 用户显式指定 `off`、`analyze` 或 `on` 时，以显式值为准。
+
+`on` 默认不打印成功 region 的详细信息，只报告 fallback。`--vpto-scheduler-trace` 或 pass option `trace=true` 会输出结果顺序、logical cycle、peak pressure 和 work-unit 用量；trace 只允许与 `on` 同时使用。
+
+`on` 与 `--enable-bisheng-vec-misched` 互斥，driver 会直接报错。`analyze` 不修改 IR，因此可以与 Bisheng vector MISched 配置共存。
+
+## 3. 统一组件与数据流
+
+```text
+VPTOSchedulingOpInterface / conservative fallback
+  -> VPTOSchedulingSemantics
   -> VPTOSchedRegionBuilder
   -> VPTOSchedDAGBuilder
-       -> SSA dependencies
-       -> memory dependencies
-       -> implicit-state and synchronization dependencies
+       -> SSA edges
+       -> memory edges
+       -> implicit-state and sync edges
        -> unknown-model fallback edges
-       -> critical-path depth/height
-  -> VPTOSchedModel
-  -> Top/Bottom VPTOSchedBoundary
-       -> direction-local ResourceTracker
-       -> direction-local RegPressureTracker
-       -> direction-local HazardRecognizer
-  -> original-order simulation through Top Boundary trackers
-  -> deterministic per-module text report
+       -> critical depth / height
+  -> analyze
+       -> top/bottom Boundary
+       -> ResourceTracker
+       -> RegPressureTracker
+       -> NullHazardRecognizer
+       -> original-order report
+  -> on
+       -> ReadyQueue + top RegPressureTracker
+       -> deterministic Candidate strategy
+       -> VPTOScheduleResult
+       -> semantic verification
+       -> fresh model replay
+       -> region apply
 ```
 
-当前没有 `VPTOScheduler`、candidate、strategy、schedule result、schedule verifier或 IR apply 组件。`Boundary` 和 tracker 已提供基础接口，但 pass 只用它们分析原始顺序。
+主要数据对象如下：
 
-### 2.1 核心数据对象
-
-| 对象 | 定义 |
+| 对象 | 当前职责 |
 | --- | --- |
-| `VPTOSchedRegion` | block 内可独立分析的一段连续 operation；记录 operation 原始顺序及前后边界。 |
-| `VPTOSUnit` | scheduling unit，也是 DAG node；与 region 内一个 operation 一一对应。 |
-| `VPTOSchedEdge` | 两个 `VPTOSUnit` 之间的有向依赖；记录依赖类型、强度、latency 和原因。 |
-| `VPTOSchedDAG` | 持有 region、`VPTOSUnit`、edge、live-in 和 live-out，并维护 operation 到 `VPTOSUnit` 的映射。 |
+| `VPTOSchedulingSemantics` | operation-local 分类、非 SSA effect 和规范化 memory access |
+| `VPTOSchedRegion` | 一个 block 内连续且可独立处理的 operation 序列及两侧 boundary |
+| `VPTOSUnit` | DAG 节点，保存原始位置、语义、依赖计数、depth 和 height |
+| `VPTOSchedEdge` | 带 kind、strength、latency 和 reason 的有向边 |
+| `VPTOSchedModel` | machine、resource、sched class 和 pressure set 的只读目标契约 |
+| `VPTOSchedBoundary` | 分析框架中的方向局部 ready/pending、resource、pressure 和 hazard 状态 |
+| `VPTOScheduleResult` | 调度后的完整节点序列、每个节点的 logical issue cycle 和 peak pressure |
 
-RegionBuilder 先产生 `VPTOSchedRegion`，DAGBuilder 再按 region 中的原始顺序为每个 operation 创建一个 `VPTOSUnit` 并建立 `VPTOSchedEdge`。本文后续使用“SUnit”简称 `VPTOSUnit`。
+## 4. Operation scheduling semantics
 
-## 3. 操作调度语义
+### 4.1 语义记录
 
-### 3.1 接口契约
+每个 operation 被归一化为：
 
-`VPTOSchedulingOpInterface` 描述单个 operation 的局部调度语义，只提供一个查询：
+```text
+VPTOSchedulingSemantics
+  schedulingClass
+  classificationKnown
+  effects[]
+  memoryBehavior
+  memoryAccesses[]
+```
 
-| 查询 | 含义 |
+四种 scheduling class 的含义是：
+
+| 分类 | 含义 |
 | --- | --- |
-| `getVPTOSchedulingSemantics()` | 返回完整、规范化的 `VPTOSchedulingSemantics`。 |
+| `Schedulable` | 进入 scheduling region，并作为可调度节点 |
+| `Structural` | 与相邻 schedulable operation 一起进入 region，以保留 SSA 结构 |
+| `SchedulingBoundary` | 切断 region，自身不进入 region |
+| `Unsupported` | 显式声明不支持调度，切断 region且自身不进入 region |
 
-`VPTOSchedulingSemantics` 是 operation-local 语义的固定数据结构：
+这里的 semantic class 与目标模型的 sched class 是两个层次：前者决定 operation 是否进入 region，后者决定进入 region 后的 latency、resource 和 pressure 模型是否完整。
 
-| 字段 | 含义 |
-| --- | --- |
-| `schedulingClass` | `Schedulable`、`Structural`、`SchedulingBoundary` 或 `Unsupported`。 |
-| `effects` | 隐式状态、vecscope 内 memory barrier 和 post-update 等局部 effect。 |
-| `memoryBehavior` | 普通内存语义的完整性：`None` 表示确定无访问，`Explicit` 表示由访问列表完整描述，`Unknown` 表示缺少完整声明。 |
-| `memoryAccesses` | 规范化的读写、地址空间、范围和顺序属性。 |
+### 4.2 分类优先级
 
-`effects` 中的每个 `VPTOSchedulingEffect` 包含：
+`getVPTOSchedulingSemantics` 按以下顺序工作：
 
-| 字段 | 含义 |
-| --- | --- |
-| `kind` | effect 类型。 |
-| `resource` | effect 的逻辑域或动作名，例如 SPR 名、`ctrl`、`signal`。 |
-| `value` | 可选的 SSA identity；当前用于 post-update 地址结果。 |
+1. terminator 或包含 region 的 operation 返回已知 `SchedulingBoundary`；
+2. 实现 `VPTOSchedulingOpInterface` 的 operation 使用接口返回的语义；
+3. 未实现接口但 `isMemoryEffectFree` 的 operation 返回已知 `Structural`，且普通 memory behavior 为 `None`；
+4. 其他 operation 返回未知分类的 `SchedulingBoundary`，由 coverage 报告为 unclassified。
 
-已定义的 effect kind 为 `ImplicitRead`、`ImplicitWrite`、`Barrier`、`PostUpdate`、`VolatileMemory`、`AtomicMemory` 和 `Unknown`。`PostUpdate` 只标注 SSA 地址结果；`VolatileMemory` 和 `AtomicMemory` 只改变 memory ordering。这三类 effect 不直接生成同名 DAG edge。
+`Unsupported` 不用于未知 fallback，只能由 scheduling interface 显式返回。
 
-`memoryAccesses` 中的每个 `VPTOMemoryAccess` 包含：
+默认 scheduling interface 会把具有执行 pipe/family 或具有非空 scheduling effect 的 operation 标为已知 `Schedulable`。
 
-| 字段 | 含义 |
-| --- | --- |
-| `address` | 被访问的 pointer 或 memref SSA value；无法确定时为空。 |
-| `addressSpace` | 从 `address` 类型取得的地址空间；无法确定时为空。 |
-| `byteOffset`、`byteSize` | 可选静态字节区间。 |
-| `reads`、`writes` | 是否读、写普通内存。 |
-| `ordered` | 是否必须保留内存顺序。 |
-| `unknown` | 地址或读写类型是否无法可靠确定。 |
+### 4.3 当前非 SSA effect
 
-接口只报告当前 operation 的事实，不判断两个 operation 是否存在依赖。SSA def-use、alias root、may-alias 和依赖 edge 均由 DAGBuilder 统一计算。DAGBuilder 不应根据具体 operation 名称或 operand 位置重新推导已经进入 `VPTOSchedulingSemantics` 的局部语义。
-
-除 scope 外同步边界外，`PTO_MicroOp` 实现该接口。set/wait flag、get/release buffer、pipe barrier、`dsb`、`dcci` 和 SIMT barrier/fence 等同步操作不为了 scheduler 实现该接口。vecscope verifier 保证它们不会进入函数级调度 DAG。
-
-### 3.2 默认分类策略
-
-这里的分类决定 operation 是否进入调度 region，不是 TargetModel 中的硬件资源分类。RegionBuilder 按下表从上到下匹配；先匹配的规则优先：
-
-| 条件 | 分类 | RegionBuilder 行为 |
+| effect | 当前来源 | DAG 用途 |
 | --- | --- | --- |
-| operation 为空、是 terminator 或包含 region | `SchedulingBoundary` | 结束当前片段，operation 不进入 region。 |
-| operation 实现 `VPTOSchedulingOpInterface` | 使用接口返回的分类 | 当前默认接口实现在能确定 execution pipe 或存在任一调度 effect 时返回 `Schedulable`；接口也可显式返回 `SchedulingBoundary` 或 `Unsupported`。 |
-| operation 未实现调度接口，且 `isMemoryEffectFree` | `Structural` | 与相邻 `Schedulable` operation 一同进入 region，用于保留 SSA 计算；纯 structural 片段不生成 region。 |
-| 未命中以上规则 | `SchedulingBoundary`，`classificationKnown=false` | 作为保守边界结束当前片段，并计入 unclassified coverage。 |
+| `Barrier` | `pto.mem_bar` | barrier 前后建立完整顺序 |
+| `AtomicMemory` | atomic CAS/exchange/add/sub/min/max/and/or/xor | 将 memory access 标为 ordered |
+| `VolatileMemory` | `volatile` 或 `is_volatile` 属性 | 将 memory access 标为 ordered |
+| `PostUpdate` | 带 updated-base result 的 load/store 类 operation | 标记对应 SSA edge 的原因 |
+| `ImplicitWrite` | `pto.sprclr`、`pto.set_ctrl` | 建立隐式 output/anti dependency |
+| `ImplicitRead` | `pto.sprsti`、`pto.sprsts`、`pto.get_ctrl` | 建立隐式 data dependency |
 
-`SchedulingBoundary` 和 `Unsupported` 都会切断 region，但含义不同。前者表示接口明确声明的调度边界；后者表示接口明确声明 scheduler 当前不支持该 operation。`Unsupported` 不作为 dialect 或接口缺失的默认值。任何缺少显式分类的 operation 都使用安全的 boundary 行为，并由 `classificationKnown=false` 保留“尚未分类”的事实。
+当前识别 post-update address 的 operation 为：
 
-默认接口实现解析 execution pipe 只是为了确认该 operation 具有已知的执行类别。解析优先级为：
+```text
+pto.vlds, pto.vldsx2, pto.sprsti, pto.sprsts, pto.vldus,
+pto.plds, pto.pldi, pto.psti, pto.vsts, pto.psts,
+pto.vsldb, pto.vsstb, pto.vstas
+```
 
-1. `OpPipeInterface::getPipe()` 提供的精确 pipe；
-2. Vector family fallback 为 `PIPE_V`；
-3. Cube family fallback 为 `PIPE_M`；
-4. SIMT family fallback 为 `PIPE_S`；
-5. MTE family fallback 为 `PIPE_ALL`。
+### 4.4 Memory access 归一化
 
-这组 fallback 由所有实现调度接口的 PTO micro-op family 共用，范围大于 scheduler pass 实际分析的 vecscope。当前 pass 只消费 vecscope，规范化流程不应在 vecscope 中产生 Cube operation；`Cube -> PIPE_M` 只保证通用接口查询能够描述 Cube family，不表示 vecscope scheduler 支持调度 Cube operation。当前 vecscope verifier 没有按 operation family 建立完整白名单，因此该 fallback 也为手写或非规范 IR 提供保守分类。
+`VPTOMemoryAccess` 保存 address、address space、可选 byte offset/size、read/write、ordered 和 unknown。
 
-MTE 的 `PIPE_ALL` 只表示尚无精确 execution pipe，不能解释为 operation 占用所有硬件 pipe。进入 TargetModel 后，MTE family 仍映射到 MTE sched class；资源映射见 8.2 节。
+当前规则为：
 
-### 3.3 当前显式 effect
+- `pto.mem_bar`、`pto.sprclr`、`pto.get_ctrl`、`pto.set_ctrl` 明确没有普通 memory access；
+- 没有 `MemoryEffectOpInterface` 且不是 memory-effect-free 的 operation 生成一个无地址、ordered、unknown 的保守 write access；
+- 实现 `MemoryEffectOpInterface` 时，只记录无 value 的 effect，或 value 类型为 `!pto.ptr`/memref 的 effect；
+- Read 映射为 read，Write/Allocate/Free 映射为 write；
+- store-like operation 即使接口只给出模糊 effect，也强制标为 write；
+- atomic 或 volatile access 统一标为 ordered；
+- ordered operation 没有可枚举 access 时，补一个 read+write、ordered、unknown access。
 
-| 操作或属性 | effect |
-| --- | --- |
-| `mem_bar` | `Barrier("memory-order")` |
-| atomic CAS/exchange/add/sub/min/max/and/or/xor | `AtomicMemory` |
-| 带 `volatile` 或 `is_volatile` 属性的接口 op | `VolatileMemory` |
-| 支持可选 `updated_base` 的已登记 memory op | 结果存在时产生 `PostUpdate` |
-| `sprclr` | 以具体 SPR 名为域的 `ImplicitWrite` |
-| `sprsti`、`sprsts` | 以具体 SPR 名为域的 `ImplicitRead` |
-| `get_ctrl`、`set_ctrl` | `ctrl` 域的 `ImplicitRead` / `ImplicitWrite` |
+以下 operation 在 offset 为常量且元素 byte size 可计算时记录静态 byte 区间：
 
-登记 post-update 的操作为 `vlds`、`vldsx2`、`sprsti`、`sprsts`、`vldus`、`plds`、`pldi`、`psti`、`vsts`、`psts`、`vsldb`、`vsstb` 和 `vstas`。
+```text
+pto.load, pto.store, pto.ldg, pto.stg, pto.ld_dev, pto.st_dev
+```
 
-## 4. RegionBuilder 与覆盖率
+区间计算使用：
 
-### 4.1 Region 形成
+```text
+byteOffset = elementOffset * elementByteSize
+byteSize   = elementByteSize
+```
 
-`VPTOSchedRegionBuilder` 只接收 vecscope 内的 block，并对单个 block 线性扫描。`SchedulingBoundary` 和 `Unsupported` 结束当前片段，且自身不进入 region；`Schedulable` 和 `Structural` 保留在片段中。只有至少包含一个 `Schedulable` 操作的片段才生成 region，因此纯 structural 片段不会进入 DAG。
+溢出、scalable vector、非整数字节元素宽度或动态 offset 会使区间保持未知。
 
-每个 region 保存：
+## 5. Scheduling region
 
-- 所属 block；
-- block 内从 0 开始的 region index；
-- 按原始顺序排列的 operation 指针；
-- 前后 boundary operation；
-- 前后 boundary reason。
+### 5.1 Region 形成
 
-reason 的固定形式为：
+`VPTOSchedRegionBuilder` 逐 block 扫描：
 
-| 场景 | reason |
-| --- | --- |
-| block 起点/终点 | `block-start` / `block-end` |
-| terminator | `terminator` |
-| 包含 region 的操作 | `contains-regions` |
-| 其他边界 | `<class>:<operation-name>` |
+- `Schedulable` 和 `Structural` 追加到当前片段；
+- `SchedulingBoundary` 或 `Unsupported` 结束当前片段，并成为相邻 region 的 boundary；
+- block 结尾刷新最后一个片段；
+- 只有至少包含一个 `Schedulable` 的片段才生成 region，纯 `Structural` 片段被忽略。
 
-包含 region 的操作在父 block 中是边界，但 pass 会继续递归分析其内部 block。嵌套的专用 vecscope 除外：它不通过外层 vecscope 递归分析，而是作为独立调度范围处理。
+每个 region 保存：所属 block、block 内 region index、连续 operation 列表、前后 boundary 指针及其原因。boundary 原因为 block start/end、terminator、contains-regions，或 `分类名:operation名`。
 
-### 4.2 Coverage
+### 5.2 Coverage
 
-coverage 按函数统计所有遍历到的 vecscope 内操作，不限于已生成的 region：
+coverage 以函数为单位累计：
 
-- 四类操作总数；
-- unclassified 操作总数；
-- 每种 `Unsupported` 操作的数量；
-- 每种 unclassified 操作的数量。
+- 四种 semantic class 的数量；
+- boundary reason；
+- 显式 unsupported operation；
+- 未知分类而形成 boundary 的 unclassified operation。
 
-unclassified 特指：未命中显式分类规则，因而以 `SchedulingBoundary` 和 `classificationKnown=false` 保守处理的操作。`Unsupported` 则必须由调度接口显式返回，并携带 `classificationKnown=true`。unsupported 和 unclassified 名称在输出前按字典序排序。vecscope verifier 会在调度前拒绝 pipeline、system 和 cache 同步操作，因此这些操作不参与函数级 coverage。
+coverage 由 `analyze` 总是输出，由 `on` 仅在 trace 开启时输出。
 
-## 5. DAG 数据结构
+## 6. Dependency DAG
 
-### 5.1 Node 与 edge
+### 6.1 节点与边
 
-每个 region operation 对应一个 `VPTOSUnit`，包括 structural operation。构造 `VPTOSUnit` 时查询一次 `getVPTOSchedulingSemantics()` 并保存返回值；后续 DAG 构建只读取该快照。当前 `id` 和 `originalIndex` 都等于 operation 在 region 中的原始下标。SUnit 保存：
+每个 region operation 对应一个 `VPTOSUnit`，其 `id` 和 `originalIndex` 当前都等于原 region 中的位置。
 
-- operation 和 `VPTOSchedulingSemantics` 快照；
-- predecessor/successor edge 列表；
-- Must predecessor/successor 剩余计数；
-- critical-path `depth` 和 `height`。
+edge kind 支持：
 
-`VPTOSchedEdge` 保存 predecessor、successor、kind、strength、latency 和 reason。kind 枚举包含 `Data`、`Anti`、`Output`、`Memory`、`Control`、`Sync`、`Artificial`、`Cluster`；strength 包含 `Must` 和 `Weak`。
+```text
+Data, Anti, Output, Memory, Control, Sync, Artificial, Cluster
+```
 
-当前 builder 只生成 Must edge；`Control`、`Cluster` 和 Weak edge 尚未使用。builder 不合并重复边，因此同一对节点可以同时存在 SSA、memory 和 sync edge，也可能因多个保守规则产生多条同类边。报告中的 edge 数量是实际保存的 edge 数量。
+edge strength 支持 `Must` 和 `Weak`。当前 DAGBuilder 生成的 correctness edge 全部为 `Must`；只有 Must edge 参与拓扑合法性、ready 状态和 critical path。
 
-### 5.2 构建顺序
+### 6.2 构建顺序
 
 DAG 按固定顺序构建：
 
 ```text
-SSA edges
-  -> memory edges
-  -> implicit/synchronization edges
-  -> unknown sched-class fallback edges
-  -> critical paths
-  -> Must dependency counters
+SSA
+  -> memory
+  -> implicit state and sync
+  -> unknown-model fallback
+  -> critical path
+  -> dependency counts
 ```
 
-该顺序也决定 analyze 报告中的 edge 输出顺序。
+如果 Must-edge 图存在环，DAG 构建失败。
 
-## 6. 依赖构建策略
-
-### 6.1 SSA、live-in 与 live-out
+### 6.3 SSA、live-in 与 live-out
 
 对每个 operand：
 
-- producer 在同一 DAG 时建立 `Data/Must` edge；
-- producer 不在 DAG 时把 value 加入去重后的 live-in 集合。
+- defining operation 在同一 DAG 中时，建立 `Data/Must` edge；
+- edge latency 取 producer 的目标 sched class `writeLatency`；
+- defining operation 不在 DAG 中时，operand 记为 live-in。
 
-SSA edge latency 取 producer sched class 的 `writeLatency`。operand 是已登记的 post-update 地址结果时，reason 为 `post-update address operand #N`；其余为 `ssa operand #N`。post-update 不改变依赖类型或 latency。
+对每个 result，只要存在 DAG 外 user，就记为 live-out。
 
-某个 result 只要有任一 user 不在当前 DAG，就加入 live-out；无 user 的 result 不是 live-out。
+post-update result 与普通 SSA result 使用相同 correctness edge，只是 reason 记录为 `post-update address operand #N`。
 
-### 6.2 Memory semantic 与 alias 解析
+### 6.4 Alias 与 memory edge
 
-操作语义层把每个内存 effect 规范化为 `VPTOMemoryAccess`：
+memory dependency 保持冲突 access 的原始先后顺序。对每一对 `earlier -> later` operation：
 
-```text
-address / addressSpace
-optional byteOffset / byteSize
-reads / writes / ordered / unknown
-```
+1. 沿 repository alias helper 追踪 address root；
+2. alias root 发生变化时丢弃原 access 的静态 offset/size；
+3. 两侧 address space 都已知且不同，则判定不 alias；
+4. 同一 root 且两侧都有完整静态区间时，用半开区间重叠判断；
+5. 其他情况保守认为 may-alias，包括同一物理空间内的不同 SSA root。
 
-`memoryBehavior` 的含义如下：
+may-alias 后满足任一条件就建立 `Memory/Must`、latency 0 的 edge：
 
-- `None`：已确认没有普通内存访问，`memoryAccesses` 为空；
-- `Explicit`：普通内存访问已由 `memoryAccesses` 完整描述；
-- `Unknown`：缺少完整声明，`memoryAccesses` 包含保守的 unknown、ordered write。
+- 任一 access 为 ordered；
+- 任一 access 为 unknown；
+- 任一 access 为 write。
 
-访问语义优先来自 `MemoryEffectOpInterface`。effect value 不是 `!pto.ptr` 或 memref 时忽略。可证明 memory-effect-free 的操作归为 `None`。`mem_bar`、`sprclr` 和 ctrl register 操作已由调度语义完整描述，也归为 `None`，但不添加 `Pure` trait。未实现内存接口且不属于上述两类的操作归为 `Unknown`。名称为 `pto.store`、`pto.stg`、`pto.st_dev`，或以 `pto.vst`、`pto.pst` 开头的操作会在语义归一化时额外标记为 write。上述操作特判均位于语义层，DAGBuilder 不识别具体 memory op。
+因此，已知且无序的 read-read 可以重排；不能证明不冲突的其他组合保持原顺序。
 
-DAGBuilder 读取 SUnit 的 `memoryAccesses` 后，为每个 address 解析 alias root。alias root 通过已有 alias 信息沿 defining-op 链向上查找，并用 visited 集合防止循环。不同 SSA root 即使位于同一 address space，也保守视为可能别名，因为内存规划可能让它们复用同一物理区间。
+### 6.5 隐式状态与同步
 
-### 6.3 静态区间证明
+对于同名隐式 resource：
 
-当前只为以下标量 indexed op 计算静态字节区间：
+- last write 到 read：`Data/Must`，latency 1；
+- last write 到新 write：`Output/Must`，latency 0；
+- write 前所有自上次 write 以来的 read：`Anti/Must`，latency 0。
 
-```text
-pto.load / pto.store / pto.ldg / pto.stg / pto.ld_dev / pto.st_dev
-```
+完整 barrier 建立：
 
-语义层在以下条件满足时记录候选区间：
+- region 内所有更早节点到 barrier 的 `Sync/Must` edge；
+- 最近 barrier 到所有后续节点的 `Sync/Must` edge；
+- latency 均为 0。
 
-1. access address 正是操作的 `ptr`；
-2. offset 是可表示为有符号 64 位数的整数常量；
-3. pointer element type 是固定长度整数、浮点或固定 vector，且位宽为整字节；
-4. offset 和 size 计算不溢出。
+### 6.6 Unknown model fallback edge
 
-DAGBuilder 解析 alias 时，如果 address 不是 alias root，则丢弃该候选区间。比较两个区间时若端点加法溢出，也退化为保守 may-alias。
+如果 operation 已进入 region，但 A5 model 返回 `known=false`，DAGBuilder 会给它与原顺序相邻节点增加 `Artificial/Must`、latency 0 的保序 edge。该 edge用于 `analyze` 输出和 DAG 完整性。
 
-offset 按 element 计数，字节区间为：
+`on` 在进入 scheduler 前会检测整个 region 的 model class；只要存在一个 unknown class，就报告所有 unknown operation 并跳过整个 region，因此不会依靠 artificial edge 对该 region 做部分重排。
 
-```text
-[elementOffset * elementByteSize,
- elementOffset * elementByteSize + elementByteSize)
-```
+### 6.7 Critical path
 
-仅当两个访问具有同一 alias root 且都具备静态区间时，才可用区间不重叠证明 no-alias。不同且确定的 address space 直接视为 no-alias；其他情况均保守 may-alias。
-
-### 6.4 Memory edge 规则
-
-对于原始顺序中的每一对操作，只要任意访问对满足以下条件，就从较早操作向较晚操作建立一条 `Memory/Must` edge：
-
-1. 两个访问 may-alias；并且
-2. 任一访问为 ordered/unknown，或任一访问写内存。
-
-普通 read/read 不建边。atomic 和 volatile effect 把所属访问标记为 ordered；若操作没有可识别访问，则创建 unknown read+write 访问。不同确定 address space 仍不会因 ordered 标记而建立边。
-
-### 6.5 隐式状态依赖
-
-隐式状态按 `resource` 字符串独立跟踪。每个域维护最后一次 write 和该 write 后的 read 集合：
-
-- write -> read：`Data/Must`，latency 1；
-- write -> next write：`Output/Must`，latency 0；
-- reads since write -> next write：`Anti/Must`，latency 0。
-
-因此不同 SPR 名互不约束，SPR 与 `ctrl` 也互不约束。首次 read 没有前置 write 时不建 Data edge，但会记录下来，使后续 write 获得 Anti edge。
-
-### 6.6 完整 Barrier
-
-`mem_bar` 是 vecscope 内唯一合法的同步操作，并被视为完整调度屏障：
-
-- region 中所有较早节点 -> barrier：`Sync/Must`，latency 0；
-- 最近完整 barrier -> 每个较晚节点：`Sync/Must`，latency 0。
-
-`pto.barrier`、set/wait flag、get/release buffer、`dsb`、`dcci`、CMO/fence、SIMT barrier/fence 和跨核同步均必须位于 vecscope 外。自动 vecscope 推断把它们作为边界，显式 vecscope 的 verifier 会拒绝嵌套使用。因此阶段一调度器不为这些 scope 外操作构造 event、pipe 或 buffer-id effect/edge。
-
-### 6.7 Unknown sched class 保序
-
-语义上允许进入 region、但目标模型返回 unknown sched class 的节点，会获得：
-
-- 原始前一节点 -> unknown 节点；
-- unknown 节点 -> 原始后一节点。
-
-两者均为 `Artificial/Must`、latency 0。该策略固定 unknown 节点与相邻节点的原始相对顺序。语义未分类的操作在更早的 RegionBuilder 阶段已经成为 boundary。
-
-## 7. Critical path 与 ready 计数
-
-critical path 只考虑 Must edge。builder 用拓扑遍历计算：
+DAG 使用 Must edge 做拓扑遍历：
 
 ```text
 depth(successor) = max(depth(successor), depth(node) + edge.latency)
-height(node) = max(height(node), height(successor) + edge.latency)
+height(node)     = max(height(node), height(successor) + edge.latency)
 ```
 
-拓扑遍历未覆盖全部节点表示 Must-edge 环，DAG 构建失败。Weak edge 不参与拓扑、depth、height 或 ready 计数。
+`height` 作为 `on` 模式的 Candidate 第三级比较项，`depth` 用于分析报告。
 
-构建结束后，每个 SUnit 的 remaining predecessor/successor 分别初始化为 Must 前驱/后继数量，供 Top/Bottom boundary 使用。
+## 7. 当前 A5 目标模型数据
 
-## 8. TargetModel
+本节列出当前代码中 `VPTOGenericA5SchedModel` 的完整静态数据。`analyze` 和 `on` 共用同一个 model instance。
 
-### 8.1 稳定接口
+### 7.1 Machine model
 
-`VPTOSchedModel` 是只读查询接口，提供 machine model、resource 列表、pressure-set 列表、operation 的 sched class 和 value 的 pressure contribution。数据目前由静态 C++ 构造，scheduler 不依赖其存储方式。
-
-数据结构已经预留以下字段：
-
-- machine：target、version、issue width、micro-op buffer size；
-- resource：units、buffer size、group members；
-- sched class：micro-ops、write latency、resource reservations、read advance；
-- pressure set：limit、weight、spill cost。
-
-预留字段不等于当前模型已实现对应硬件策略。
-
-### 8.2 `generic-a5-v1`
-
-machine model 固定为：
-
-```text
-target=a5
-version=generic-a5-v1
-issueWidth=1
-microOpBufferSize=0
-completeness=minimal
-```
-
-资源为 scalar、vector、mte、cube、control、unknown；每类各 1 unit，buffer size 均为 0，无 resource group。sched class 如下：
-
-| class | known | micro-ops | write latency | reservation |
-| --- | --- | ---: | ---: | --- |
-| structural | true | 0 | 0 | 无 |
-| scalar | true | 1 | 1 | scalar，1 cycle |
-| vector | true | 1 | 1 | vector，1 cycle |
-| mte | true | 1 | 2 | mte，1 cycle |
-| cube | true | 1 | 4 | cube，1 cycle |
-| control | true | 1 | 1 | control，1 cycle |
-| unknown | false | 1 | 1 | unknown，1 cycle |
-
-所有 reservation 都从 issue cycle 开始，使用 1 unit。所有 read-advance 列表为空。
-
-operation 到 sched class 的解析优先级为：
-
-1. structural；
-2. `OpPipeInterface`：S -> scalar，V/V2 -> vector，M -> cube，MTE1-5/FIX/ 两个 virtual MTE2 pipe -> mte，ALL -> control；
-3. Vector、MTE、Cube、SIMT family marker；
-4. 具有非空调度 effect -> control；
-5. unknown。
-
-`PIPE_NUM` 和 `PIPE_UNASSIGNED` 不直接映射 class，会继续尝试后续规则。
-
-### 8.3 Pressure sets
-
-模型定义 vector、predicate、scalar、address、align、special 六个集合。所有 limit 为空，weight 和 spill cost 均为 1。每个 value 当前只贡献 1 unit：
-
-| value type | pressure set |
+| 字段 | 当前值 |
 | --- | --- |
-| `!pto.vreg` | vector |
-| `!pto.mask` | predicate |
-| `!pto.align` | align |
-| `!pto.ptr`、memref | address |
-| integer、index、float | scalar |
-| 其他类型 | special |
+| target | `a5` |
+| version | `generic-a5-v2` |
+| issue width | 1 |
+| micro-op buffer size | 0 |
 
-## 9. Boundary
+### 7.2 Resources
 
-`VPTOSchedBoundary` 支持 Top 和 Bottom 两个方向。构造时重置 DAG 的 Must 依赖计数：
+| ID | 名称 | units | buffer size | group members |
+| ---: | --- | ---: | ---: | --- |
+| 0 | scalar | 1 | 0 | 无 |
+| 1 | vector | 1 | 0 | 无 |
+| 2 | mte | 1 | 0 | 无 |
+| 3 | cube | 1 | 0 | 无 |
+| 4 | control | 1 | 0 | 无 |
+| 5 | unknown | 1 | 0 | 无 |
 
-- Top：remaining predecessors 为 0 的节点进入 available；
-- Bottom：remaining successors 为 0 的节点进入 available。
+这些 resource 当前用于 `analyze` 的 ResourceTracker timeline。`on` 的 ReadyQueue 和 Candidate strategy 不查询 ResourceTracker，因此 issue width 和 reservation 当前不构成真实调度的 hard legality。
 
-available 始终按 `originalIndex` 升序排列。每个 Boundary 聚合该方向的全部可变调度状态：current cycle、available、pending、scheduled、ResourceTracker、RegPressureTracker 和 HazardRecognizer。Top 与 Bottom 共享 DAG，但不共享 tracker 状态；依赖计数分别保存在 SUnit 的 predecessor/successor counter 中。构造函数接受目标模型，并默认创建 Null HazardRecognizer；也允许注入目标专用 recognizer。
+### 7.3 Sched classes
 
-三个状态操作为：
+| ID | 名称 | known | micro-ops | write latency | resource reservation | read advance |
+| ---: | --- | --- | ---: | ---: | --- | --- |
+| 0 | structural | true | 0 | 0 | 无 | 无 |
+| 1 | scalar-zero | true | 0 | 0 | 无 | 无 |
+| 2 | vector-predicate | true | 1 | 10 | vector：acquire 0、duration 1、units 1 | 无 |
+| 3 | mte-zero | true | 0 | 0 | 无 | 无 |
+| 4 | control-zero | true | 0 | 0 | 无 | 无 |
+| 5 | unknown | false | 0 | 0 | 无 | 无 |
 
-- `defer(unit, readyCycle)`：只接受当前 available 且 `readyCycle > currentCycle` 的节点，移入按 cycle、originalIndex 排序的 pending；
-- `advanceToNextPendingCycle()`：推进到最早 pending cycle，并释放所有到期节点；
-- `commit(unit)`：要求节点当前 available 且未提交；减少对应方向相邻节点的 Must 依赖计数，计数归零时按原始顺序加入 available。
+write latency 只在 producer 到同 region consumer 的 SSA Data edge 上生效。隐式状态、memory、sync 和 artificial edge 使用 DAGBuilder 自己定义的 latency。
 
-当前 pass 分别构造 Top/Bottom boundary。Top Boundary 持有的三个 tracker 用于原始顺序模拟；Bottom Boundary 当前只提供初始 ready 数量，其 tracker 已按 Bottom 方向初始化但未提交 candidate。pass 不调用 Boundary 的 defer、advance 或 commit。
+### 7.4 显式 Vector/Predicate operation 表
 
-## 10. ResourceTracker 与 HazardRecognizer
+只有以下 operation 映射为已知 `vector-predicate`：
 
-### 10.1 ResourceTracker
+| 类别 | Operation |
+| --- | --- |
+| Predicate 生成/范围 | `pto.pset_b8`, `pto.pset_b16`, `pto.pset_b32`, `pto.pge_b8`, `pto.pge_b16`, `pto.pge_b32` |
+| Compare | `pto.vcmp`, `pto.vcmps` |
+| Predicate 逻辑 | `pto.pand`, `pto.por`, `pto.pxor`, `pto.pnot` |
+| Predicate 消费 | `pto.vsel`, `pto.vscatter` |
+| Vector 计算 | `pto.vmax`, `pto.vmin`, `pto.vcmax`, `pto.vcmin`, `pto.vadd`, `pto.vabs` |
 
-ResourceTracker 保存逐周期 issue occupancy，以及按 resource id 分组的逐周期 occupancy。`evaluate(unit, requestedCycle)` 从请求周期开始线性搜索最早合法周期：
+### 7.5 Operation 到 sched class 的解析
 
-1. sched class 的 micro-op 数不能超过 machine issue width；
-2. 当前周期 issue occupancy 加 micro-op 数不能超过 issue width；
-3. 每项 reservation 引用的 resource 必须存在；
-4. 请求 unit 数不能超过 resource units；
-5. `[cycle + acquireAt, cycle + acquireAt + duration)` 内每周期都不能超量。
+解析按以下优先级执行：
 
-普通占用冲突使搜索继续到下一周期；非法模型立即返回 reason。搜索最多尝试 `2^20` 个周期，超出后返回 `resource search budget exceeded`。成功结果包含最早周期、该周期已有 issue 数形成的 slot，以及相对请求周期的 stall。
+1. null operation 或 semantic class 为 `Structural`：`structural`；
+2. 命中上一节显式表：`vector-predicate`；
+3. semantics 含 `ImplicitRead`、`ImplicitWrite` 或 `Barrier`：`control-zero`；
+4. `OpPipeInterface`：
+   - `PIPE_S` -> `scalar-zero`；
+   - `PIPE_V`/`PIPE_V2` -> `unknown`，除非已经命中显式表；
+   - `PIPE_M` -> `unknown`；
+   - `PIPE_MTE1` 至 `PIPE_MTE5`、`PIPE_FIX`、两个 virtual MTE2 pipe -> `mte-zero`；
+   - `PIPE_ALL` -> `control-zero`；
+   - `PIPE_NUM`/`PIPE_UNASSIGNED` -> 继续后续 family fallback；
+5. `VectorMicroOpInterface` -> `unknown`；
+6. `MteOpInterface` -> `mte-zero`；
+7. `CubeMicroOpInterface` -> `unknown`；
+8. `SimtOpInterface` -> `scalar-zero`；
+9. 仍具有其他非空 scheduling effect -> `control-zero`；
+10. 其他 -> `unknown`。
 
-`commit` 会重新验证指定周期必须正好可发射，然后写入 issue/resource timeline。当前实现只消费直接 resource reservation，不解释 resource group、resource buffer 或 machine micro-op buffer。
+这意味着未显式登记的 Vector operation 和所有 Cube operation 当前不会被 `on` 重排；包含它们的整个 region 会 fallback。
 
-### 10.2 HazardRecognizer
+### 7.6 Pressure sets
 
-接口预留 `check(unit, direction, cycle)` 和 `commit(...)`，用于资源表难以表达的 pair、spacing 或 issue 限制。当前唯一实现是 `VPTONullHazardRecognizer`：所有 candidate 合法，最早周期不变，commit 无状态。
+| ID | 名称 | limit | weight | spill cost | value contribution |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 0 | vector | 32 | 1 | 1 | 每个 `!pto.vreg` 为 1 unit |
+| 1 | predicate | 8 | 1 | 1 | 每个 `!pto.mask` 为 1 unit |
 
-正确性依赖必须由 DAG Must edge 或 region boundary 表达，不能依赖当前空 hazard 实现。
+其他 value type 不贡献 pressure。limit 不是 hard legality；当所有 Candidate 都会超限时，scheduler 仍选择字典序损害最小的合法节点完成调度。
 
-## 11. RegPressureTracker
+## 8. 分析 tracker
 
-Tracker 为每个 pressure set 维护 current 和 peak，并返回 candidate 的 delta、projected、projected excess、weighted delta。模型 limit 为空时，对应 excess 为 0；当前报告只打印 delta、current 和 peak。
+### 8.1 Boundary
 
-### 11.1 Top 方向
+`VPTOSchedBoundary` 支持 Top 和 Bottom 两个方向，每个方向独立拥有：
 
-初始化时：
+- available 和 pending 队列；
+- current cycle；
+- scheduled set；
+- ResourceTracker；
+- RegPressureTracker；
+- HazardRecognizer。
 
-- 所有去重后的 live-in 进入 live set 并计入 current；
-- 统计 DAG 内每个 operand 的剩余使用次数，重复 operand 按出现次数计数；
-- peak 初始化为 live-in pressure。
+Top 使用剩余 predecessor 数，Bottom 使用剩余 successor 数。队列以 `originalIndex` 保持确定顺序。Boundary 提供 dependency-ready 邻居释放和手工 defer/advance 接口。
 
-评估节点时：
+当前 `on` scheduler 使用独立的 ReadyQueue，不直接使用 Boundary。Boundary 的主要当前用途是 `analyze` 的 top/bottom ready 统计和 tracker 容器。
 
-- 某个 live operand 的全部剩余 use 都位于该节点，且它不是 live-out，则减去其 pressure；
-- 某个 result 尚未 live，且它是 live-out 或存在 DAG 内 user，则增加其 pressure；
-- projected 为 current + delta；weighted delta 使用各 pressure-set weight。
+### 8.2 ResourceTracker
 
-commit 拒绝任一 projected 小于 0 的状态，然后更新 current/peak、递减 operand 剩余 use、移除最后使用且非 live-out 的 operand，并把需要存活的 result 加入 live set。live-out 在 Top 模拟中不会因区域内最后一次使用而移除。
+ResourceTracker 保存每个 cycle 的 issue occupancy 和 resource occupancy。对一个 sched class，它检查：
 
-### 11.2 Bottom 方向
+- `microOps <= issueWidth`；
+- 当前 cycle 的 issue occupancy 不超过 issue width；
+- resource ID 存在；
+- 请求 units 不超过 resource units；
+- `[cycle + acquireAt, cycle + acquireAt + duration)` 内均有容量。
 
-初始化时只加入 live-out。反向评估节点时：
+`evaluate` 从 requested cycle 开始搜索最早可用 cycle，搜索上限为 `2^20` 次；`commit` 只接受给定 cycle 正好合法的 reservation。
 
-- 当前 live 的 result 被定义点消除，减去 pressure；
-- 尚未 live 的去重 operand 成为反向 live value，增加 pressure。
+### 8.3 HazardRecognizer
 
-commit 更新 current/peak，移除 results，并加入 operands。Bottom Boundary 构造时会实例化该方向的 RegPressureTracker，但当前 pass 不对它评估或提交 candidate。
+接口支持 target-specific pair、spacing 和 issue restriction。当前实例始终为 `VPTONullHazardRecognizer`，所有节点都合法且 earliest cycle 等于请求 cycle，commit 不记录状态。
 
-## 12. Analyze 驱动与报告
+### 8.4 RegPressureTracker
 
-### 12.1 函数和 block 遍历
+Tracker 为每个 pressure set 保存 `current`、`peak` 和 live value 状态，并支持提交前 evaluate。
 
-pass 对模块中的函数执行 IR-order walk，收集函数内的 `pto.vecscope` 和 `pto.strict_vecscope`。没有 vecscope 的函数直接跳过。每个有 vecscope 的函数拥有独立 coverage 和从 0 开始的 block index；block index 按 vecscope 出现顺序以及其内部嵌套 region 的深度优先顺序递增。region index 在每个 block 内重新从 0 开始。vecscope 容器本身、函数入口 block 和 vecscope 外 block 均不分类、不计数。
+Top 初始化时把 live-in 加入 current，并统计 region 内每个 operand 的剩余 use。evaluate 一个 Candidate 时：
 
-每个模块的报告先写入字符串，再在互斥锁保护下整体写入标准错误，避免并行的嵌套模块 pass 发生字符级交错。单个模块内的内容顺序稳定；多个并行 sibling 模块之间的整体先后顺序不作保证。
+- live operand 在该节点耗尽全部剩余 use，且不是 live-out：减少 pressure；
+- result 是 live-out 或存在 DAG 内 user，且尚未 live：增加 pressure；
+- 计算 delta、projected 和 `max(0, projected-limit)`。
 
-### 12.2 Region 报告
+commit 拒绝任一 projected pressure 小于 0 的状态，随后更新 current/peak、剩余 use 和 live set。
 
-每个 region 依次输出：
+Bottom 初始化为 live-out。逆向 evaluate 时移除当前节点的 live result，并加入此前未 live 的唯一 operand。Bottom tracker 当前用于分析和单元测试，不参与 `on` 的选择。
 
-1. boundary reason、node/edge/live-in/live-out 数量；
-2. Top/Bottom 初始 ready 数；
-3. known/unknown sched-class 数；
-4. node 的原始下标、操作名、语义类、sched class、depth、height；
-5. edge 的端点、kind、strength、latency、reason；
-6. 原始顺序的 issue/pressure 模拟；
-7. 逐周期 issue/resource timeline。
+### 8.5 Analyze 原顺序模拟
 
-### 12.3 原始顺序模拟
+`analyze` 为每个 region 输出：
 
-模拟严格按 `dag.getUnits()` 的原始顺序处理，不从 Boundary available 集合选点，也不调用 Boundary commit。流程为：
+- boundary、node/edge/live-in/live-out 数量；
+- top-ready、bottom-ready；
+- known/unknown sched class 数；
+- 每个节点的 semantic class、sched class、depth 和 height；
+- 每条 edge 的 kind、strength、latency 和 reason；
+- 按原始节点顺序运行 top ResourceTracker、RegPressureTracker 和 HazardRecognizer 的 issue 记录；
+- issue/resource timeline；
+- 函数 coverage。
+
+这条原顺序模拟使用 ResourceTracker 的 issue width 和 reservation，但不代表 `on` 的 logical issue cycle。
+
+## 9. Top-down list scheduler
+
+### 9.1 入口检查与预算
+
+每个 region 使用默认限制：
+
+| 预算 | 当前值 |
+| --- | ---: |
+| 最大节点数 | 4096 |
+| 最大边数 | 262144 |
+| scheduler、pending release 与 replay 共享 work units | `2^20` |
+
+节点数和边数在调度前检查。随后再次防御性检查所有节点的 sched class 都为 known。
+
+work unit 在以下位置消耗：
+
+- 每次 Candidate evaluation；
+- Pending 节点到达 current cycle 并释放为 Candidate；
+- replay 中处理每个结果节点；
+- replay 中释放 Pending 节点。
+
+预算使用确定的计数，不使用依赖机器性能的墙钟超时。
+
+### 9.2 Ready 状态与 logical cycle
+
+ReadyQueue 为每个节点维护：
+
+| 状态 | 含义 |
+| --- | --- |
+| `Unavailable` | 仍有 Must predecessor 未调度 |
+| `Pending` | Must predecessor 已全部调度，但 ready cycle 晚于 current cycle |
+| `Candidate` | Must predecessor 已全部调度，且 ready cycle 不晚于 current cycle |
+| `Scheduled` | 已提交到结果 |
+
+初始无 Must predecessor 的节点在 cycle 0 成为 Candidate。提交节点后，successor 的 ready cycle 更新为：
 
 ```text
-top.resource.evaluate(unit, requestedCycle)
-top.hazard.check(unit, Top, resource.earliestCycle)
-top.pressure.evaluate(unit)
-top.resource.commit(unit, max(resourceCycle, hazardCycle))
-top.pressure.commit(unit)
-top.hazard.commit(unit, Top, cycle)
+readyCycle(successor) =
+  max(readyCycle(successor), issueCycle(node) + edge.latency)
 ```
 
-`requestedCycle` 初始为 0，每次更新为上一节点的实际 issue cycle，而不是 `cycle + 1`。因此 structural class 可以与下一条有效指令同周期；issue width 或 resource 冲突会把下一条指令推迟。
+当 successor 的剩余 Must predecessor 归零时：
 
-该 timeline 只反映原始顺序下的 issue/resource reservation 和 Top pressure 变化。它不消费 DAG ready 状态，也不把 edge latency 转换为 candidate ready cycle；depth/height 仅单独报告。因此 timeline 不是依赖感知的调度结果，也不是硬件周期预测。
+- ready cycle 不晚于 current cycle：立即进入 Candidate；
+- 否则进入 Pending。
 
-若 resource/hazard evaluate 拒绝节点，输出 `fallback=tracker-rejected`；若 commit 失败，输出 `fallback=tracker-commit-failed`，并终止该 region 的模拟。DAG 出现环时输出 `fallback=dag-cycle` 并跳过该 region。以上情况不会修改 IR，也不会使 pass 整体失败。非法 mode、缺失 target 或有效 target 不是 A5 会使 pass 失败。
+没有 Candidate 时，current cycle 直接跳到全局最早 Pending ready cycle，不逐 cycle 空转。
 
-### 12.4 Coverage 报告
+只要仍有 Candidate，scheduler 就在同一 current cycle 继续选择。这里的 cycle 只表示 dependency level，不执行 issue-width、resource 或 hazard 限制，因此同一 cycle 可以有多个结果节点，不能解释为真实硬件同周期发射。
 
-每个函数最后输出四类 operation 总数和 unclassified 总数，以及排序后的 `unsupported-op` 和 `unclassified-op` 明细。unclassified 是分类完整性元数据，其 operation 已计入 `SchedulingBoundary`，因此不构成第五种 scheduling class。unknown sched class 不在该明细中，而是在 region 汇总的 `unknown-classes` 和节点 `known=false` 中体现；其保序原因由 artificial edge 输出。
+### 9.3 Candidate pressure evaluation
 
-## 13. 当前保证与限制
+对每个 Candidate，Top RegPressureTracker 计算：
+
+```text
+pressureDelta[s]
+projectedPressure[s] = currentPressure[s] + pressureDelta[s]
+currentExcess[s]     = max(0, currentPressure[s] - limit[s])
+projectedExcess[s]   = max(0, projectedPressure[s] - limit[s])
+```
+
+然后计算三个整数 cost：
+
+```text
+excessGrowthCost =
+  sum(spillCost[s] *
+      max(0, projectedExcess[s] - currentExcess[s]))
+
+projectedExcessCost =
+  sum(spillCost[s] * projectedExcess[s])
+
+pressureDeltaCost =
+  sum(weight[s] * pressureDelta[s])
+```
+
+乘法和累加均检查 `int64_t` 溢出。pressure set 必须具有 limit，且 weight/spill cost 非负，否则当前 region 以 invalid-model 失败。
+
+### 9.4 五级确定性选择
+
+Candidate 使用以下字典序选择，不把指标混合成单一总分：
+
+1. 更小的 `excessGrowthCost`；
+2. 更小的 `projectedExcessCost`；
+3. 更大的 DAG `height`；
+4. 更小的 `pressureDeltaCost`；
+5. 更小的 `originalIndex`。
+
+前两项控制实际超限，第三项优先推进较长 dependency chain，第四项在前述条件相同时优先降低当前 live pressure，第五项保证完全确定的最终决胜。
+
+选中节点后，先提交 pressure tracker，再提交 ReadyQueue，并把 `{unit, currentCycle}` 追加到 `VPTOScheduleResult`。所有节点提交后，结果记录最终 peak pressure。
+
+### 9.5 当前可观察的顺序特征
+
+对于两条独立且每条具有统一 latency 的三段链：
+
+```text
+A0 -> B0 -> C0
+A1 -> B1 -> C1
+```
+
+初始 A0/A1 同为 cycle 0 Candidate，B0/B1 在 cycle 10 ready，C0/C1 在 cycle 20 ready，因此当前算法形成：
+
+```text
+A0 A1 B0 B1 C0 C1
+```
+
+即 AABBCC。每一层内部再由 pressure、height 和 original index 决胜。
+
+当 producer 和 consumer 同时为 Candidate，消费并释放 Predicate 的节点可以通过更小的 pressure delta 优先于继续产生 Predicate 的节点。如果 consumer 仍处于 Pending，scheduler 不等待它，而会继续提交当前已有 Candidate。
+
+## 10. Result 验证、重放与应用
+
+### 10.1 调度阶段不修改 IR
+
+`VPTOScheduler::schedule` 只返回：
+
+```text
+VPTOScheduleResult
+  entries[] = {unit, issueCycle}
+  peakPressure[]
+```
+
+在 result 产生、语义验证和 model replay 完成之前，region 中的 operation 不会移动。
+
+### 10.2 Semantic verification
+
+verifier 检查：
+
+- 原 region 仍在同一个 block，前后 boundary 和连续性未变化；
+- result 节点数等于 DAG 节点数；
+- 每个 entry 非空、属于当前 block且没有重复；
+- DAG 中每个节点恰好出现一次；
+- 所有 Must edge 的 predecessor 位于 successor 之前；
+- region 内每个 SSA defining unit 位于其 user 之前。
+
+### 10.3 Fresh model replay
+
+replay 创建新的 ReadyQueue 和 Top RegPressureTracker，不复用 scheduler 的可变状态。它逐 entry 检查：
+
+- work-unit 预算仍可用；
+- 必要时可以推进到最早 Pending cycle；
+- entry 在记录的 cycle 确实是 Candidate；
+- pressure commit 成功；
+- ReadyQueue commit 成功；
+- replay 结束后所有节点均已调度；
+- replay peak pressure 与 result 完全一致。
+
+replay 与 scheduler 共享同一个 work-unit budget。
+
+### 10.4 Apply
+
+apply 会再次运行 semantic verifier。验证通过后，按照 result 顺序把每个 operation 移到 following boundary 之前；没有 following boundary 时移到 block 末尾。
+
+当前 MLIR `moveBefore` 操作没有失败返回值，因此代码在所有可失败检查完成后才开始移动，并没有保存原顺序或实现额外的事务式 rollback。所有当前可报告失败都发生在 apply 移动之前，因而失败时 region 保持原顺序。
+
+## 11. 诊断与失败隔离
+
+失败类别为：
+
+```text
+Budget, InvalidModel, Scheduling,
+SemanticVerification, ModelReplay, Apply
+```
+
+处理规则：
+
+- unknown sched class：为当前 region 中每个 unknown operation 发出 remark，包含 block、region、original index 和 operation name；
+- node/edge/work-unit budget 或 invalid model：remark；
+- scheduling、DAG cycle、semantic verification、model replay 或 apply 内部不一致：warning；
+- CLI mode、target、trace 或 Bisheng 冲突：error，停止编译。
+
+region 级失败只跳过当前 region，pass 继续处理后续 region。`on` 未开启 trace 时，成功 region 不输出报告。
+
+## 12. 当前保证与限制
 
 当前实现保证：
 
-- `off`、`analyze`、`on` 均不改变 IR；
-- 只分析 `pto.vecscope` 和 `pto.strict_vecscope` 内部，不跨 vecscope；
-- region 不跨 block，也不跨 scheduling boundary；
-- DAG 中所有当前 correctness edge 都是 Must edge；
-- unknown 语义通过 boundary 隔离，unknown model class 通过相邻 artificial edge 保序；
-- A5 Vector 模块报告可稳定复现到模块粒度。
+- `off` 和 `analyze` 不修改 IR；
+- `on` 只对 model 完整且通过 verify/replay 的 region 应用完整 permutation；
+- region 不跨 block、vecscope 或 semantic boundary；
+- SSA、保守 memory、隐式状态和完整 barrier 通过 Must edge 保序；
+- 相同 IR、model 和选项得到确定的调度顺序及 fallback 原因；
+- unknown class、预算和内部验证失败隔离在当前 region；
+- logical cycle、pressure score 和预算计算均有整数溢出或上限检查。
 
-当前没有实现：
+当前实现限制：
 
-- candidate 构造、优先级策略、top-down 或 bidirectional list scheduling；
-- schedule result、permutation/semantic verifier、model replay、rollback 和 IR apply；
-- 依赖 ready cycle 与资源 timeline 的联合推进；
-- 非空 hazard 规则、bundle/pair、bank conflict、NOP 或 software pipelining；
-- resource group/buffer、read advance/bypass、pressure limit 的有效模型数据；
-- 跨 block 调度和 Cube kernel 调度。
+- `on` 不使用 ResourceTracker、issue width、resource reservation 或 HazardRecognizer；
+- logical cycle 只来自 Must dependency latency，不是硬件发射 timeline；
+- A5 只有显式表中的 Vector/Predicate operation 为非零 latency 的已知计算类；
+- Scalar、MTE、Control 和 Structural 使用零调度成本；Cube 和未登记 Vector 为 unknown；
+- 只统计 Vector 和 Predicate pressure；
+- 不支持跨 block调度、bidirectional scheduling、bundle/pair、bank conflict、NOP、software pipelining 或 Cube kernel scheduling；
+- apply 没有独立事务 rollback，因为当前移动操作不可失败；
+- 不设置收益门槛，合法且通过 replay 的结果即应用，identity permutation 也允许执行 apply。
 
-## 14. 回归覆盖
+## 13. 回归覆盖
 
-当前 lit 覆盖：
+当前测试覆盖：
 
-- `off`、`analyze`、`on` 都保持 IR 不变，以及非法 mode；
-- 只报告 `pto.vecscope`/`pto.strict_vecscope` 内操作，忽略作用域外操作和无 vecscope 函数；
-- CLI 默认 off 与显式 off 等价，真实 A5 VPTO emission coverage 无 unsupported/ unclassified op；
-- SSA、memory、静态区间、volatile、post-update 地址依赖；
-- SPR/CTRL 的 Data、Anti、Output edge；
-- vecscope 内 `mem_bar` 的完整 barrier 顺序；
-- pipeline、buffer-id、system、cache 和 SIMT 同步操作的 vecscope verifier 与自动推断边界；
-- 未显式分类的 operation 采用安全 boundary，并由函数 coverage 报告为 unclassified；
-- CV 分裂时只报告 Vector 子模块。
+| 测试 | 主要内容 |
+| --- | --- |
+| `vpto_scheduler_analyze.pto` | off/analyze 不变、on trace、模型报告、非法 pass mode |
+| `vpto_scheduler_cli.pto` | A5 默认 on、显式模式、trace 约束、target 约束、Bisheng 冲突 |
+| `vpto_scheduler_coverage.pto` | boundary reason 和 unclassified coverage |
+| `vpto_scheduler_dependencies.pto` | SSA、memory range、volatile、unknown memory、post-update、SPR/CTRL、barrier |
+| `vpto_scheduler_on.pto` | AABBCC、logical cycle、pressure tie-break、确定性和默认静默 |
+| `vpto_scheduler_unknown_fallback.pto` | unknown region 跳过，后续 region 继续调度 |
+| `vpto_scheduler_trackers.pto` | resource、pressure、bottom tracker、verify/replay、语义拒绝、共享预算 |
+| `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |
+
+## 14. 后续可能的迭代目标
+
+以下项目不是当前行为，实施前需要分别补充模型依据、正确性测试和性能验收：
+
+1. **校准 A5 模型数据**：根据 hardware RA、CA 和 NPU 数据校准 Vector/Predicate limit、contribution、weight、spill cost 和 operation latency，避免把当前静态初值当作最终硬件事实。
+2. **扩大显式模型覆盖**：从真实 emission-ready VPTO fixture 提取 operation 闭包，为更多 Vector/Predicate operation 建立可审计的 sched class；保持语义不完整的 operation 为 unknown。
+3. **让 `on` 使用 resource 与 hazard**：把 issue width、resource reservation、pair/spacing、bank conflict 和 read advance 纳入 Candidate hard legality及 cycle 推进，而不只用于 analyze timeline。
+4. **建立代表性性能 gate**：完善 compare/select、mask-or+scatter 和双链 AABBCC fixture，记录静态 pressure、最终 assembly spill/barrier 指标、CA/NPU ticks、EXIPC、编译时间和内存增量。
+5. **加强差分验证**：增加随机 DAG differential test，覆盖 permutation、Must edge、ready cycle、pressure replay、预算边界和 fallback 稳定性。
+6. **扩展调度范围与策略**：在 correctness semantics 和模型充分后评估 bidirectional scheduling、跨 block调度、bundle/pair、software pipelining 及 Cube kernel scheduling。
+7. **模型声明机制**：在静态 C++ 模型稳定后评估 TableGen 或生成式描述，同时保持 `VPTOSchedModel` 只读接口不变。
+8. **可失败 apply 的事务保护**：如果以后 apply 引入可能失败的 bundle 构造、跨 block移动或其他 mutation，在移动前保存完整原顺序并实现显式 rollback。
+9. **预算再校准**：基于真实 region 的 node、edge、Candidate evaluation 和 replay 分布调整当前常量，但继续使用确定性计数而非墙钟超时。

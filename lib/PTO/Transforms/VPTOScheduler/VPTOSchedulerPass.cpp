@@ -11,7 +11,7 @@
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VPTOScheduler/VPTORegPressureTracker.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
-#include "PTO/Transforms/VPTOScheduler/VPTOSchedResourceTracker.h"
+#include "PTO/Transforms/VPTOScheduler/VPTOScheduler.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -49,14 +49,48 @@ static void printPressureVector(llvm::raw_ostream &os, StringRef label,
   os << '}';
 }
 
-static void printRegionReport(llvm::raw_ostream &os,
-                              const VPTOSchedRegion &region, VPTOSchedDAG &dag,
-                              const VPTOSchedModel &model) {
-  VPTOSchedBoundary topBoundary(dag, model, VPTOSchedDirection::Top);
-  unsigned topReady = topBoundary.getAvailable().size();
-  VPTOSchedBoundary bottomBoundary(dag, model, VPTOSchedDirection::Bottom);
-  unsigned bottomReady = bottomBoundary.getAvailable().size();
+static bool consumePressureReportWork(Operation *op,
+                                      VPTOSchedulingBudget &budget) {
+  if (!budget.consume(op->getNumOperands())) {
+    return false;
+  }
+  if (!budget.consume(op->getNumResults())) {
+    return false;
+  }
+  return budget.consume();
+}
 
+static void printOriginalOrderPressureReport(llvm::raw_ostream &os,
+                                             const VPTOSchedDAG &dag,
+                                             const VPTOSchedModel &model,
+                                             VPTOSchedulingBudget &budget) {
+  VPTORegPressureTracker tracker(model, dag, VPTOSchedDirection::Top);
+  for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    Operation *op = unit->getOperation();
+    if (!consumePressureReportWork(op, budget)) {
+      os << "vpto-scheduler: fallback=pressure-report-budget node="
+         << unit->getId() << " limit=" << budget.getLimit() << '\n';
+      return;
+    }
+    VPTORegPressureEvaluation pressure = tracker.evaluate(*unit);
+    if (failed(tracker.commit(*unit))) {
+      os << "vpto-scheduler: fallback=pressure-tracker-commit-failed node="
+         << unit->getId() << '\n';
+      return;
+    }
+    os << "vpto-scheduler: pressure node=" << unit->getId();
+    printPressureVector(os, "delta", pressure.delta, model);
+    printPressureVector(os, "current", tracker.getCurrent(), model);
+    printPressureVector(os, "peak", tracker.getPeak(), model);
+    os << '\n';
+  }
+}
+
+static void printRegionReport(llvm::raw_ostream &os,
+                              const VPTOSchedRegion &region,
+                              const VPTOSchedDAG &dag,
+                              const VPTOSchedModel &model,
+                              VPTOSchedulingBudget &budget) {
   unsigned knownClasses = 0;
   unsigned unknownClasses = 0;
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
@@ -71,8 +105,8 @@ static void printRegionReport(llvm::raw_ostream &os,
      << " after=" << region.followingBoundaryReason
      << " nodes=" << dag.getUnits().size() << " edges=" << dag.getEdges().size()
      << " live-ins=" << dag.getLiveIns().size()
-     << " live-outs=" << dag.getLiveOuts().size() << " top-ready=" << topReady
-     << " bottom-ready=" << bottomReady << " known-classes=" << knownClasses
+     << " live-outs=" << dag.getLiveOuts().size()
+     << " known-classes=" << knownClasses
      << " unknown-classes=" << unknownClasses << '\n';
 
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
@@ -96,60 +130,7 @@ static void printRegionReport(llvm::raw_ostream &os,
        << " latency=" << edge->getLatency() << " reason=" << edge->getReason()
        << '\n';
   }
-
-  VPTOResourceTracker &resourceTracker = topBoundary.getResourceTracker();
-  VPTORegPressureTracker &pressureTracker = topBoundary.getPressureTracker();
-  VPTOHazardRecognizer &hazardRecognizer = topBoundary.getHazardRecognizer();
-  unsigned requestedCycle = 0;
-  unsigned lastTimelineCycle = 0;
-  for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
-    VPTOResourceEvaluation resource =
-        resourceTracker.evaluate(*unit, requestedCycle);
-    VPTOHazardResult hazard = hazardRecognizer.check(
-        *unit, VPTOSchedDirection::Top, resource.earliestCycle);
-    VPTORegPressureEvaluation pressure = pressureTracker.evaluate(*unit);
-    if (!resource.legal || !hazard.legal) {
-      os << "vpto-scheduler: fallback=tracker-rejected node=" << unit->getId()
-         << " reason=" << (!resource.legal ? resource.reason : hazard.reason)
-         << '\n';
-      break;
-    }
-
-    unsigned cycle = std::max(resource.earliestCycle, hazard.earliestCycle);
-    if (failed(resourceTracker.commit(*unit, cycle)) ||
-        failed(pressureTracker.commit(*unit))) {
-      os << "vpto-scheduler: fallback=tracker-commit-failed node="
-         << unit->getId() << '\n';
-      break;
-    }
-    hazardRecognizer.commit(*unit, VPTOSchedDirection::Top, cycle);
-
-    const VPTOSchedClass &schedClass =
-        model.getSchedClass(unit->getOperation());
-    os << "vpto-scheduler: issue node=" << unit->getId() << " cycle=" << cycle
-       << " slot=" << resource.issueSlot << " stall=" << resource.stallCycles
-       << " sched-class=" << schedClass.name;
-    printPressureVector(os, "delta", pressure.delta, model);
-    printPressureVector(os, "current", pressureTracker.getCurrent(), model);
-    printPressureVector(os, "peak", pressureTracker.getPeak(), model);
-    os << '\n';
-
-    lastTimelineCycle = std::max(lastTimelineCycle, cycle);
-    for (const VPTOSchedResourceUse &use : schedClass.resources)
-      lastTimelineCycle =
-          std::max(lastTimelineCycle,
-                   cycle + use.acquireAt + std::max(1U, use.duration) - 1);
-    requestedCycle = cycle;
-  }
-
-  for (unsigned cycle = 0; cycle <= lastTimelineCycle; ++cycle) {
-    os << "vpto-scheduler: timeline cycle=" << cycle
-       << " issue=" << resourceTracker.getIssueOccupancy(cycle);
-    for (const VPTOSchedResource &resource : model.getResources())
-      os << ' ' << resource.name << '='
-         << resourceTracker.getResourceOccupancy(resource.id, cycle);
-    os << '\n';
-  }
+  printOriginalOrderPressureReport(os, dag, model, budget);
 }
 
 static void printCoverage(llvm::raw_ostream &os,
@@ -188,57 +169,176 @@ static void printCoverage(llvm::raw_ostream &os,
        << '\n';
 }
 
-static void analyzeFunction(func::FuncOp func, llvm::raw_ostream &os,
-                            const VPTOSchedModel &model, StringRef mode) {
+static void printScheduleResult(llvm::raw_ostream &os, unsigned blockIndex,
+                                const VPTOSchedRegion &region,
+                                const VPTOScheduleResult &result,
+                                const VPTOSchedModel &model,
+                                uint64_t workUnits) {
+  os << "vpto-scheduler: schedule-result block=" << blockIndex
+     << " region=" << region.index << " nodes=" << result.entries.size()
+     << " work-units=" << workUnits;
+  printPressureVector(os, "peak", result.peakPressure, model);
+  os << '\n';
+  for (auto [position, entry] : llvm::enumerate(result.entries)) {
+    os << "vpto-scheduler: result-position=" << position
+       << " node=" << entry.unit->getId()
+       << " original-index=" << entry.unit->getOriginalIndex()
+       << " cycle=" << entry.issueCycle
+       << " op=" << entry.unit->getOperation()->getName().getStringRef()
+       << '\n';
+  }
+}
+
+static void emitRegionFailure(func::FuncOp func, unsigned blockIndex,
+                              const VPTOSchedRegion &region,
+                              const VPTOScheduleFailure &failure) {
+  InFlightDiagnostic diagnostic =
+      failure.kind == VPTOScheduleFailureKind::Budget ||
+              failure.kind == VPTOScheduleFailureKind::InvalidModel
+          ? func.emitRemark()
+          : func.emitWarning();
+  diagnostic << "VPTO scheduler skipped block " << blockIndex << " region "
+             << region.index << ": "
+             << stringifyVPTOScheduleFailureKind(failure.kind);
+  if (!failure.name.empty()) {
+    diagnostic << " " << failure.name << " actual=" << failure.actual
+               << " limit=" << failure.limit;
+  }
+  if (!failure.detail.empty()) {
+    diagnostic << " (" << failure.detail << ")";
+  }
+}
+
+static bool reportUnknownClasses(func::FuncOp func, unsigned blockIndex,
+                                 const VPTOSchedRegion &region,
+                                 const VPTOSchedDAG &dag,
+                                 const VPTOSchedModel &model) {
+  bool foundUnknown = false;
+  for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    if (model.getSchedClass(unit->getOperation()).known) {
+      continue;
+    }
+    foundUnknown = true;
+    unit->getOperation()->emitRemark()
+        << "VPTO scheduler skipped block " << blockIndex << " region "
+        << region.index
+        << " because original-index=" << unit->getOriginalIndex()
+        << " op=" << unit->getOperation()->getName().getStringRef()
+        << " has an unknown scheduling class";
+  }
+  return foundUnknown;
+}
+
+static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
+                           unsigned blockIndex, const VPTOSchedRegion &region,
+                           VPTOSchedDAG &dag, const VPTOSchedModel &model,
+                           const VPTOSchedulerLimits &limits,
+                           VPTOSchedulingBudget &budget, bool trace) {
+  if (reportUnknownClasses(func, blockIndex, region, dag, model)) {
+    return;
+  }
+
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  if (failed(result)) {
+    emitRegionFailure(func, blockIndex, region, failure);
+    return;
+  }
+  if (failed(verifyVPTOScheduleResult(dag, *result, failure))) {
+    emitRegionFailure(func, blockIndex, region, failure);
+    return;
+  }
+  if (failed(replayVPTOScheduleResult(model, dag, *result, budget, failure))) {
+    emitRegionFailure(func, blockIndex, region, failure);
+    return;
+  }
+  if (failed(applyVPTOScheduleResult(dag, *result, failure))) {
+    emitRegionFailure(func, blockIndex, region, failure);
+    return;
+  }
+  if (trace) {
+    printScheduleResult(os, blockIndex, region, *result, model,
+                        budget.getUsed());
+  }
+}
+
+static void runFunction(func::FuncOp func, llvm::raw_ostream &os,
+                        const VPTOSchedModel &model, StringRef mode,
+                        bool trace) {
   SmallVector<Operation *> vecScopes;
   func.walk([&](Operation *op) {
-    if (isa<VecScopeOp, StrictVecScopeOp>(op))
+    if (isa<VecScopeOp, StrictVecScopeOp>(op)) {
       vecScopes.push_back(op);
+    }
   });
-  if (vecScopes.empty())
+  if (vecScopes.empty()) {
     return;
+  }
 
   const VPTOSchedMachineModel &machine = model.getMachineModel();
-  os << "vpto-scheduler: function=" << func.getSymName() << " mode=" << mode
-     << " target=" << machine.target << " model=" << machine.version
-     << " issue-width=" << machine.issueWidth << '\n';
+  if (mode == "analyze" || trace) {
+    os << "vpto-scheduler: function=" << func.getSymName() << " mode=" << mode
+       << " target=" << machine.target << " model=" << machine.version << '\n';
+  }
 
   VPTOSchedulingCoverage coverage;
   unsigned blockIndex = 0;
-  std::function<void(Region &)> analyzeRegion = [&](Region &parentRegion) {
+  std::function<void(Region &)> processRegion = [&](Region &parentRegion) {
     for (Block &block : parentRegion) {
+      unsigned currentBlockIndex = blockIndex++;
       VPTOSchedRegionBuilder regionBuilder(&coverage);
       SmallVector<VPTOSchedRegion> regions = regionBuilder.build(block);
-      os << "vpto-scheduler: block=" << blockIndex++
-         << " regions=" << regions.size() << '\n';
+      if (mode == "analyze" || trace) {
+        os << "vpto-scheduler: block=" << currentBlockIndex
+           << " regions=" << regions.size() << '\n';
+      }
       for (const VPTOSchedRegion &region : regions) {
-        VPTOSchedDAGBuilder dagBuilder(&model);
-        FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = dagBuilder.build(region);
+        VPTOSchedulerLimits limits;
+        VPTOSchedulingBudget schedulingBudget(limits.maxWorkUnits);
+        VPTOScheduleFailure failure;
+        VPTOSchedDAGBuilder dagBuilder(&model, limits, schedulingBudget);
+        FailureOr<std::unique_ptr<VPTOSchedDAG>> dag =
+            dagBuilder.build(region, failure);
         if (failed(dag)) {
-          os << "vpto-scheduler: region=" << region.index
-             << " fallback=dag-cycle\n";
+          emitRegionFailure(func, currentBlockIndex, region, failure);
           continue;
         }
-        printRegionReport(os, region, **dag, model);
+        if (mode == "analyze" || trace) {
+          VPTOSchedulingBudget reportBudget(limits.maxWorkUnits);
+          printRegionReport(os, region, **dag, model, reportBudget);
+        }
+        if (mode == "analyze") {
+          continue;
+        }
+        scheduleRegion(func, os, currentBlockIndex, region, **dag, model,
+                       limits, schedulingBudget, trace);
       }
       for (Operation &op : block) {
-        if (isa<VecScopeOp, StrictVecScopeOp>(op))
+        if (isa<VecScopeOp, StrictVecScopeOp>(op)) {
           continue;
-        for (Region &nestedRegion : op.getRegions())
-          analyzeRegion(nestedRegion);
+        }
+        for (Region &nestedRegion : op.getRegions()) {
+          processRegion(nestedRegion);
+        }
       }
     }
   };
-  for (Operation *vecScope : vecScopes)
-    analyzeRegion(vecScope->getRegion(0));
-  printCoverage(os, coverage);
+  for (Operation *vecScope : vecScopes) {
+    processRegion(vecScope->getRegion(0));
+  }
+  if (mode == "analyze" || trace) {
+    printCoverage(os, coverage);
+  }
 }
 
 static StringAttr findTargetArchitecture(ModuleOp module) {
   for (ModuleOp current = module; current;
-       current = current->getParentOfType<ModuleOp>())
-    if (auto target = current->getAttrOfType<StringAttr>("pto.target_arch"))
+       current = current->getParentOfType<ModuleOp>()) {
+    if (auto target = current->getAttrOfType<StringAttr>("pto.target_arch")) {
       return target;
+    }
+  }
   return {};
 }
 
@@ -275,7 +375,7 @@ struct VPTOSchedulerPass
     std::string report;
     llvm::raw_string_ostream os(report);
     getOperation().walk(
-        [&](func::FuncOp func) { analyzeFunction(func, os, model, mode); });
+        [&](func::FuncOp func) { runFunction(func, os, model, mode, trace); });
     os.flush();
 
     // Nested module pass adaptors may execute sibling kernel modules in
