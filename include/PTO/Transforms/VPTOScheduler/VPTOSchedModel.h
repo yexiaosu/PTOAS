@@ -22,6 +22,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -67,8 +68,8 @@ struct VPTORegPressureSet {
   VPTOPressureSetID id = 0;
   std::string name;
   std::optional<unsigned> limit;
-  double weight = 1.0;
-  double spillCost = 1.0;
+  int64_t weight = 1;
+  int64_t spillCost = 1;
 };
 
 struct VPTORegPressureContribution {
@@ -88,9 +89,9 @@ public:
   getPressure(Value value) const = 0;
 };
 
-/// Conservative A5-shaped model used by framework/analyze mode.  It provides
-/// complete resource and pressure-set contracts while deliberately reporting
-/// unrecognized micro-op families as UnknownSchedClass.
+/// Conservative A5 model shared by analyze and on modes. Vector/predicate
+/// operations require an explicit model entry; unrecognized operations in
+/// those families remain unknown so on mode can skip their whole region.
 class VPTOGenericA5SchedModel final : public VPTOSchedModel {
 public:
   VPTOGenericA5SchedModel();

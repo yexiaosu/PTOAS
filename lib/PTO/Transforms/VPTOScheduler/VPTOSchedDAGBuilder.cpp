@@ -12,10 +12,13 @@
 
 #include "PTO/IR/PTO.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/MathExtras.h"
+
+#include <limits>
 
 #include "../Utils.h"
 
@@ -24,15 +27,79 @@ using namespace mlir::pto;
 
 FailureOr<std::unique_ptr<VPTOSchedDAG>>
 VPTOSchedDAGBuilder::build(const VPTOSchedRegion &region) const {
+  VPTOScheduleFailure failure;
+  return build(region, failure);
+}
+
+FailureOr<std::unique_ptr<VPTOSchedDAG>> VPTOSchedDAGBuilder::build(
+    const VPTOSchedRegion &region, VPTOScheduleFailure &failure) const {
+  uint64_t nodeCount = region.operations.size();
+  if (limits && nodeCount > limits->maxNodes) {
+    failure = {VPTOScheduleFailureKind::Budget, "nodes", nodeCount,
+               limits->maxNodes, {}};
+    return mlir::failure();
+  }
+
   auto dag = std::make_unique<VPTOSchedDAG>(region);
-  buildSSAEdges(*dag);
-  buildMemoryEdges(*dag);
-  buildImplicitAndSyncEdges(*dag);
-  buildModelFallbackEdges(*dag);
-  if (failed(dag->computeCriticalPaths()))
-    return failure();
+  if (failed(buildSSAEdges(*dag, failure))) {
+    return mlir::failure();
+  }
+  if (failed(buildMemoryEdges(*dag, failure))) {
+    return mlir::failure();
+  }
+  if (failed(buildImplicitAndSyncEdges(*dag, failure))) {
+    return mlir::failure();
+  }
+  if (failed(buildModelFallbackEdges(*dag, failure))) {
+    return mlir::failure();
+  }
+  if (failed(consumeWork(failure, dag->getUnits().size()))) {
+    return mlir::failure();
+  }
+  if (failed(consumeWork(failure, dag->getEdges().size()))) {
+    return mlir::failure();
+  }
+  if (failed(dag->computeCriticalPaths())) {
+    failure.kind = VPTOScheduleFailureKind::Scheduling;
+    failure.detail = "dependency DAG contains a Must-edge cycle";
+    return mlir::failure();
+  }
   dag->resetDependencyCounts();
   return std::move(dag);
+}
+
+LogicalResult
+VPTOSchedDAGBuilder::consumeWork(VPTOScheduleFailure &failure,
+                                 uint64_t amount) const {
+  if (!budget || budget->consume(amount)) {
+    return success();
+  }
+  uint64_t limit = budget->getLimit();
+  uint64_t actual = limit == std::numeric_limits<uint64_t>::max()
+                        ? limit
+                        : limit + 1;
+  failure = {VPTOScheduleFailureKind::Budget, "work-units", actual, limit, {}};
+  return mlir::failure();
+}
+
+LogicalResult VPTOSchedDAGBuilder::addEdge(
+    VPTOSchedDAG &dag, VPTOSUnit &predecessor, VPTOSUnit &successor,
+    VPTOSchedEdgeKind kind, VPTOSchedEdgeStrength strength, unsigned latency,
+    Twine reason, VPTOScheduleFailure &failure) const {
+  uint64_t edgeCount = dag.getEdges().size();
+  if (limits && edgeCount >= limits->maxEdges) {
+    uint64_t actual = edgeCount == std::numeric_limits<uint64_t>::max()
+                          ? edgeCount
+                          : edgeCount + 1;
+    failure = {VPTOScheduleFailureKind::Budget, "edges", actual,
+               limits->maxEdges, {}};
+    return mlir::failure();
+  }
+  if (failed(consumeWork(failure))) {
+    return mlir::failure();
+  }
+  dag.addEdge(predecessor, successor, kind, strength, latency, reason);
+  return success();
 }
 
 namespace {
@@ -117,11 +184,17 @@ static bool isPostUpdateAddress(const VPTOSUnit &producer, Value value) {
 
 } // namespace
 
-void VPTOSchedDAGBuilder::buildMemoryEdges(VPTOSchedDAG &dag) const {
+LogicalResult VPTOSchedDAGBuilder::buildMemoryEdges(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
   SmallVector<SmallVector<ResolvedMemoryAccess>> accesses;
   accesses.reserve(dag.getUnits().size());
-  for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits())
+  for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    if (failed(consumeWork(failure,
+                           unit->getSemantics().memoryAccesses.size()))) {
+      return mlir::failure();
+    }
     accesses.push_back(resolveMemoryAccesses(unit->getSemantics()));
+  }
 
   for (size_t successorIndex = 0; successorIndex < accesses.size();
        ++successorIndex) {
@@ -129,44 +202,70 @@ void VPTOSchedDAGBuilder::buildMemoryEdges(VPTOSchedDAG &dag) const {
       continue;
     for (size_t predecessorIndex = 0; predecessorIndex < successorIndex;
          ++predecessorIndex) {
-      bool ordered =
-          llvm::any_of(accesses[predecessorIndex],
-                       [&](const ResolvedMemoryAccess &predecessor) {
-                         return llvm::any_of(
-                             accesses[successorIndex],
-                             [&](const ResolvedMemoryAccess &successor) {
-                               return needsMemoryOrder(predecessor, successor);
-                             });
-                       });
+      if (failed(consumeWork(failure))) {
+        return mlir::failure();
+      }
+      bool ordered = false;
+      for (const ResolvedMemoryAccess &predecessor :
+           accesses[predecessorIndex]) {
+        for (const ResolvedMemoryAccess &successor :
+             accesses[successorIndex]) {
+          if (failed(consumeWork(failure))) {
+            return mlir::failure();
+          }
+          if (needsMemoryOrder(predecessor, successor)) {
+            ordered = true;
+            break;
+          }
+        }
+        if (ordered) {
+          break;
+        }
+      }
       if (!ordered)
         continue;
-      dag.addEdge(*dag.getUnits()[predecessorIndex],
-                  *dag.getUnits()[successorIndex], VPTOSchedEdgeKind::Memory,
-                  VPTOSchedEdgeStrength::Must,
-                  /*latency=*/0, "may-alias memory access in original order");
+      if (failed(addEdge(dag, *dag.getUnits()[predecessorIndex],
+                         *dag.getUnits()[successorIndex],
+                         VPTOSchedEdgeKind::Memory,
+                         VPTOSchedEdgeStrength::Must,
+                         /*latency=*/0,
+                         "may-alias memory access in original order",
+                         failure))) {
+        return mlir::failure();
+      }
     }
   }
+  return success();
 }
 
-void VPTOSchedDAGBuilder::buildImplicitAndSyncEdges(VPTOSchedDAG &dag) const {
+LogicalResult VPTOSchedDAGBuilder::buildImplicitAndSyncEdges(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
   llvm::StringMap<VPTOSUnit *> lastWrite;
   llvm::StringMap<SmallVector<VPTOSUnit *>> readsSinceWrite;
   VPTOSUnit *lastBarrier = nullptr;
 
   for (const std::unique_ptr<VPTOSUnit> &unitOwner : dag.getUnits()) {
     VPTOSUnit &unit = *unitOwner;
-    if (lastBarrier && lastBarrier != &unit)
-      dag.addEdge(*lastBarrier, unit, VPTOSchedEdgeKind::Sync,
-                  VPTOSchedEdgeStrength::Must, 0, "after scheduling barrier");
+    if (lastBarrier && lastBarrier != &unit &&
+        failed(addEdge(dag, *lastBarrier, unit, VPTOSchedEdgeKind::Sync,
+                       VPTOSchedEdgeStrength::Must, 0,
+                       "after scheduling barrier", failure))) {
+      return mlir::failure();
+    }
 
     for (const VPTOSchedulingEffect &effect : unit.getSemantics().effects) {
+      if (failed(consumeWork(failure))) {
+        return mlir::failure();
+      }
       if (effect.kind == VPTOSchedulingEffectKind::Barrier) {
         for (const std::unique_ptr<VPTOSUnit> &prior : dag.getUnits()) {
           if (prior->getOriginalIndex() >= unit.getOriginalIndex())
             break;
-          dag.addEdge(*prior, unit, VPTOSchedEdgeKind::Sync,
-                      VPTOSchedEdgeStrength::Must, 0,
-                      "before scheduling barrier");
+          if (failed(addEdge(dag, *prior, unit, VPTOSchedEdgeKind::Sync,
+                             VPTOSchedEdgeStrength::Must, 0,
+                             "before scheduling barrier", failure))) {
+            return mlir::failure();
+          }
         }
         lastBarrier = &unit;
         continue;
@@ -174,39 +273,77 @@ void VPTOSchedDAGBuilder::buildImplicitAndSyncEdges(VPTOSchedDAG &dag) const {
       if (effect.resource.empty())
         continue;
       if (effect.kind == VPTOSchedulingEffectKind::ImplicitRead) {
-        if (VPTOSUnit *writer = lastWrite.lookup(effect.resource))
-          dag.addEdge(*writer, unit, VPTOSchedEdgeKind::Data,
-                      VPTOSchedEdgeStrength::Must, 1,
-                      Twine("implicit read of ") + effect.resource);
+        if (VPTOSUnit *writer = lastWrite.lookup(effect.resource)) {
+          if (failed(addEdge(dag, *writer, unit, VPTOSchedEdgeKind::Data,
+                             VPTOSchedEdgeStrength::Must, 1,
+                             Twine("implicit read of ") + effect.resource,
+                             failure))) {
+            return mlir::failure();
+          }
+        }
         readsSinceWrite[effect.resource].push_back(&unit);
         continue;
       }
       if (effect.kind != VPTOSchedulingEffectKind::ImplicitWrite)
         continue;
-      if (VPTOSUnit *writer = lastWrite.lookup(effect.resource))
-        dag.addEdge(*writer, unit, VPTOSchedEdgeKind::Output,
-                    VPTOSchedEdgeStrength::Must, 0,
-                    Twine("implicit write of ") + effect.resource);
-      for (VPTOSUnit *reader : readsSinceWrite[effect.resource])
-        dag.addEdge(*reader, unit, VPTOSchedEdgeKind::Anti,
-                    VPTOSchedEdgeStrength::Must, 0,
-                    Twine("implicit anti-dependence on ") + effect.resource);
+      if (VPTOSUnit *writer = lastWrite.lookup(effect.resource)) {
+        if (failed(addEdge(dag, *writer, unit, VPTOSchedEdgeKind::Output,
+                           VPTOSchedEdgeStrength::Must, 0,
+                           Twine("implicit write of ") + effect.resource,
+                           failure))) {
+          return mlir::failure();
+        }
+      }
+      for (VPTOSUnit *reader : readsSinceWrite[effect.resource]) {
+        if (failed(addEdge(dag, *reader, unit, VPTOSchedEdgeKind::Anti,
+                           VPTOSchedEdgeStrength::Must, 0,
+                           Twine("implicit anti-dependence on ") +
+                               effect.resource,
+                           failure))) {
+          return mlir::failure();
+        }
+      }
       readsSinceWrite[effect.resource].clear();
       lastWrite[effect.resource] = &unit;
     }
   }
+  return success();
 }
 
-void VPTOSchedDAGBuilder::buildSSAEdges(VPTOSchedDAG &dag) const {
+LogicalResult VPTOSchedDAGBuilder::buildSSAEdges(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
+  DenseSet<Value> checkedLiveIns;
+  Operation *lastRegionOperation = dag.getRegion().operations.back();
   for (const std::unique_ptr<VPTOSUnit> &unitOwner : dag.getUnits()) {
     VPTOSUnit &unit = *unitOwner;
     Operation *op = unit.getOperation();
 
     for (auto [operandIndex, operand] : llvm::enumerate(op->getOperands())) {
+      if (failed(consumeWork(failure))) {
+        return mlir::failure();
+      }
       Operation *definingOp = operand.getDefiningOp();
       VPTOSUnit *predecessor = definingOp ? dag.lookup(definingOp) : nullptr;
       if (!predecessor) {
         dag.addLiveIn(operand);
+        if (!checkedLiveIns.insert(operand).second) {
+          continue;
+        }
+        for (Operation *user : operand.getUsers()) {
+          if (failed(consumeWork(failure))) {
+            return mlir::failure();
+          }
+          if (dag.lookup(user)) {
+            continue;
+          }
+          bool isInAnotherBlock = user->getBlock() != dag.getRegion().block;
+          bool isAfterRegion = !isInAnotherBlock &&
+                               lastRegionOperation->isBeforeInBlock(user);
+          if (isInAnotherBlock || isAfterRegion) {
+            dag.addLiveOut(operand);
+            break;
+          }
+        }
         continue;
       }
       unsigned latency =
@@ -217,33 +354,61 @@ void VPTOSchedDAGBuilder::buildSSAEdges(VPTOSchedDAG &dag) const {
                ? Twine("post-update address operand #") + Twine(operandIndex)
                : Twine("ssa operand #") + Twine(operandIndex))
               .str();
-      dag.addEdge(*predecessor, unit, VPTOSchedEdgeKind::Data,
-                  VPTOSchedEdgeStrength::Must, latency, reason);
+      if (failed(addEdge(dag, *predecessor, unit, VPTOSchedEdgeKind::Data,
+                         VPTOSchedEdgeStrength::Must, latency, reason,
+                         failure))) {
+        return mlir::failure();
+      }
     }
 
     for (Value result : op->getResults()) {
-      if (llvm::any_of(result.getUsers(),
-                       [&](Operation *user) { return !dag.lookup(user); }))
+      bool hasExternalUser = false;
+      for (Operation *user : result.getUsers()) {
+        if (failed(consumeWork(failure))) {
+          return mlir::failure();
+        }
+        if (!dag.lookup(user)) {
+          hasExternalUser = true;
+          break;
+        }
+      }
+      if (hasExternalUser) {
         dag.addLiveOut(result);
+      }
     }
   }
+  return success();
 }
 
-void VPTOSchedDAGBuilder::buildModelFallbackEdges(VPTOSchedDAG &dag) const {
+LogicalResult VPTOSchedDAGBuilder::buildModelFallbackEdges(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
   if (!model)
-    return;
+    return success();
   ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
   for (size_t index = 0; index < units.size(); ++index) {
+    if (failed(consumeWork(failure))) {
+      return mlir::failure();
+    }
     VPTOSUnit &unit = *units[index];
     if (model->getSchedClass(unit.getOperation()).known)
       continue;
-    if (index != 0)
-      dag.addEdge(*units[index - 1], unit, VPTOSchedEdgeKind::Artificial,
-                  VPTOSchedEdgeStrength::Must, 0,
-                  "unknown sched class preserves predecessor order");
-    if (index + 1 != units.size())
-      dag.addEdge(unit, *units[index + 1], VPTOSchedEdgeKind::Artificial,
-                  VPTOSchedEdgeStrength::Must, 0,
-                  "unknown sched class preserves successor order");
+    if (index != 0 &&
+        failed(addEdge(dag, *units[index - 1], unit,
+                       VPTOSchedEdgeKind::Artificial,
+                       VPTOSchedEdgeStrength::Must, 0,
+                       "unknown sched class preserves predecessor order",
+                       failure))) {
+      return mlir::failure();
+    }
+    if (index + 1 != units.size()) {
+      if (failed(addEdge(dag, unit, *units[index + 1],
+                         VPTOSchedEdgeKind::Artificial,
+                         VPTOSchedEdgeStrength::Must, 0,
+                         "unknown sched class preserves successor order",
+                         failure))) {
+        return mlir::failure();
+      }
+    }
   }
+  return success();
 }

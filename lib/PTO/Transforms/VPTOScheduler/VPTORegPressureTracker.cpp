@@ -121,8 +121,6 @@ void VPTORegPressureTracker::updateSummary(
       evaluation.projectedExcess[index] =
           std::max<int64_t>(0, evaluation.projected[index] -
                                    static_cast<int64_t>(*pressureSet.limit));
-    evaluation.weightedDelta +=
-        static_cast<double>(evaluation.delta[index]) * pressureSet.weight;
   }
 }
 

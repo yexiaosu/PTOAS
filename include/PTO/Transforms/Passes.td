@@ -1273,23 +1273,29 @@ def PTOValidateVPTOEmissionIR
 }
 
 def VPTOScheduler : Pass<"pto-vpto-scheduler", "ModuleOp"> {
-  let summary = "Analyze emission-ready VPTO scheduling regions";
+  let summary = "Analyze or schedule emission-ready VPTO regions";
   let description = [{
-    Builds block-local scheduling regions, typed dependency DAGs, target
-    resource timelines, and register-pressure summaries for operations inside
-    dedicated `pto.vecscope` and `pto.strict_vecscope` regions.
+    Builds block-local scheduling regions and typed dependency DAGs for
+    operations inside dedicated `pto.vecscope` and `pto.strict_vecscope`
+    regions.
     The target model supports A5 vector kernel modules only:
     normalized cube kernel modules are skipped, while modules without an
     explicit kernel kind remain available for standalone pass testing. The
     module must declare `pto.target_arch = "a5"` directly or inherit it from
     an enclosing module; a missing or different target is rejected.
-    `off` is an exact no-op. `analyze` emits a deterministic report without
-    mutating IR.
+    `off` is an exact no-op. `analyze` and `on` share region construction,
+    dependency DAG construction, coverage, and original-order pressure
+    analysis. `analyze` stops after that common prefix without mutating IR.
+    `on` additionally performs deterministic top-down list scheduling through
+    an injectable candidate strategy, followed by validation, replay, and
+    application of each verified result.
   }];
   let constructor = "mlir::pto::createVPTOSchedulerPass()";
   let options = [
     Option<"mode", "mode", "std::string", "\"off\"",
-           "Scheduler mode: off, analyze, or on">
+           "Scheduler mode: off, analyze, or on">,
+    Option<"trace", "trace", "bool", "false",
+           "Print detailed on-mode schedule results">
   ];
   let dependentDialects = ["mlir::func::FuncDialect",
                            "mlir::pto::PTODialect",

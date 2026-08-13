@@ -8,9 +8,10 @@
 
 //===- VPTOSchedBoundary.h - VPTO scheduling boundary ----------*- C++ -*-===//
 //
-// A boundary owns all direction-local scheduling state: ready queues, cycle,
-// resource reservations, register pressure, and hazard recognition. Top and
-// bottom boundaries share a DAG but never share mutable tracker state.
+// A boundary owns all direction-local scheduling state: dependency counts,
+// ready queues, logical cycles, register pressure, resource reservations, and
+// hazard recognition.  Boundaries read a shared DAG but never mutate it or
+// share tracker state, so scheduling and replay can each use a fresh boundary.
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,11 +22,12 @@
 
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <cstddef>
 #include <memory>
+#include <string>
 
 namespace mlir::pto {
 
@@ -35,6 +37,7 @@ class VPTOSchedModel;
 class VPTOResourceTracker;
 class VPTORegPressureTracker;
 class VPTOHazardRecognizer;
+class VPTOSchedulingBudget;
 
 struct VPTOPendingUnit {
   VPTOSUnit *unit = nullptr;
@@ -43,9 +46,9 @@ struct VPTOPendingUnit {
 
 class VPTOSchedBoundary {
 public:
-  VPTOSchedBoundary(VPTOSchedDAG &dag, const VPTOSchedModel &model,
+  VPTOSchedBoundary(const VPTOSchedDAG &dag, const VPTOSchedModel &model,
                     VPTOSchedDirection direction);
-  VPTOSchedBoundary(VPTOSchedDAG &dag, const VPTOSchedModel &model,
+  VPTOSchedBoundary(const VPTOSchedDAG &dag, const VPTOSchedModel &model,
                     VPTOSchedDirection direction,
                     std::unique_ptr<VPTOHazardRecognizer> hazardRecognizer);
   ~VPTOSchedBoundary();
@@ -53,9 +56,15 @@ public:
   VPTOSchedDirection getDirection() const { return direction; }
   unsigned getCurrentCycle() const { return currentCycle; }
   ArrayRef<VPTOSUnit *> getAvailable() const { return available; }
-  ArrayRef<VPTOPendingUnit> getPending() const { return pending; }
+  size_t getPendingCount() const { return pending.size(); }
+  /// Return the earliest pending event. The remaining heap layout is private.
+  const VPTOPendingUnit *getNextPending() const {
+    return pending.empty() ? nullptr : &pending.front();
+  }
   bool empty() const { return available.empty() && pending.empty(); }
-  bool isScheduled(VPTOSUnit *unit) const { return scheduled.contains(unit); }
+  bool isComplete() const { return scheduledCount == states.size(); }
+  bool isAvailable(const VPTOSUnit *unit) const;
+  bool isScheduled(const VPTOSUnit *unit) const;
 
   VPTOResourceTracker &getResourceTracker();
   const VPTOResourceTracker &getResourceTracker() const;
@@ -66,23 +75,38 @@ public:
 
   /// Move a dependency-ready unit to a future cycle.  Resource and hazard
   /// trackers use this without mutating DAG readiness.
-  LogicalResult defer(VPTOSUnit &unit, unsigned readyCycle);
+  LogicalResult defer(VPTOSUnit &unit, unsigned readyCycle,
+                      VPTOSchedulingBudget &budget);
 
   /// Advance to the earliest pending cycle and release all units ready there.
-  bool advanceToNextPendingCycle();
+  /// Returns false when no pending unit exists and failure when the shared
+  /// work-unit budget cannot pay for inspecting the pending queue.
+  FailureOr<bool> advanceToNextPendingCycle(VPTOSchedulingBudget &budget);
 
-  /// Commit an available unit and release newly dependency-ready neighbors.
-  LogicalResult commit(VPTOSUnit &unit);
+  /// Commit an available unit at the current cycle, update pressure, and
+  /// release or defer newly dependency-ready neighbors using edge latency.
+  /// Dependency traversal and queue work are paid before tracker or queue
+  /// state changes, so budget failure cannot leave a partial commit.
+  LogicalResult commit(VPTOSUnit &unit, unsigned issueCycle,
+                       VPTOSchedulingBudget &budget, std::string &detail);
 
 private:
+  enum class UnitState { Unavailable, Pending, Available, Scheduled };
+
   void insertAvailable(VPTOSUnit *unit);
+  void eraseAvailable(VPTOSUnit *unit);
+  void insertPending(VPTOSUnit *unit, unsigned readyCycle);
   void releasePending();
 
   VPTOSchedDirection direction;
   unsigned currentCycle = 0;
+  size_t scheduledCount = 0;
   SmallVector<VPTOSUnit *> available;
+  SmallVector<size_t> availablePositions;
   SmallVector<VPTOPendingUnit> pending;
-  DenseSet<VPTOSUnit *> scheduled;
+  SmallVector<unsigned> remainingDependencies;
+  SmallVector<unsigned> readyCycles;
+  SmallVector<UnitState> states;
   std::unique_ptr<VPTOResourceTracker> resourceTracker;
   std::unique_ptr<VPTORegPressureTracker> pressureTracker;
   std::unique_ptr<VPTOHazardRecognizer> hazardRecognizer;
