@@ -35,6 +35,8 @@ enum class ObjectEmissionDeviceTarget {
   Cube,
 };
 
+bool isBishengVecMISchedEnabled();
+
 class CANNToolchain {
 public:
   static std::optional<CANNToolchain> create(llvm::raw_ostream &diagOS);

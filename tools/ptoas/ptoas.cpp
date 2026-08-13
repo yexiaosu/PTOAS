@@ -496,6 +496,20 @@ static llvm::cl::opt<VPTOSchedulerCLIMode> vptoSchedulerMode(
         clEnumValN(VPTOSchedulerCLIMode::On, "on", "Run scheduler in on mode")),
     llvm::cl::init(VPTOSchedulerCLIMode::Off));
 
+static llvm::cl::opt<bool> vptoSchedulerTrace(
+    "vpto-scheduler-trace",
+    llvm::cl::desc("Print detailed VPTO on-mode scheduling results"),
+    llvm::cl::init(false));
+
+static VPTOSchedulerCLIMode
+getEffectiveVPTOSchedulerMode(llvm::StringRef arch) {
+  unsigned modeOccurrences = vptoSchedulerMode.getNumOccurrences();
+  if (modeOccurrences == 0) {
+    return arch == "a5" ? VPTOSchedulerCLIMode::On : VPTOSchedulerCLIMode::Off;
+  }
+  return vptoSchedulerMode;
+}
+
 static llvm::cl::opt<bool> enableInsertSync("enable-insert-sync",
                                             llvm::cl::desc("Enable automatic synchronization insertion pass"),
                                             llvm::cl::init(false));
@@ -3060,7 +3074,8 @@ static bool shouldDeclareVariablesAtTop(ModuleOp module) {
 
 static void appendVMISemanticPipeline(OpPassManager &pm);
 
-static void prepareVPTOForEmission(PassManager &pm) {
+static void prepareVPTOForEmission(PassManager &pm,
+                                   VPTOSchedulerCLIMode schedulerMode) {
   auto &kernelModulePM = pm.nest<ModuleOp>();
   // VPTO LLVM emission lowers pto.barrier to the backend barrier intrinsic.
   // A5 does not support a standalone PIPE_V barrier; vector barriers are either
@@ -3104,11 +3119,11 @@ static void prepareVPTOForEmission(PassManager &pm) {
   kernelModulePM.addPass(pto::createPTOInlineLibCallPass());
   kernelModulePM.addPass(createCanonicalizerPass());
   kernelModulePM.addPass(createCSEPass());
-  if (vptoSchedulerMode != VPTOSchedulerCLIMode::Off) {
+  if (schedulerMode != VPTOSchedulerCLIMode::Off) {
     pto::VPTOSchedulerOptions schedulerOptions;
-    schedulerOptions.mode = vptoSchedulerMode == VPTOSchedulerCLIMode::Analyze
-                                ? "analyze"
-                                : "on";
+    schedulerOptions.mode =
+        schedulerMode == VPTOSchedulerCLIMode::Analyze ? "analyze" : "on";
+    schedulerOptions.trace = vptoSchedulerTrace;
     kernelModulePM.addPass(pto::createVPTOSchedulerPass(schedulerOptions));
   }
   kernelModulePM.addPass(pto::createVPTOCombineReductionsPass());
@@ -3249,7 +3264,9 @@ static LogicalResult runVPTOBackendPipeline(OwningOpRef<ModuleOp> &module,
   kernelModulePM.addPass(std::make_unique<ApplySIMTEntryNoInlinePass>());
   kernelModulePM.addPass(createInlinerPass());
   appendVMISemanticPipeline(kernelModulePM);
-  prepareVPTOForEmission(pm);
+  VPTOSchedulerCLIMode schedulerMode = getEffectiveVPTOSchedulerMode(
+      resolveEffectiveTargetArch(*module, ptoTargetArch));
+  prepareVPTOForEmission(pm, schedulerMode);
   if (failed(applyConfiguredPassManagerCLOptions(
           pm, "VPTO unified emission pipeline")))
     return failure();
@@ -3309,6 +3326,7 @@ int mlir::pto::compilePTOASModule(
   }
 
   std::string arch = resolveEffectiveTargetArch(*module, context.getArch());
+  VPTOSchedulerCLIMode schedulerMode = getEffectiveVPTOSchedulerMode(arch);
 
   // Name-hint provenance: textual .pto inputs had their SSA/arg/block-arg names
   // attached to op Locations by the driver right after parsing. Collect the
@@ -3336,8 +3354,19 @@ int mlir::pto::compilePTOASModule(
     llvm::errs() << "Error: --enable-bufid_sync requires --pto-arch=a5.\n";
     return 1;
   }
-  if (vptoSchedulerMode != VPTOSchedulerCLIMode::Off && arch != "a5") {
+  if (schedulerMode != VPTOSchedulerCLIMode::Off && arch != "a5") {
     llvm::errs() << "Error: --vpto-scheduler requires --pto-arch=a5.\n";
+    return 1;
+  }
+  if (vptoSchedulerTrace && schedulerMode != VPTOSchedulerCLIMode::On) {
+    llvm::errs() << "Error: --vpto-scheduler-trace requires "
+                    "--vpto-scheduler=on.\n";
+    return 1;
+  }
+  if (schedulerMode == VPTOSchedulerCLIMode::On &&
+      pto::isBishengVecMISchedEnabled()) {
+    llvm::errs() << "Error: VPTO scheduler on mode conflicts with "
+                    "--enable-bisheng-vec-misched.\n";
     return 1;
   }
 

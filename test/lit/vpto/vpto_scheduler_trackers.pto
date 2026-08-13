@@ -17,3 +17,8 @@
 // CHECK-NEXT: pressure live-in-out-last-use: pass
 // CHECK-NEXT: pressure compare-select: grouped=3 interleaved=2
 // CHECK-NEXT: pressure bottom: pass
+// CHECK-NEXT: boundary independent-latency: pass
+// CHECK-NEXT: boundary fanout-budget-heap: pass
+// CHECK-NEXT: scheduler verify-replay: pass
+// CHECK-NEXT: scheduler semantic rejection: pass
+// CHECK-NEXT: scheduler budget: pass

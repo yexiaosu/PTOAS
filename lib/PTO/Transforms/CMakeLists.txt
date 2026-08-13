@@ -55,6 +55,8 @@ add_mlir_dialect_library(PTOTransforms
   VPTOScheduler/VPTOSchedModel.cpp
   VPTOScheduler/VPTOSchedRegion.cpp
   VPTOScheduler/VPTOSchedResourceTracker.cpp
+  VPTOScheduler/VPTOSchedStrategy.cpp
+  VPTOScheduler/VPTOScheduler.cpp
   VPTOScheduler/VPTOSchedulerPass.cpp
   PTOVPTOPtrBoundary.cpp
   VPTOBufferMaterialization.cpp

@@ -29,7 +29,7 @@
 // CHECK: edge=0->1 kind=memory strength=must latency=0 reason=may-alias memory access in original order
 
 // CHECK-LABEL: vpto-scheduler: function=post_update_address
-// CHECK: edge=1->2 kind=data strength=must latency=1 reason=post-update address operand #0
+// CHECK: edge=1->2 kind=data strength=must latency=0 reason=post-update address operand #0
 
 // CHECK-LABEL: vpto-scheduler: function=vpto_memory_barrier
 // CHECK-NOT: kind=memory
@@ -39,7 +39,7 @@
 // CHECK-NOT: kind=memory
 
 // CHECK-LABEL: vpto-scheduler: function=strict_vecscope
-// CHECK: op=pto.sprclr semantic=schedulable sched-class=vector known=true
+// CHECK: op=pto.sprclr semantic=schedulable sched-class=control-zero known=true
 // CHECK: coverage schedulable=1 structural=0 boundary=0 unsupported=0 unclassified=0
 
 module attributes {pto.target_arch = "a5"} {

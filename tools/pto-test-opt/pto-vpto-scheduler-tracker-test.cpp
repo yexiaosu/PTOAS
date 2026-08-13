@@ -12,6 +12,7 @@
 #include "PTO/Transforms/VPTOScheduler/VPTORegPressureTracker.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedResourceTracker.h"
+#include "PTO/Transforms/VPTOScheduler/VPTOScheduler.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -21,6 +22,8 @@
 #include "mlir/Parser/Parser.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -46,8 +49,8 @@ public:
         {DelayedResource, "delayed", 1, 0, {}},
     };
     pressureSets = {
-        {VectorPressure, "vector", std::nullopt, 1.0, 1.0},
-        {PredicatePressure, "predicate", 2, 2.0, 4.0},
+        {VectorPressure, "vector", 8, 1, 1},
+        {PredicatePressure, "predicate", 2, 2, 4},
     };
     schedClasses = {
         {0, "default", true, 1, 1, {}, {}},
@@ -254,15 +257,63 @@ module attributes {pto.target_arch = "a5"} {
     return failure();
 
   VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
   for (Operation &op : scope.getBody().front()) {
-    if (isa<VstsOp>(op))
+    if (isa<VstsOp>(op)) {
+      region.followingBoundary = &op;
       break;
+    }
     region.operations.push_back(&op);
   }
   VPTOSchedDAGBuilder builder(&model);
   FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
   if (failed(dag))
     return failure();
+  fixture.dag = std::move(*dag);
+  return fixture;
+}
+
+static FailureOr<PressureFixture>
+buildFanoutFixture(MLIRContext &context, const TrackerTestModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @fanout(%lhs: !pto.vreg<64xf32>,
+                    %rhs: !pto.vreg<64xf32>,
+                    %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %root = pto.vadd %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %a = pto.vadd %root, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %b = pto.vadd %root, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %c = pto.vadd %root, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}
+)mlir";
+
+  PressureFixture fixture;
+  fixture.module = parseModule(context, source);
+  if (!fixture.module) {
+    return failure();
+  }
+  VecScopeOp scope = findVecScope(*fixture.module);
+  if (!scope) {
+    return failure();
+  }
+
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (failed(dag)) {
+    return failure();
+  }
   fixture.dag = std::move(*dag);
   return fixture;
 }
@@ -286,8 +337,11 @@ static bool testPressureTracker(MLIRContext &context,
   if (!check(units.size() == 5, "pressure fixture unit count"))
     return false;
 
+  Value active = units[0]->getOperation()->getOperand(2);
   bool ok = check(dag.getLiveIns().size() == 3, "deduplicated live-ins") &&
-            check(dag.getLiveOuts().size() == 3, "live-outs");
+            check(dag.getLiveOuts().size() == 4, "live-through live-out") &&
+            check(llvm::is_contained(dag.getLiveOuts(), active),
+                  "live-in used after the region must remain live-out");
   VPTORegPressureTracker grouped(model, dag, VPTOSchedDirection::Top);
   ok &= check(grouped.getCurrent()[VectorPressure] == 2 &&
                   grouped.getCurrent()[PredicatePressure] == 1,
@@ -302,6 +356,9 @@ static bool testPressureTracker(MLIRContext &context,
   ok &= check(commitOrder(grouped, units, {3, 4}), "finish grouped order");
   ok &= check(grouped.getPeak()[PredicatePressure] == 3,
               "grouped compare/select predicate peak");
+  ok &= check(grouped.isLive(active) &&
+                  grouped.getCurrent()[PredicatePressure] == 1,
+              "top tracker must retain a live-through predicate");
   if (!ok)
     return false;
   llvm::outs() << "pressure live-in-out-last-use: pass\n";
@@ -317,11 +374,11 @@ static bool testPressureTracker(MLIRContext &context,
 
   VPTORegPressureTracker bottom(model, dag, VPTOSchedDirection::Bottom);
   ok = check(bottom.getCurrent()[VectorPressure] == 3 &&
-                 bottom.getCurrent()[PredicatePressure] == 0,
+                 bottom.getCurrent()[PredicatePressure] == 1,
              "bottom tracker initializes live-out pressure");
   VPTORegPressureEvaluation bottomFirst = bottom.evaluate(*units[4]);
   ok &= check(bottomFirst.delta[VectorPressure] == 1 &&
-                  bottomFirst.delta[PredicatePressure] == 1,
+                  bottomFirst.delta[PredicatePressure] == 0,
               "bottom candidate delta");
   ok &=
       check(commitOrder(bottom, units, {4, 3, 2, 1, 0}), "commit bottom order");
@@ -333,6 +390,172 @@ static bool testPressureTracker(MLIRContext &context,
   llvm::outs() << "pressure bottom: pass\n";
   return true;
 }
+
+static bool testBoundary(MLIRContext &context, const TrackerTestModel &model) {
+  FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
+  if (!check(succeeded(fixture), "cannot build boundary fixture")) {
+    return false;
+  }
+  VPTOSchedDAG &dag = *fixture->dag;
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
+  VPTOSchedBoundary top(dag, model, VPTOSchedDirection::Top);
+  VPTOSchedBoundary bottom(dag, model, VPTOSchedDirection::Bottom);
+  VPTOSchedulingBudget commitBudget(128);
+
+  bool ok = check(top.getAvailable().size() == 3,
+                  "top boundary initial availability") &&
+            check(bottom.getAvailable().size() == 3,
+                  "bottom boundary initial availability");
+  std::string detail;
+  ok &= check(succeeded(top.commit(*units[0], 0, commitBudget, detail)),
+              "top boundary commit");
+  ok &= check(top.isScheduled(units[0].get()) &&
+                  !bottom.isScheduled(units[0].get()),
+              "boundaries must not share dependency state");
+  const VPTOPendingUnit *nextPending = top.getNextPending();
+  ok &= check(top.getPendingCount() == 1 && nextPending &&
+                  nextPending->unit == units[2].get() &&
+                  nextPending->readyCycle == 1,
+              "boundary must defer a dependency by edge latency");
+
+  VPTOSchedulingBudget exhaustedBudget(0);
+  FailureOr<bool> exhaustedAdvance =
+      top.advanceToNextPendingCycle(exhaustedBudget);
+  ok &= check(failed(exhaustedAdvance) && top.getCurrentCycle() == 0 &&
+                  top.getPendingCount() == 1,
+              "boundary budget failure must not partially release pending");
+
+  VPTOSchedulingBudget budget(8);
+  FailureOr<bool> advanced = top.advanceToNextPendingCycle(budget);
+  ok &= check(succeeded(advanced) && *advanced && top.getCurrentCycle() == 1 &&
+                  llvm::is_contained(top.getAvailable(), units[2].get()),
+              "boundary must release pending nodes at their ready cycle");
+  if (ok) {
+    llvm::outs() << "boundary independent-latency: pass\n";
+  }
+  return ok;
+}
+
+static bool testBoundaryBudget(MLIRContext &context,
+                               const TrackerTestModel &model) {
+  FailureOr<PressureFixture> fixture = buildFanoutFixture(context, model);
+  if (!check(succeeded(fixture), "cannot build boundary budget fixture")) {
+    return false;
+  }
+  VPTOSchedDAG &dag = *fixture->dag;
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
+  bool hasExpectedFanout =
+      units.size() == 4 && units[0]->getSuccessors().size() == 3;
+  if (!check(hasExpectedFanout, "boundary budget fixture fanout")) {
+    return false;
+  }
+
+  VPTOSchedBoundary boundary(dag, model, VPTOSchedDirection::Top);
+  SmallVector<int64_t> pressureBefore(
+      boundary.getPressureTracker().getCurrent().begin(),
+      boundary.getPressureTracker().getCurrent().end());
+  VPTOSchedulingBudget exhaustedBudget(18);
+  std::string detail;
+  LogicalResult exhaustedCommit =
+      boundary.commit(*units[0], 0, exhaustedBudget, detail);
+  bool ok = check(failed(exhaustedCommit) && exhaustedBudget.hasExceeded(),
+                  "fanout commit must stop at the work budget");
+  ok &= check(boundary.isAvailable(units[0].get()) &&
+                  !boundary.isScheduled(units[0].get()) &&
+                  boundary.getPendingCount() == 0 &&
+                  llvm::equal(pressureBefore,
+                              boundary.getPressureTracker().getCurrent()),
+              "budget failure must not partially commit boundary state");
+
+  VPTOSchedulingBudget retryBudget(64);
+  detail.clear();
+  LogicalResult retryCommit =
+      boundary.commit(*units[0], 0, retryBudget, detail);
+  const VPTOPendingUnit *fanoutNext = boundary.getNextPending();
+  ok &= check(succeeded(retryCommit) && boundary.isScheduled(units[0].get()) &&
+                  boundary.getPendingCount() == 3 && fanoutNext &&
+                  fanoutNext->readyCycle == 1,
+              "fanout retry must build an earliest-cycle pending heap");
+
+  VPTOSchedulingBudget releaseFailureBudget(2);
+  FailureOr<bool> failedAdvance =
+      boundary.advanceToNextPendingCycle(releaseFailureBudget);
+  ok &= check(failed(failedAdvance) && releaseFailureBudget.hasExceeded() &&
+                  boundary.getCurrentCycle() == 0 &&
+                  boundary.getPendingCount() == 3,
+              "pending release budget failure must not mutate the heap");
+
+  VPTOSchedulingBudget releaseBudget(64);
+  FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(releaseBudget);
+  ok &= check(succeeded(advanced) && *advanced &&
+                  boundary.getCurrentCycle() == 1 &&
+                  boundary.getPendingCount() == 0 &&
+                  boundary.getAvailable().size() == 3,
+              "pending heap must release all earliest-cycle nodes");
+  if (ok) {
+    llvm::outs() << "boundary fanout-budget-heap: pass\n";
+  }
+  return ok;
+}
+
+static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
+  FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
+  if (!check(succeeded(fixture), "cannot build scheduler fixture")) {
+    return false;
+  }
+
+  VPTOSchedulerLimits limits;
+  limits.maxWorkUnits = 512;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure scheduleFailure;
+  VPTOScheduler scheduler(model, *fixture->dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(scheduleFailure);
+  bool ok = check(succeeded(result), "scheduler must produce a result");
+  ok &= check(succeeded(verifyVPTOScheduleResult(*fixture->dag, *result,
+                                                 scheduleFailure)),
+              "scheduler result semantic verification");
+  ok &= check(succeeded(replayVPTOScheduleResult(model, *fixture->dag, *result,
+                                                 budget, scheduleFailure)),
+              "scheduler result model replay");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "scheduler verify-replay: pass\n";
+
+  VPTOScheduleResult invalidResult = *result;
+  std::swap(invalidResult.entries.front(), invalidResult.entries.back());
+  VPTOScheduleFailure invalidFailure;
+  ok = check(failed(verifyVPTOScheduleResult(*fixture->dag, invalidResult,
+                                             invalidFailure)) &&
+                 invalidFailure.kind ==
+                     VPTOScheduleFailureKind::SemanticVerification,
+             "semantic verifier must reject a dependency violation");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "scheduler semantic rejection: pass\n";
+
+  FailureOr<PressureFixture> budgetFixture =
+      buildPressureFixture(context, model);
+  if (!check(succeeded(budgetFixture), "cannot build budget fixture")) {
+    return false;
+  }
+  VPTOSchedulerLimits smallLimits;
+  smallLimits.maxWorkUnits = 1;
+  VPTOSchedulingBudget smallBudget(smallLimits.maxWorkUnits);
+  VPTOScheduleFailure budgetFailure;
+  VPTOScheduler budgetScheduler(model, *budgetFixture->dag, smallLimits,
+                                smallBudget);
+  ok = check(failed(budgetScheduler.schedule(budgetFailure)) &&
+                 budgetFailure.kind == VPTOScheduleFailureKind::Budget &&
+                 budgetFailure.name == "work-units",
+             "scheduler must report the shared work-unit budget");
+  if (ok) {
+    llvm::outs() << "scheduler budget: pass\n";
+  }
+  return ok;
+}
+
 } // namespace
 
 int main() {
@@ -343,7 +566,9 @@ int main() {
 
   TrackerTestModel model;
   if (!testResourceTracker(context, model) ||
-      !testPressureTracker(context, model))
+      !testPressureTracker(context, model) || !testBoundary(context, model) ||
+      !testBoundaryBudget(context, model) || !testScheduler(context, model)) {
     return 1;
+  }
   return 0;
 }
