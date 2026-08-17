@@ -103,6 +103,7 @@ private:
 
 LogicalResult verifyVPTOScheduleResult(const VPTOSchedDAG &dag,
                                        const VPTOScheduleResult &result,
+                                       VPTOSchedulingBudget &budget,
                                        VPTOScheduleFailure &failure);
 
 LogicalResult replayVPTOScheduleResult(const VPTOSchedModel &model,
@@ -113,6 +114,7 @@ LogicalResult replayVPTOScheduleResult(const VPTOSchedModel &model,
 
 LogicalResult applyVPTOScheduleResult(const VPTOSchedDAG &dag,
                                       const VPTOScheduleResult &result,
+                                      VPTOSchedulingBudget &budget,
                                       VPTOScheduleFailure &failure);
 
 StringRef stringifyVPTOScheduleFailureKind(VPTOScheduleFailureKind kind);
