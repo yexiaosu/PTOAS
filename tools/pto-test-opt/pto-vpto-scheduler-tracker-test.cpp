@@ -578,7 +578,16 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
                 result->entries.front().direction == VPTOSchedDirection::Top &&
                 !result->entries.front().reason.empty(),
             "scheduler result must preserve decision direction and reason");
-  ok &= check(succeeded(verifyVPTOScheduleResult(*fixture->dag, *result,
+  VPTOSchedulingBudget exhaustedVerifierBudget(0);
+  VPTOScheduleFailure verifierBudgetFailure;
+  ok &=
+      check(failed(verifyVPTOScheduleResult(*fixture->dag, *result,
+                                            exhaustedVerifierBudget,
+                                            verifierBudgetFailure)) &&
+                verifierBudgetFailure.kind == VPTOScheduleFailureKind::Budget &&
+                verifierBudgetFailure.name == "work-units",
+            "semantic verifier must honor the shared work-unit budget");
+  ok &= check(succeeded(verifyVPTOScheduleResult(*fixture->dag, *result, budget,
                                                  scheduleFailure)),
               "scheduler result semantic verification");
   ok &= check(succeeded(replayVPTOScheduleResult(model, *fixture->dag, *result,
@@ -589,14 +598,33 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
   }
   llvm::outs() << "scheduler verify-replay: pass\n";
 
+  VPTOSchedulingBudget exhaustedApplyBudget(0);
+  VPTOScheduleFailure applyBudgetFailure;
+  ok = check(failed(applyVPTOScheduleResult(*fixture->dag, *result,
+                                            exhaustedApplyBudget,
+                                            applyBudgetFailure)) &&
+                 applyBudgetFailure.kind == VPTOScheduleFailureKind::Budget &&
+                 applyBudgetFailure.name == "work-units",
+             "apply must prepay node moves from the shared budget");
+  VPTOSchedulingBudget unchangedRegionBudget(128);
+  VPTOScheduleFailure unchangedRegionFailure;
+  ok &= check(succeeded(verifyVPTOScheduleResult(*fixture->dag, *result,
+                                                 unchangedRegionBudget,
+                                                 unchangedRegionFailure)),
+              "apply budget failure must not partially reorder the region");
+  if (!ok) {
+    return false;
+  }
+
   VPTOScheduleResult invalidResult = *result;
   std::swap(invalidResult.entries.front(), invalidResult.entries.back());
   VPTOScheduleFailure invalidFailure;
-  ok = check(failed(verifyVPTOScheduleResult(*fixture->dag, invalidResult,
-                                             invalidFailure)) &&
-                 invalidFailure.kind ==
-                     VPTOScheduleFailureKind::SemanticVerification,
-             "semantic verifier must reject a dependency violation");
+  VPTOSchedulingBudget invalidVerifierBudget(128);
+  ok = check(
+      failed(verifyVPTOScheduleResult(*fixture->dag, invalidResult,
+                                      invalidVerifierBudget, invalidFailure)) &&
+          invalidFailure.kind == VPTOScheduleFailureKind::SemanticVerification,
+      "semantic verifier must reject a dependency violation");
   if (!ok) {
     return false;
   }

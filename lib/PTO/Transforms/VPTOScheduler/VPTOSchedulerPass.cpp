@@ -247,7 +247,7 @@ static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
-  if (failed(verifyVPTOScheduleResult(dag, *result, failure))) {
+  if (failed(verifyVPTOScheduleResult(dag, *result, budget, failure))) {
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
@@ -255,7 +255,7 @@ static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
-  if (failed(applyVPTOScheduleResult(dag, *result, failure))) {
+  if (failed(applyVPTOScheduleResult(dag, *result, budget, failure))) {
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }

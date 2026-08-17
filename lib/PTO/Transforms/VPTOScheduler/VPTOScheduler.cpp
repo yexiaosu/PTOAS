@@ -182,11 +182,14 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
   return result;
 }
 
-LogicalResult
-mlir::pto::verifyVPTOScheduleResult(const VPTOSchedDAG &dag,
-                                    const VPTOScheduleResult &result,
-                                    VPTOScheduleFailure &failure) {
+LogicalResult mlir::pto::verifyVPTOScheduleResult(
+    const VPTOSchedDAG &dag, const VPTOScheduleResult &result,
+    VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
   const VPTOSchedRegion &region = dag.getRegion();
+  if (!budget.consume(region.operations.size())) {
+    setWorkBudgetFailure(failure, budget);
+    return mlir::failure();
+  }
   if (!regionIsStillContiguous(region)) {
     setFailure(failure, VPTOScheduleFailureKind::SemanticVerification,
                "region ownership or boundaries changed before apply");
@@ -202,6 +205,10 @@ mlir::pto::verifyVPTOScheduleResult(const VPTOSchedDAG &dag,
 
   DenseMap<const VPTOSUnit *, unsigned> positions;
   for (auto [index, entry] : llvm::enumerate(result.entries)) {
+    if (!budget.consume()) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
     bool belongsToRegion =
         entry.unit && entry.unit->getOperation()->getBlock() == region.block;
     bool inserted =
@@ -213,6 +220,10 @@ mlir::pto::verifyVPTOScheduleResult(const VPTOSchedDAG &dag,
     }
   }
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    if (!budget.consume()) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
     if (!positions.count(unit.get())) {
       setFailure(failure, VPTOScheduleFailureKind::SemanticVerification,
                  "schedule omits a region node");
@@ -220,6 +231,10 @@ mlir::pto::verifyVPTOScheduleResult(const VPTOSchedDAG &dag,
     }
   }
   for (const std::unique_ptr<VPTOSchedEdge> &edge : dag.getEdges()) {
+    if (!budget.consume()) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
     bool isMust = edge->isMust();
     unsigned predecessorPosition = positions.lookup(edge->getPredecessor());
     unsigned successorPosition = positions.lookup(edge->getSuccessor());
@@ -230,7 +245,15 @@ mlir::pto::verifyVPTOScheduleResult(const VPTOSchedDAG &dag,
     }
   }
   for (const VPTOScheduleEntry &entry : result.entries) {
+    if (!budget.consume()) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
     for (Value operand : entry.unit->getOperation()->getOperands()) {
+      if (!budget.consume()) {
+        setWorkBudgetFailure(failure, budget);
+        return mlir::failure();
+      }
       Operation *definingOp = operand.getDefiningOp();
       VPTOSUnit *definingUnit = definingOp ? dag.lookup(definingOp) : nullptr;
       if (definingUnit &&
@@ -297,12 +320,11 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
   return success();
 }
 
-LogicalResult
-mlir::pto::applyVPTOScheduleResult(const VPTOSchedDAG &dag,
-                                   const VPTOScheduleResult &result,
-                                   VPTOScheduleFailure &failure) {
-  if (failed(verifyVPTOScheduleResult(dag, result, failure))) {
-    failure.kind = VPTOScheduleFailureKind::Apply;
+LogicalResult mlir::pto::applyVPTOScheduleResult(
+    const VPTOSchedDAG &dag, const VPTOScheduleResult &result,
+    VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
+  if (!budget.consume(result.entries.size())) {
+    setWorkBudgetFailure(failure, budget);
     return mlir::failure();
   }
   const VPTOSchedRegion &region = dag.getRegion();
