@@ -22,3 +22,4 @@
 // CHECK-NEXT: scheduler verify-replay: pass
 // CHECK-NEXT: scheduler semantic rejection: pass
 // CHECK-NEXT: scheduler budget: pass
+// CHECK-NEXT: scheduler unbounded-pressure-delta: pass

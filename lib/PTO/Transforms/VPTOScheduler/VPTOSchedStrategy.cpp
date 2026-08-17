@@ -63,16 +63,20 @@ rankCandidate(const VPTOScheduleContext &context,
   RankedCandidate rank;
   rank.candidate = &candidate;
   for (auto [index, pressureSet] : llvm::enumerate(pressureSets)) {
-    if (!pressureSet.limit || pressureSet.weight < 0 ||
-        pressureSet.spillCost < 0 || context.currentPressure[index] < 0 ||
+    if (pressureSet.weight < 0 || pressureSet.spillCost < 0 ||
+        context.currentPressure[index] < 0 ||
         candidate.pressure.projectedExcess[index] < 0) {
       detail =
           "pressure set or candidate contains an invalid scoring parameter";
       return failure();
     }
-    int64_t currentExcess = std::max<int64_t>(
-        0, context.currentPressure[index] - *pressureSet.limit);
-    int64_t projectedExcess = candidate.pressure.projectedExcess[index];
+    int64_t currentExcess = 0;
+    int64_t projectedExcess = 0;
+    if (pressureSet.limit) {
+      currentExcess = std::max<int64_t>(0, context.currentPressure[index] -
+                                               *pressureSet.limit);
+      projectedExcess = candidate.pressure.projectedExcess[index];
+    }
     int64_t excessGrowth =
         std::max<int64_t>(0, projectedExcess - currentExcess);
     if (!checkedMultiplyAdd(pressureSet.spillCost, excessGrowth,
