@@ -34,11 +34,16 @@ enum ResourceID : unsigned {
   SharedResource,
   DelayedResource
 };
-enum PressureSetID : unsigned { VectorPressure, PredicatePressure };
+enum PressureSetID : unsigned {
+  VectorPressure,
+  PredicatePressure,
+  UnboundedPressure
+};
 
 class TrackerTestModel final : public VPTOSchedModel {
 public:
-  TrackerTestModel() {
+  explicit TrackerTestModel(bool trackUnboundedPressure = false)
+      : trackUnboundedPressure(trackUnboundedPressure) {
     machine.target = "test";
     machine.version = "tracker-test-v1";
     machine.issueWidth = 2;
@@ -52,6 +57,10 @@ public:
         {VectorPressure, "vector", 8, 1, 1},
         {PredicatePressure, "predicate", 2, 2, 4},
     };
+    if (trackUnboundedPressure) {
+      pressureSets.push_back(
+          {UnboundedPressure, "unbounded", std::nullopt, 4, 1});
+    }
     schedClasses = {
         {0, "default", true, 1, 1, {}, {}},
         {1, "two-units", true, 1, 1, {{MultiUnitResource, 0, 1, 2}}, {}},
@@ -84,16 +93,23 @@ public:
   }
   SmallVector<VPTORegPressureContribution>
   getPressure(Value value) const override {
-    if (!value)
+    if (!value) {
       return {};
-    if (isa<VRegType>(value.getType()))
+    }
+    if (isa<VRegType>(value.getType())) {
       return {{VectorPressure, 1}};
-    if (isa<MaskType>(value.getType()))
+    }
+    if (isa<MaskType>(value.getType())) {
       return {{PredicatePressure, 1}};
+    }
+    if (trackUnboundedPressure && value.getType().isIndex()) {
+      return {{UnboundedPressure, 1}};
+    }
     return {};
   }
 
 private:
+  bool trackUnboundedPressure;
   VPTOSchedMachineModel machine;
   SmallVector<VPTOSchedResource> resources;
   SmallVector<VPTORegPressureSet> pressureSets;
@@ -305,6 +321,52 @@ module attributes {pto.target_arch = "a5"} {
   region.block = &scope.getBody().front();
   for (Operation &op : scope.getBody().front()) {
     if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (failed(dag)) {
+    return failure();
+  }
+  fixture.dag = std::move(*dag);
+  return fixture;
+}
+
+static FailureOr<PressureFixture>
+buildUnboundedPressureFixture(MLIRContext &context,
+                              const TrackerTestModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @unbounded_pressure(%lhs: index, %rhs: index, %drop: index) {
+    pto.vecscope {
+      %grow = arith.addi %lhs, %rhs : index
+      %discard = arith.index_cast %drop : index to i64
+      %use0 = arith.addi %grow, %lhs : index
+      %use1 = arith.addi %use0, %rhs : index
+    }
+    return
+  }
+}
+)mlir";
+
+  PressureFixture fixture;
+  fixture.module = parseModule(context, source);
+  if (!fixture.module) {
+    return failure();
+  }
+  VecScopeOp scope = findVecScope(*fixture.module);
+  if (!scope) {
+    return failure();
+  }
+
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    bool hasTwoOperations = region.operations.size() == 2;
+    if (hasTwoOperations) {
+      region.followingBoundary = &op;
       break;
     }
     region.operations.push_back(&op);
@@ -556,6 +618,43 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
   return ok;
 }
 
+static bool testUnboundedPressureScheduling(MLIRContext &context) {
+  TrackerTestModel model(/*trackUnboundedPressure=*/true);
+  FailureOr<PressureFixture> fixture =
+      buildUnboundedPressureFixture(context, model);
+  if (!check(succeeded(fixture), "cannot build unbounded-pressure fixture")) {
+    return false;
+  }
+
+  VPTOSchedDAG &dag = *fixture->dag;
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
+  bool hasExpectedUnitCount = units.size() == 2;
+  if (!check(hasExpectedUnitCount, "unbounded-pressure fixture unit count")) {
+    return false;
+  }
+  VPTORegPressureTracker tracker(model, dag, VPTOSchedDirection::Top);
+  VPTORegPressureEvaluation grow = tracker.evaluate(*units[0]);
+  VPTORegPressureEvaluation drop = tracker.evaluate(*units[1]);
+  bool ok = check(grow.delta[UnboundedPressure] == 1 &&
+                      drop.delta[UnboundedPressure] == -1 &&
+                      grow.projectedExcess[UnboundedPressure] == 0 &&
+                      drop.projectedExcess[UnboundedPressure] == 0,
+                  "unbounded pressure must track delta without excess");
+
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  ok &= check(succeeded(result) && result->entries.size() == 2 &&
+                  result->entries.front().unit->getOriginalIndex() == 1,
+              "scheduler must use unbounded weighted pressure delta");
+  if (ok) {
+    llvm::outs() << "scheduler unbounded-pressure-delta: pass\n";
+  }
+  return ok;
+}
+
 } // namespace
 
 int main() {
@@ -567,7 +666,8 @@ int main() {
   TrackerTestModel model;
   if (!testResourceTracker(context, model) ||
       !testPressureTracker(context, model) || !testBoundary(context, model) ||
-      !testBoundaryBudget(context, model) || !testScheduler(context, model)) {
+      !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
+      !testUnboundedPressureScheduling(context)) {
     return 1;
   }
   return 0;
