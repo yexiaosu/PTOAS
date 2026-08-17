@@ -573,6 +573,11 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
   VPTOScheduler scheduler(model, *fixture->dag, limits, budget);
   FailureOr<VPTOScheduleResult> result = scheduler.schedule(scheduleFailure);
   bool ok = check(succeeded(result), "scheduler must produce a result");
+  ok &=
+      check(!result->entries.empty() &&
+                result->entries.front().direction == VPTOSchedDirection::Top &&
+                !result->entries.front().reason.empty(),
+            "scheduler result must preserve decision direction and reason");
   ok &= check(succeeded(verifyVPTOScheduleResult(*fixture->dag, *result,
                                                  scheduleFailure)),
               "scheduler result semantic verification");

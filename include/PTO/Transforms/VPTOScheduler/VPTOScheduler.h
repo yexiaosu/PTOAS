@@ -8,9 +8,10 @@
 
 //===- VPTOScheduler.h - VPTO list scheduler -------------------*- C++ -*-===//
 //
-// The scheduler returns an immutable permutation and logical issue cycles. It
-// never mutates IR. Callers must run semantic verification and a fresh model
-// replay before applying a result to its block-local scheduling region.
+// The scheduler returns an immutable permutation with scheduling direction,
+// logical issue cycles, and decision reasons. It never mutates IR. Callers
+// must run semantic verification and a fresh model replay before applying a
+// result to its block-local scheduling region.
 //
 //===----------------------------------------------------------------------===//
 
@@ -53,7 +54,9 @@ private:
 
 struct VPTOScheduleEntry {
   VPTOSUnit *unit = nullptr;
+  VPTOSchedDirection direction = VPTOSchedDirection::Top;
   unsigned issueCycle = 0;
+  std::string reason;
 };
 
 struct VPTOScheduleResult {

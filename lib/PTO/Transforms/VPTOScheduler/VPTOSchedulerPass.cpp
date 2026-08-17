@@ -184,6 +184,8 @@ static void printScheduleResult(llvm::raw_ostream &os, unsigned blockIndex,
        << " node=" << entry.unit->getId()
        << " original-index=" << entry.unit->getOriginalIndex()
        << " cycle=" << entry.issueCycle
+       << " direction=" << stringifyVPTOSchedDirection(entry.direction)
+       << " reason=" << entry.reason
        << " op=" << entry.unit->getOperation()->getName().getStringRef()
        << '\n';
   }
