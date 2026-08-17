@@ -35,15 +35,15 @@
 // TRACE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
 // TRACE: vpto-scheduler: pressure node=0
 // TRACE: vpto-scheduler: schedule-result block=0 region=0 nodes=6 work-units=155
-// TRACE: result-position=0 node=0 original-index=0 cycle=0 op=pto.vmax
-// TRACE-NEXT: vpto-scheduler: result-position=1 node=3 original-index=3 cycle=0 op=pto.vmax
-// TRACE-NEXT: vpto-scheduler: result-position=2 node=1 original-index=1 cycle=10 op=pto.vmin
-// TRACE-NEXT: vpto-scheduler: result-position=3 node=4 original-index=4 cycle=10 op=pto.vmin
-// TRACE-NEXT: vpto-scheduler: result-position=4 node=2 original-index=2 cycle=20 op=pto.vmax
-// TRACE-NEXT: vpto-scheduler: result-position=5 node=5 original-index=5 cycle=20 op=pto.vmax
+// TRACE: result-position=0 node=0 original-index=0 cycle=0 direction=top reason=earlier-original-order op=pto.vmax
+// TRACE-NEXT: vpto-scheduler: result-position=1 node=3 original-index=3 cycle=0 direction=top reason=only-candidate op=pto.vmax
+// TRACE-NEXT: vpto-scheduler: result-position=2 node=1 original-index=1 cycle=10 direction=top reason=lower-pressure-delta op=pto.vmin
+// TRACE-NEXT: vpto-scheduler: result-position=3 node=4 original-index=4 cycle=10 direction=top reason=only-candidate op=pto.vmin
+// TRACE-NEXT: vpto-scheduler: result-position=4 node=2 original-index=2 cycle=20 direction=top reason=earlier-original-order op=pto.vmax
+// TRACE-NEXT: vpto-scheduler: result-position=5 node=5 original-index=5 cycle=20 direction=top reason=only-candidate op=pto.vmax
 // TRACE: vpto-scheduler: function=pressure_tie mode=on
-// TRACE: result-position=2 node=3 original-index=3 cycle=10 op=pto.vsel
-// TRACE-NEXT: vpto-scheduler: result-position=3 node=2 original-index=2 cycle=10 op=pto.vcmp
+// TRACE: result-position=2 node=3 original-index=3 cycle=10 direction=top reason=lower-pressure-delta op=pto.vsel
+// TRACE-NEXT: vpto-scheduler: result-position=3 node=2 original-index=2 cycle=10 direction=top reason=only-candidate op=pto.vcmp
 
 // ANALYZE: vpto-scheduler: function=aabbcc mode=analyze target=a5 model=generic-a5-v1
 // ANALYZE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
