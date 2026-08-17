@@ -173,7 +173,8 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
       setFailure(failure, VPTOScheduleFailureKind::Scheduling, detail);
       return mlir::failure();
     }
-    result.entries.push_back({decision->unit, decision->issueCycle});
+    result.entries.push_back({decision->unit, decision->direction,
+                              decision->issueCycle, decision->reason});
   }
 
   ArrayRef<int64_t> peakPressure = boundary.getPressureTracker().getPeak();
@@ -266,10 +267,12 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
       }
     }
     bool isCandidate = boundary.isAvailable(entry.unit);
+    bool hasRecordedDirection = entry.direction == boundary.getDirection();
     bool hasRecordedCycle = entry.issueCycle == boundary.getCurrentCycle();
-    if (!isCandidate || !hasRecordedCycle) {
+    if (!isCandidate || !hasRecordedDirection || !hasRecordedCycle) {
       setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
-                 "recorded node is not dependency-ready at its issue cycle");
+                 "recorded node is not dependency-ready in its direction and "
+                 "issue cycle");
       return mlir::failure();
     }
     std::string detail;
