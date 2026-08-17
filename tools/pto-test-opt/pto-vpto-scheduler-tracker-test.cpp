@@ -20,10 +20,15 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -688,6 +693,683 @@ static bool testUnboundedPressureScheduling(MLIRContext &context) {
   return ok;
 }
 
+struct RandomDAGEdgeSpec {
+  unsigned predecessor = 0;
+  unsigned successor = 0;
+  unsigned latency = 0;
+};
+
+struct RandomDAGNodeSpec {
+  std::array<int, 2> operandSources = {-1, -2};
+};
+
+struct RandomDAGSpec {
+  uint32_t seed = 0;
+  SmallVector<RandomDAGNodeSpec> nodes;
+  SmallVector<RandomDAGEdgeSpec> edges;
+};
+
+class StableRandom final {
+public:
+  explicit StableRandom(uint32_t seed) : state(seed ? seed : 1) {}
+
+  uint32_t next(uint32_t bound) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return bound == 0 ? 0 : state % bound;
+  }
+
+private:
+  uint32_t state;
+};
+
+static bool hasEdge(const RandomDAGSpec &spec, unsigned predecessor,
+                    unsigned successor) {
+  return llvm::any_of(spec.edges, [&](const RandomDAGEdgeSpec &edge) {
+    return edge.predecessor == predecessor && edge.successor == successor;
+  });
+}
+
+static void addRandomDAGEdge(RandomDAGSpec &spec, unsigned predecessor,
+                             unsigned successor, unsigned latency) {
+  if (!hasEdge(spec, predecessor, successor)) {
+    spec.edges.push_back({predecessor, successor, latency});
+  }
+}
+
+static void assignRandomDAGOperands(RandomDAGSpec &spec) {
+  for (auto [nodeIndex, node] : llvm::enumerate(spec.nodes)) {
+    SmallVector<unsigned, 2> predecessors;
+    for (const RandomDAGEdgeSpec &edge : spec.edges) {
+      bool isOperandPredecessor =
+          edge.successor == nodeIndex && predecessors.size() < 2;
+      if (isOperandPredecessor) {
+        predecessors.push_back(edge.predecessor);
+      }
+    }
+    if (!predecessors.empty()) {
+      node.operandSources[0] = static_cast<int>(predecessors[0]);
+    }
+    bool hasTwoPredecessors = predecessors.size() == 2;
+    if (hasTwoPredecessors) {
+      node.operandSources[1] = static_cast<int>(predecessors[1]);
+    }
+  }
+}
+
+static RandomDAGSpec generateRandomDAGSpec(uint32_t seed) {
+  static constexpr size_t maxEdges = 24;
+  StableRandom random(seed);
+  RandomDAGSpec spec;
+  spec.seed = seed;
+  spec.nodes.resize(11 + random.next(3));
+
+  // Node 0 stays isolated. The remaining fixed edges embed a chain, fan-out,
+  // fan-in, diamond, and multi-layer paths before random forward edges are
+  // added in original-index topological order.
+  addRandomDAGEdge(spec, 1, 2, 1);
+  addRandomDAGEdge(spec, 2, 3, 2);
+  addRandomDAGEdge(spec, 1, 4, 1);
+  addRandomDAGEdge(spec, 1, 5, 1);
+  addRandomDAGEdge(spec, 4, 6, 0);
+  addRandomDAGEdge(spec, 5, 6, 3);
+  addRandomDAGEdge(spec, 2, 7, 1);
+  addRandomDAGEdge(spec, 2, 8, 1);
+  addRandomDAGEdge(spec, 7, 9, 2);
+  addRandomDAGEdge(spec, 8, 9, 1);
+  addRandomDAGEdge(spec, 6, 10, 1);
+  addRandomDAGEdge(spec, 9, 10, 0);
+
+  for (unsigned successor = 2; successor < spec.nodes.size(); ++successor) {
+    for (unsigned predecessor = 1; predecessor < successor; ++predecessor) {
+      bool atEdgeLimit = spec.edges.size() == maxEdges;
+      if (atEdgeLimit) {
+        break;
+      }
+      bool chooseEdge = random.next(5) == 0;
+      if (chooseEdge) {
+        addRandomDAGEdge(spec, predecessor, successor, random.next(4));
+      }
+    }
+  }
+  assignRandomDAGOperands(spec);
+  return spec;
+}
+
+static void printRandomDAGSpec(raw_ostream &os, const RandomDAGSpec &spec) {
+  os << "seed=" << spec.seed << " nodes=" << spec.nodes.size() << " [";
+  for (auto [index, node] : llvm::enumerate(spec.nodes)) {
+    if (index != 0) {
+      os << ", ";
+    }
+    os << 'n' << index << '(';
+    for (unsigned operandIndex = 0; operandIndex < 2; ++operandIndex) {
+      if (operandIndex != 0) {
+        os << ',';
+      }
+      int source = node.operandSources[operandIndex];
+      if (source >= 0) {
+        os << 'n' << source;
+      } else {
+        os << "arg" << (-source - 1);
+      }
+    }
+    os << ')';
+  }
+  os << "] edges=[";
+  for (auto [index, edge] : llvm::enumerate(spec.edges)) {
+    if (index != 0) {
+      os << ", ";
+    }
+    os << 'n' << edge.predecessor << "->n" << edge.successor << '@'
+       << edge.latency;
+  }
+  os << "] pressure=index:1\n";
+}
+
+static bool checkRandom(bool condition, const RandomDAGSpec &spec,
+                        const Twine &message) {
+  if (condition) {
+    return true;
+  }
+  llvm::errs() << "FAIL: random DAG " << message << '\n';
+  printRandomDAGSpec(llvm::errs(), spec);
+  return false;
+}
+
+struct RandomDAGFixture {
+  OwningOpRef<ModuleOp> module;
+  std::unique_ptr<VPTOSchedDAG> dag;
+};
+
+static std::string getRandomDAGOperandName(int source) {
+  if (source >= 0) {
+    return (Twine("%n") + Twine(source)).str();
+  }
+  return (Twine("%arg") + Twine(-source - 1)).str();
+}
+
+static FailureOr<RandomDAGFixture>
+buildRandomDAGFixture(MLIRContext &context, const RandomDAGSpec &spec) {
+  std::string source;
+  llvm::raw_string_ostream os(source);
+  os << "module {\n  func.func @random_dag(%arg0: index, %arg1: index) {\n";
+  for (auto [index, node] : llvm::enumerate(spec.nodes)) {
+    os << "    %n" << index << " = arith.addi "
+       << getRandomDAGOperandName(node.operandSources[0]) << ", "
+       << getRandomDAGOperandName(node.operandSources[1]) << " : index\n";
+  }
+  os << "    return\n  }\n}\n";
+  os.flush();
+
+  RandomDAGFixture fixture;
+  fixture.module = parseModule(context, source);
+  if (!fixture.module) {
+    return failure();
+  }
+  func::FuncOp function =
+      fixture.module->lookupSymbol<func::FuncOp>("random_dag");
+  if (!function) {
+    return failure();
+  }
+  Block &block = function.getBody().front();
+  VPTOSchedRegion region;
+  region.block = &block;
+  for (Operation &op : block) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      region.followingBoundary = &op;
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  bool hasExpectedNodeCount = region.operations.size() == spec.nodes.size();
+  if (!hasExpectedNodeCount) {
+    return failure();
+  }
+
+  fixture.dag = std::make_unique<VPTOSchedDAG>(region);
+  fixture.dag->addLiveIn(block.getArgument(0));
+  fixture.dag->addLiveIn(block.getArgument(1));
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = fixture.dag->getUnits();
+  for (const RandomDAGEdgeSpec &edge : spec.edges) {
+    bool invalidEdge = edge.predecessor >= units.size() ||
+                       edge.successor >= units.size() ||
+                       edge.predecessor >= edge.successor;
+    if (invalidEdge) {
+      return failure();
+    }
+    fixture.dag->addEdge(*units[edge.predecessor], *units[edge.successor],
+                         VPTOSchedEdgeKind::Data, VPTOSchedEdgeStrength::Must,
+                         edge.latency, "random-dag differential edge");
+  }
+  if (failed(fixture.dag->computeCriticalPaths())) {
+    return failure();
+  }
+  fixture.dag->resetDependencyCounts();
+  return fixture;
+}
+
+static bool verifyPermutationOracle(const VPTOSchedDAG &dag,
+                                    const VPTOScheduleResult &result) {
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
+  bool resultIsComplete = result.entries.size() == units.size();
+  if (!resultIsComplete) {
+    return false;
+  }
+  SmallVector<bool> seen(units.size(), false);
+  for (const VPTOScheduleEntry &entry : result.entries) {
+    bool invalidEntry = !entry.unit || entry.unit->getId() >= units.size();
+    if (!invalidEntry) {
+      invalidEntry = units[entry.unit->getId()].get() != entry.unit ||
+                     seen[entry.unit->getId()];
+    }
+    if (invalidEntry) {
+      return false;
+    }
+    seen[entry.unit->getId()] = true;
+  }
+  return llvm::all_of(seen, [](bool value) { return value; });
+}
+
+static SmallVector<unsigned>
+getSchedulePositions(const VPTOSchedDAG &dag,
+                     const VPTOScheduleResult &result) {
+  SmallVector<unsigned> positions(dag.getUnits().size(),
+                                  std::numeric_limits<unsigned>::max());
+  for (auto [position, entry] : llvm::enumerate(result.entries)) {
+    bool hasKnownPosition =
+        entry.unit && entry.unit->getId() < positions.size();
+    if (hasKnownPosition) {
+      positions[entry.unit->getId()] = static_cast<unsigned>(position);
+    }
+  }
+  return positions;
+}
+
+static bool verifyMustEdgesOracle(const VPTOSchedDAG &dag,
+                                  const VPTOScheduleResult &result) {
+  SmallVector<unsigned> positions = getSchedulePositions(dag, result);
+  for (const std::unique_ptr<VPTOSchedEdge> &edge : dag.getEdges()) {
+    bool violatesMustEdge =
+        edge->isMust() && positions[edge->getPredecessor()->getId()] >=
+                              positions[edge->getSuccessor()->getId()];
+    if (violatesMustEdge) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool verifyReadyCyclesOracle(const VPTOSchedDAG &dag,
+                                    const VPTOScheduleResult &result) {
+  SmallVector<unsigned> cycles(dag.getUnits().size(), 0);
+  SmallVector<bool> scheduled(dag.getUnits().size(), false);
+  for (const VPTOScheduleEntry &entry : result.entries) {
+    unsigned readyCycle = 0;
+    for (VPTOSchedEdge *edge : entry.unit->getPredecessors()) {
+      if (!edge->isMust()) {
+        continue;
+      }
+      if (!scheduled[edge->getPredecessor()->getId()]) {
+        return false;
+      }
+      uint64_t edgeReady =
+          static_cast<uint64_t>(cycles[edge->getPredecessor()->getId()]) +
+          edge->getLatency();
+      if (edgeReady > std::numeric_limits<unsigned>::max()) {
+        return false;
+      }
+      readyCycle = std::max(readyCycle, static_cast<unsigned>(edgeReady));
+    }
+    if (entry.issueCycle < readyCycle) {
+      return false;
+    }
+    cycles[entry.unit->getId()] = entry.issueCycle;
+    scheduled[entry.unit->getId()] = true;
+  }
+  return true;
+}
+
+static bool needsRandomDAGLiveness(const VPTOSchedDAG &dag, Value value) {
+  return llvm::any_of(value.getUsers(),
+                      [&](Operation *user) { return dag.lookup(user); });
+}
+
+struct PressureOracleResult {
+  SmallVector<SmallVector<int64_t>> currentAfter;
+  SmallVector<int64_t> peak;
+  SmallVector<int64_t> deltas;
+  bool valid = true;
+};
+
+static PressureOracleResult
+computePressureOracle(const VPTOSchedDAG &dag,
+                      const VPTOScheduleResult &result) {
+  llvm::DenseMap<Value, unsigned> remainingUses;
+  llvm::DenseSet<Value> liveValues;
+  int64_t current = 0;
+  for (Value liveIn : dag.getLiveIns()) {
+    if (liveValues.insert(liveIn).second && liveIn.getType().isIndex()) {
+      ++current;
+    }
+  }
+  for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    for (Value operand : unit->getOperation()->getOperands()) {
+      ++remainingUses[operand];
+    }
+  }
+
+  PressureOracleResult oracle;
+  oracle.peak = {0, 0, current};
+  for (const VPTOScheduleEntry &entry : result.entries) {
+    llvm::DenseMap<Value, unsigned> candidateUses;
+    for (Value operand : entry.unit->getOperation()->getOperands()) {
+      ++candidateUses[operand];
+    }
+    int64_t delta = 0;
+    for (const auto &use : candidateUses) {
+      bool isLastUse = liveValues.contains(use.first) &&
+                       remainingUses.lookup(use.first) == use.second &&
+                       use.first.getType().isIndex();
+      if (isLastUse) {
+        --delta;
+      }
+    }
+    for (Value value : entry.unit->getOperation()->getResults()) {
+      bool needsResult = !liveValues.contains(value) &&
+                         needsRandomDAGLiveness(dag, value) &&
+                         value.getType().isIndex();
+      if (needsResult) {
+        ++delta;
+      }
+    }
+
+    current += delta;
+    if (current < 0) {
+      oracle.valid = false;
+      return oracle;
+    }
+    oracle.peak[UnboundedPressure] =
+        std::max(oracle.peak[UnboundedPressure], current);
+    oracle.deltas.push_back(delta);
+    oracle.currentAfter.push_back({0, 0, current});
+    for (Value operand : entry.unit->getOperation()->getOperands()) {
+      auto found = remainingUses.find(operand);
+      bool invalidUseCount = found == remainingUses.end() || found->second == 0;
+      if (invalidUseCount) {
+        oracle.valid = false;
+        return oracle;
+      }
+      --found->second;
+      if (found->second == 0) {
+        liveValues.erase(operand);
+      }
+    }
+    for (Value value : entry.unit->getOperation()->getResults()) {
+      if (needsRandomDAGLiveness(dag, value)) {
+        liveValues.insert(value);
+      }
+    }
+  }
+  return oracle;
+}
+
+static bool verifyPressureOracle(const TrackerTestModel &model,
+                                 const VPTOSchedDAG &dag,
+                                 const VPTOScheduleResult &result) {
+  // This oracle derives liveness directly from SSA uses and index types. It
+  // deliberately does not call Boundary, replay, or model pressure queries.
+  PressureOracleResult oracle = computePressureOracle(dag, result);
+  if (!oracle.valid || !llvm::equal(oracle.peak, result.peakPressure)) {
+    return false;
+  }
+  llvm::SmallDenseSet<int64_t, 8> distinctDeltas(oracle.deltas.begin(),
+                                                 oracle.deltas.end());
+  bool hasVariedDeltas = distinctDeltas.size() >= 2;
+  if (!hasVariedDeltas) {
+    return false;
+  }
+  VPTORegPressureTracker tracker(model, dag, VPTOSchedDirection::Top);
+  for (auto [index, entry] : llvm::enumerate(result.entries)) {
+    LogicalResult committed = tracker.commit(*entry.unit);
+    bool commitSucceeded = succeeded(committed);
+    bool currentMatches =
+        llvm::equal(tracker.getCurrent(), oracle.currentAfter[index]);
+    if (!commitSucceeded || !currentMatches) {
+      return false;
+    }
+  }
+  return llvm::equal(tracker.getPeak(), oracle.peak);
+}
+
+static bool hasValidDecisionMetadata(const VPTOScheduleResult &result) {
+  static constexpr std::array<StringLiteral, 7> reasons = {
+      "lower-excess-growth",    "lower-projected-excess",
+      "longer-critical-path",   "lower-pressure-delta",
+      "earlier-original-order", "stable-candidate-order",
+      "only-candidate"};
+  return llvm::all_of(result.entries, [&](const VPTOScheduleEntry &entry) {
+    return entry.direction == VPTOSchedDirection::Top &&
+           llvm::is_contained(reasons, entry.reason);
+  });
+}
+
+static bool schedulesMatch(const VPTOScheduleResult &lhs,
+                           const VPTOScheduleResult &rhs) {
+  bool summaryMatches = lhs.entries.size() == rhs.entries.size() &&
+                        llvm::equal(lhs.peakPressure, rhs.peakPressure);
+  if (!summaryMatches) {
+    return false;
+  }
+  return llvm::all_of(llvm::zip(lhs.entries, rhs.entries), [](auto entries) {
+    const VPTOScheduleEntry &left = std::get<0>(entries);
+    const VPTOScheduleEntry &right = std::get<1>(entries);
+    return left.unit == right.unit && left.direction == right.direction &&
+           left.issueCycle == right.issueCycle && left.reason == right.reason;
+  });
+}
+
+static bool verifierRejects(const VPTOSchedDAG &dag,
+                            const VPTOScheduleResult &result) {
+  VPTOSchedulingBudget budget(1ULL << 20);
+  VPTOScheduleFailure failure;
+  return failed(verifyVPTOScheduleResult(dag, result, budget, failure)) &&
+         failure.kind == VPTOScheduleFailureKind::SemanticVerification;
+}
+
+static bool replayRejects(const TrackerTestModel &model,
+                          const VPTOSchedDAG &dag,
+                          const VPTOScheduleResult &result) {
+  VPTOSchedulingBudget budget(1ULL << 20);
+  VPTOScheduleFailure failure;
+  return failed(
+             replayVPTOScheduleResult(model, dag, result, budget, failure)) &&
+         failure.kind == VPTOScheduleFailureKind::ModelReplay;
+}
+
+static SmallVector<Operation *>
+getCurrentRandomDAGOrder(const VPTOSchedDAG &dag) {
+  SmallVector<Operation *> order;
+  for (Operation &op : *dag.getRegion().block) {
+    if (dag.lookup(&op)) {
+      order.push_back(&op);
+    }
+  }
+  return order;
+}
+
+static bool hasOriginalRandomDAGOrder(const VPTOSchedDAG &dag) {
+  return llvm::equal(getCurrentRandomDAGOrder(dag), dag.getRegion().operations);
+}
+
+static bool verifyRandomDAGMutations(MLIRContext &context,
+                                     const TrackerTestModel &model,
+                                     const RandomDAGSpec &spec,
+                                     RandomDAGFixture &fixture,
+                                     const VPTOScheduleResult &result) {
+  bool hasCompleteSummary =
+      !result.entries.empty() && result.peakPressure.size() > UnboundedPressure;
+  if (!hasCompleteSummary) {
+    return false;
+  }
+  VPTOScheduleResult mutated = result;
+  mutated.entries.pop_back();
+  bool ok = verifierRejects(*fixture.dag, mutated);
+
+  mutated = result;
+  mutated.entries.back() = mutated.entries.front();
+  ok &= verifierRejects(*fixture.dag, mutated);
+
+  mutated = result;
+  mutated.entries.front().unit = nullptr;
+  ok &= verifierRejects(*fixture.dag, mutated);
+
+  FailureOr<RandomDAGFixture> foreignFixture =
+      buildRandomDAGFixture(context, spec);
+  if (failed(foreignFixture)) {
+    return false;
+  }
+  mutated = result;
+  mutated.entries.front().unit = foreignFixture->dag->getUnits().front().get();
+  ok &= verifierRejects(*fixture.dag, mutated);
+
+  SmallVector<unsigned> positions = getSchedulePositions(*fixture.dag, result);
+  const VPTOSchedEdge &edge = *fixture.dag->getEdges().front();
+  mutated = result;
+  std::swap(mutated.entries[positions[edge.getPredecessor()->getId()]],
+            mutated.entries[positions[edge.getSuccessor()->getId()]]);
+  ok &= verifierRejects(*fixture.dag, mutated);
+
+  mutated = result;
+  if (mutated.entries.back().issueCycle ==
+      std::numeric_limits<unsigned>::max()) {
+    return false;
+  }
+  ++mutated.entries.back().issueCycle;
+  ok &= replayRejects(model, *fixture.dag, mutated);
+
+  mutated = result;
+  mutated.entries.front().direction = VPTOSchedDirection::Bottom;
+  ok &= replayRejects(model, *fixture.dag, mutated);
+
+  mutated = result;
+  if (mutated.peakPressure[UnboundedPressure] ==
+      std::numeric_limits<int64_t>::max()) {
+    return false;
+  }
+  ++mutated.peakPressure[UnboundedPressure];
+  ok &= replayRejects(model, *fixture.dag, mutated);
+  return ok && hasOriginalRandomDAGOrder(*fixture.dag);
+}
+
+static bool verifyRandomDAGBudgets(const TrackerTestModel &model,
+                                   RandomDAGFixture &fixture,
+                                   const VPTOSchedulerLimits &limits,
+                                   const VPTOScheduleResult &result,
+                                   uint64_t scheduleWork) {
+  if (scheduleWork == 0 || result.entries.empty()) {
+    return false;
+  }
+  VPTOSchedulingBudget exactScheduleBudget(scheduleWork);
+  VPTOScheduleFailure failure;
+  VPTOScheduler exactScheduler(model, *fixture.dag, limits,
+                               exactScheduleBudget);
+  FailureOr<VPTOScheduleResult> exactResult = exactScheduler.schedule(failure);
+  bool ok = succeeded(exactResult) && schedulesMatch(result, *exactResult);
+
+  std::array<uint64_t, 3> smallBudgets = {0, scheduleWork / 2,
+                                          scheduleWork - 1};
+  for (uint64_t limit : smallBudgets) {
+    VPTOSchedulingBudget smallBudget(limit);
+    VPTOScheduleFailure budgetFailure;
+    VPTOScheduler scheduler(model, *fixture.dag, limits, smallBudget);
+    ok &= failed(scheduler.schedule(budgetFailure)) &&
+          budgetFailure.kind == VPTOScheduleFailureKind::Budget &&
+          hasOriginalRandomDAGOrder(*fixture.dag);
+  }
+
+  VPTOSchedulingBudget verifierMeasure(1ULL << 20);
+  VPTOScheduleFailure verifierFailure;
+  ok &= succeeded(verifyVPTOScheduleResult(*fixture.dag, result,
+                                           verifierMeasure, verifierFailure));
+  uint64_t verifierWork = verifierMeasure.getUsed();
+  if (verifierWork == 0) {
+    return false;
+  }
+  VPTOSchedulingBudget verifierExact(verifierWork);
+  ok &= succeeded(verifyVPTOScheduleResult(*fixture.dag, result, verifierExact,
+                                           verifierFailure));
+  VPTOSchedulingBudget verifierShort(verifierWork - 1);
+  ok &= failed(verifyVPTOScheduleResult(*fixture.dag, result, verifierShort,
+                                        verifierFailure)) &&
+        verifierFailure.kind == VPTOScheduleFailureKind::Budget &&
+        hasOriginalRandomDAGOrder(*fixture.dag);
+
+  VPTOSchedulingBudget replayMeasure(1ULL << 20);
+  VPTOScheduleFailure replayFailure;
+  ok &= succeeded(replayVPTOScheduleResult(model, *fixture.dag, result,
+                                           replayMeasure, replayFailure));
+  uint64_t replayWork = replayMeasure.getUsed();
+  if (replayWork == 0) {
+    return false;
+  }
+  VPTOSchedulingBudget replayExact(replayWork);
+  ok &= succeeded(replayVPTOScheduleResult(model, *fixture.dag, result,
+                                           replayExact, replayFailure));
+  VPTOSchedulingBudget replayShort(replayWork - 1);
+  ok &= failed(replayVPTOScheduleResult(model, *fixture.dag, result,
+                                        replayShort, replayFailure)) &&
+        replayFailure.kind == VPTOScheduleFailureKind::Budget &&
+        hasOriginalRandomDAGOrder(*fixture.dag);
+
+  VPTOSchedulingBudget applyShort(result.entries.size() - 1);
+  VPTOScheduleFailure applyFailure;
+  ok &= failed(applyVPTOScheduleResult(*fixture.dag, result, applyShort,
+                                       applyFailure)) &&
+        applyFailure.kind == VPTOScheduleFailureKind::Budget &&
+        hasOriginalRandomDAGOrder(*fixture.dag);
+  return ok;
+}
+
+static bool verifyRandomDAGApply(MLIRContext &context,
+                                 const TrackerTestModel &model,
+                                 const RandomDAGSpec &spec,
+                                 const VPTOSchedulerLimits &limits) {
+  FailureOr<RandomDAGFixture> fixture = buildRandomDAGFixture(context, spec);
+  if (failed(fixture)) {
+    return false;
+  }
+  VPTOSchedulingBudget scheduleBudget(1ULL << 20);
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, *fixture->dag, limits, scheduleBudget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  if (failed(result)) {
+    return false;
+  }
+  VPTOSchedulingBudget applyBudget(result->entries.size());
+  if (failed(applyVPTOScheduleResult(*fixture->dag, *result, applyBudget,
+                                     failure))) {
+    return false;
+  }
+  SmallVector<Operation *> expected;
+  for (const VPTOScheduleEntry &entry : result->entries) {
+    expected.push_back(entry.unit->getOperation());
+  }
+  return llvm::equal(getCurrentRandomDAGOrder(*fixture->dag), expected);
+}
+
+static bool testRandomDAGDifferential(MLIRContext &context) {
+  static constexpr std::array<uint32_t, 8> seeds = {
+      0x10203040U, 0x13579BDFU, 0x2468ACE0U, 0x31415926U,
+      0x5EED1143U, 0x89ABCDEFU, 0xC001D00DU, 0xF00DBAAAU};
+  TrackerTestModel model(/*trackUnboundedPressure=*/true);
+  VPTOSchedulerLimits limits;
+  limits.maxNodes = 13;
+  limits.maxEdges = 24;
+  limits.maxWorkUnits = 1ULL << 20;
+
+  for (uint32_t seed : seeds) {
+    RandomDAGSpec spec = generateRandomDAGSpec(seed);
+    FailureOr<RandomDAGFixture> fixture = buildRandomDAGFixture(context, spec);
+    if (!checkRandom(succeeded(fixture), spec, "fixture construction")) {
+      return false;
+    }
+    VPTOSchedulingBudget budget(limits.maxWorkUnits);
+    VPTOScheduleFailure failure;
+    VPTOScheduler scheduler(model, *fixture->dag, limits, budget);
+    FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+    bool ok = checkRandom(succeeded(result), spec, "schedule success");
+    if (!ok) {
+      return false;
+    }
+    uint64_t scheduleWork = budget.getUsed();
+    if (!checkRandom(verifyPermutationOracle(*fixture->dag, *result), spec,
+                     "permutation oracle") ||
+        !checkRandom(verifyMustEdgesOracle(*fixture->dag, *result), spec,
+                     "Must-edge oracle") ||
+        !checkRandom(verifyReadyCyclesOracle(*fixture->dag, *result), spec,
+                     "ready-cycle oracle") ||
+        !checkRandom(verifyPressureOracle(model, *fixture->dag, *result), spec,
+                     "pressure oracle") ||
+        !checkRandom(hasValidDecisionMetadata(*result), spec,
+                     "decision metadata") ||
+        !checkRandom(
+            verifyRandomDAGMutations(context, model, spec, *fixture, *result),
+            spec, "mutated result rejection") ||
+        !checkRandom(verifyRandomDAGBudgets(model, *fixture, limits, *result,
+                                            scheduleWork),
+                     spec, "work-unit budgets") ||
+        !checkRandom(verifyRandomDAGApply(context, model, spec, limits), spec,
+                     "apply success")) {
+      return false;
+    }
+  }
+  llvm::outs() << "scheduler random-dag differential: pass seeds="
+               << seeds.size() << " dags=" << seeds.size() << '\n';
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -700,7 +1382,8 @@ int main() {
   if (!testResourceTracker(context, model) ||
       !testPressureTracker(context, model) || !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
-      !testUnboundedPressureScheduling(context)) {
+      !testUnboundedPressureScheduling(context) ||
+      !testRandomDAGDifferential(context)) {
     return 1;
   }
   return 0;
