@@ -176,7 +176,11 @@ static void printScheduleResult(llvm::raw_ostream &os, unsigned blockIndex,
                                 uint64_t workUnits) {
   os << "vpto-scheduler: schedule-result block=" << blockIndex
      << " region=" << region.index << " nodes=" << result.entries.size()
-     << " work-units=" << workUnits;
+     << " work-units=" << workUnits
+     << " pressure-idles="
+     << llvm::count_if(result.entries, [](const VPTOScheduleEntry &entry) {
+          return entry.pressureDrivenIdle;
+        });
   printPressureVector(os, "peak", result.peakPressure, model);
   os << '\n';
   for (auto [position, entry] : llvm::enumerate(result.entries)) {
@@ -187,6 +191,7 @@ static void printScheduleResult(llvm::raw_ostream &os, unsigned blockIndex,
        << " direction=" << stringifyVPTOSchedDirection(entry.direction)
        << " reason=" << entry.reason
        << " op=" << entry.unit->getOperation()->getName().getStringRef()
+       << " pressure-idle=" << (entry.pressureDrivenIdle ? "true" : "false")
        << '\n';
   }
 }
