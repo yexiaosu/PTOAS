@@ -445,7 +445,7 @@ readyCycle(successor) =
 
 没有候选节点时，当前逻辑周期直接跳到 pending heap 顶部记录的最早可选周期，不逐周期空转。同一最早周期的节点会在预算检查通过后批量出堆并加入 available；每次 heap 插入或删除不再重新排序整个 pending 数组。
 
-只要仍有候选节点，Pass 就在同一个逻辑周期继续选择。这里的周期只表示依赖层级，同一逻辑周期可以记录多个节点，不能解释为真实硬件同周期发射。
+通常只要仍有候选节点，Pass 就在同一个逻辑周期继续选择。唯一例外是所有当前候选都会超过至少一个已知压力上限、并且仍有依赖等待节点时，Pass 会执行 pressure-driven idle，推进到最早的等待周期后重新评价候选。这里的周期只表示依赖层级，同一逻辑周期可以记录多个节点，不能解释为真实硬件同周期发射。
 
 ### Strategy、Candidate 和 Decision 契约
 
@@ -526,7 +526,7 @@ pressureDeltaCost =
 
 最后使用原始位置决胜，保证相同输入和模型总能得到完全相同的顺序。
 
-Strategy 返回的 `VPTOSchedDecision` 同时记录节点、方向、逻辑周期和选择原因。Scheduler 先验证 Decision 属于本轮 Candidate，再通过 `VPTOSchedBoundary::commit` 预付预算并一次性更新压力、方向局部依赖计数和 available/pending 队列，最后把节点、方向、当前逻辑周期和选择原因追加到调度结果。Scheduler 不维护第二套 ready queue。所有节点都选完后，结果同时记录 vector/predicate 压力峰值。
+Strategy 返回的 `VPTOSchedDecision` 同时记录节点、方向、逻辑周期和选择原因。Scheduler 先验证 Decision 属于本轮 Candidate，再通过 `VPTOSchedBoundary::commit` 预付预算并一次性更新压力、方向局部依赖计数和 available/pending 队列，最后把节点、方向、当前逻辑周期、选择原因以及该节点前是否发生 pressure-driven idle 追加到调度结果。Scheduler 不维护第二套 ready queue。所有节点都选完后，结果同时记录 vector/predicate 压力峰值。
 
 ### 一个完整的排序例子
 
@@ -545,7 +545,7 @@ A0 A1 B0 B1 C0 C1
 
 即 AABBCC。每一层内部再按压力、剩余依赖链长度和原始位置决定顺序。
 
-当一个 predicate value 的生产者和消费者同时可选时，能够完成其最后一次使用并释放该 predicate value 的节点通常会因为压力变化更小而优先。如果消费者仍在等待依赖延迟，Pass 不会停下来等它，而是继续选择当前已经可用的其他节点。
+当一个 predicate value 的生产者和消费者同时可选时，能够完成其最后一次使用并释放该 predicate value 的节点通常会因为压力变化更小而优先。如果消费者仍在等待依赖延迟，且至少一个当前候选不会超过压力上限，Pass 会继续选择当前候选；如果所有当前候选都会超过至少一个已知压力上限，Pass 会推进到最早的 pending 周期，让压力释放节点参与下一轮候选评价。没有 pending 节点时，上限仍是软约束，Pass 会选择当前候选中压力恶化最小的节点。
 
 ## 如何检查并应用新顺序
 
@@ -555,7 +555,7 @@ A0 A1 B0 B1 C0 C1
 
 ```text
 VPTOScheduleResult
-  entries[] = {unit, direction, issueCycle, reason}
+  entries[] = {unit, direction, issueCycle, reason, pressureDrivenIdle}
   peakPressure[]
 ```
 
@@ -578,6 +578,7 @@ VPTOScheduleResult
 
 - 工作量预算仍可用；
 - 没有候选时，确实可以推进到最早的等待周期；
+- `pressureDrivenIdle=true` 时，当前 available 候选确实全部超限，并且可以沿 pending 事件推进到结果记录的逻辑周期；
 - 当前节点通过 Boundary 的 O(1) `isAvailable` 检查，并且结果记录的逻辑周期一致；
 - Boundary 的压力状态和 available 队列都能接受该节点；
 - 重放结束后所有节点都已处理；
@@ -629,6 +630,7 @@ SemanticVerification, ModelReplay, Apply
 - A5 只有模型明确支持的 vector/predicate 操作使用非零延迟；
 - Scalar、MTE、Control 和 Structural 类使用零调度成本；Cube 和未登记 vector 类保持原顺序；
 - 只统计 vector 和 predicate 两类压力；
+- pressure-driven idle 只在所有当前候选都会超过已知压力上限时触发，仍依赖当前未校准的逻辑 latency，不代表真实硬件空转周期；
 - 不支持跨基本块调度、双向调度、指令捆绑/配对、bank conflict、NOP、软件流水或 Cube kernel 调度；
 - 修改 IR 时没有独立事务回滚，因为当前移动操作不可失败；
 - 不设置额外的收益门槛；新顺序合法且通过重放就会应用，即使新旧顺序相同也允许执行移动流程。
@@ -643,7 +645,7 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_cli.pto` | A5 默认 on、显式模式、trace 约束、target 约束、Bisheng 冲突 |
 | `vpto_scheduler_coverage.pto` | boundary reason 和 unclassified coverage |
 | `vpto_scheduler_dependencies.pto` | SSA、memory range、volatile、unknown memory、post-update、SPR/CTRL、barrier |
-| `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace baseline+AABBCC、pressure tie-break、报告开关不改变 IR |
+| `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace baseline+AABBCC、pressure tie-break、pressure-driven idle、报告开关不改变 IR |
 | `vpto_scheduler_unknown_fallback.pto` | analyze 对 unknown region 继续静态分析且不报 scheduler fallback，on 保序并继续后续 region |
 | `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、独立 top/bottom Boundary、fan-out commit 原子预算、pending heap、verify/replay、随机 DAG differential test |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |

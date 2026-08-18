@@ -57,6 +57,7 @@ struct VPTOScheduleEntry {
   VPTOSchedDirection direction = VPTOSchedDirection::Top;
   unsigned issueCycle = 0;
   std::string reason;
+  bool pressureDrivenIdle = false;
 };
 
 struct VPTOScheduleResult {

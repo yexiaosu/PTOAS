@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -74,6 +75,95 @@ static void setWorkBudgetFailure(VPTOScheduleFailure &failure,
              {}};
 }
 
+static FailureOr<SmallVector<VPTOSchedCandidate>>
+buildCandidates(const VPTOSchedBoundary &boundary,
+                VPTOSchedulingBudget &budget,
+                VPTOScheduleFailure &failure) {
+  SmallVector<VPTOSchedCandidate> candidates;
+  candidates.reserve(boundary.getAvailable().size());
+  for (VPTOSUnit *unit : boundary.getAvailable()) {
+    if (!budget.consume()) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
+    candidates.push_back(buildCandidate(*unit, boundary));
+  }
+  return candidates;
+}
+
+static bool exceedsPressureLimit(const VPTOSchedCandidate &candidate) {
+  return llvm::any_of(candidate.pressure.projectedExcess,
+                      [](int64_t excess) { return excess > 0; });
+}
+
+static bool allCandidatesExceedPressureLimits(
+    ArrayRef<VPTOSchedCandidate> candidates) {
+  return !candidates.empty() && llvm::all_of(candidates, exceedsPressureLimit);
+}
+
+static FailureOr<bool>
+advanceForPressure(VPTOSchedBoundary &boundary,
+                   ArrayRef<VPTOSchedCandidate> candidates,
+                   VPTOSchedulingBudget &budget,
+                   VPTOScheduleFailure &failure) {
+  if (!allCandidatesExceedPressureLimits(candidates)) {
+    return false;
+  }
+  if (!boundary.getNextPending()) {
+    return false;
+  }
+  FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
+  if (failed(advanced)) {
+    setWorkBudgetFailure(failure, budget);
+    return mlir::failure();
+  }
+  return *advanced;
+}
+
+static LogicalResult replayPressureDrivenIdle(
+    const VPTOScheduleEntry &entry, VPTOSchedBoundary &boundary,
+    VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
+  if (!entry.pressureDrivenIdle) {
+    return success();
+  }
+
+  bool advancedAtLeastOnce = false;
+  while (true) {
+    const uint64_t currentCycle = boundary.getCurrentCycle();
+    if (currentCycle >= entry.issueCycle) {
+      break;
+    }
+    FailureOr<SmallVector<VPTOSchedCandidate>> candidates =
+        buildCandidates(boundary, budget, failure);
+    if (failed(candidates)) {
+      return mlir::failure();
+    }
+    if (!allCandidatesExceedPressureLimits(*candidates)) {
+      setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
+                 "pressure idle occurred while a non-exceeding candidate was "
+                 "available");
+      return mlir::failure();
+    }
+    FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
+    if (failed(advanced)) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
+    if (!*advanced) {
+      setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
+                 "pressure idle has no pending dependency event");
+      return mlir::failure();
+    }
+    advancedAtLeastOnce = true;
+  }
+  if (!advancedAtLeastOnce) {
+    setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
+               "pressure idle does not advance the logical cycle");
+    return mlir::failure();
+  }
+  return success();
+}
+
 } // namespace
 
 bool VPTOSchedulingBudget::consume(uint64_t amount) {
@@ -120,32 +210,42 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
   result.entries.reserve(dag.getUnits().size());
 
   while (!boundary.isComplete()) {
-    if (boundary.getAvailable().empty()) {
-      FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
+    bool pressureDrivenIdle = false;
+    SmallVector<VPTOSchedCandidate> candidates;
+    while (true) {
+      if (boundary.getAvailable().empty()) {
+        FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
+        if (failed(advanced)) {
+          setWorkBudgetFailure(failure, budget);
+          return mlir::failure();
+        }
+        if (!*advanced) {
+          setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                     "no candidate or pending dependency event remains");
+          return mlir::failure();
+        }
+      }
+
+      FailureOr<SmallVector<VPTOSchedCandidate>> builtCandidates =
+          buildCandidates(boundary, budget, failure);
+      if (failed(builtCandidates)) {
+        return mlir::failure();
+      }
+      candidates = std::move(*builtCandidates);
+      FailureOr<bool> advanced =
+          advanceForPressure(boundary, candidates, budget, failure);
       if (failed(advanced)) {
-        setWorkBudgetFailure(failure, budget);
         return mlir::failure();
       }
       if (!*advanced) {
-        setFailure(failure, VPTOScheduleFailureKind::Scheduling,
-                   "no candidate or pending dependency event remains");
-        return mlir::failure();
+        break;
       }
+      pressureDrivenIdle = true;
     }
 
     VPTOScheduleContext context{model, dag, boundary.getDirection(),
                                 boundary.getCurrentCycle(),
                                 boundary.getPressureTracker().getCurrent()};
-    SmallVector<VPTOSchedCandidate> candidates;
-    candidates.reserve(boundary.getAvailable().size());
-    for (VPTOSUnit *unit : boundary.getAvailable()) {
-      if (!budget.consume()) {
-        setWorkBudgetFailure(failure, budget);
-        return mlir::failure();
-      }
-      candidates.push_back(buildCandidate(*unit, boundary));
-    }
-
     std::string detail;
     FailureOr<VPTOSchedDecision> decision =
         strategy.pickCandidate(context, candidates, detail);
@@ -174,7 +274,8 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
       return mlir::failure();
     }
     result.entries.push_back({decision->unit, decision->direction,
-                              decision->issueCycle, decision->reason});
+                              decision->issueCycle, decision->reason,
+                              pressureDrivenIdle});
   }
 
   ArrayRef<int64_t> peakPressure = boundary.getPressureTracker().getPeak();
@@ -275,6 +376,10 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
   for (const VPTOScheduleEntry &entry : result.entries) {
     if (!budget.consume()) {
       setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
+    if (failed(
+            replayPressureDrivenIdle(entry, boundary, budget, failure))) {
       return mlir::failure();
     }
     if (boundary.getAvailable().empty()) {
