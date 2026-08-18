@@ -31,6 +31,10 @@
 // ORDER-NEXT: pto.vsel
 // ORDER-NEXT: pto.vcmp
 
+// ORDER-LABEL: func.func @pressure_idle
+// ORDER-COUNT-7: pto.vcmp
+// ORDER-NEXT: pto.vsel
+
 // TRACE: vpto-scheduler: function=aabbcc mode=on target=a5 model=generic-a5-v1
 // TRACE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
 // TRACE: vpto-scheduler: pressure node=0
@@ -44,6 +48,9 @@
 // TRACE: vpto-scheduler: function=pressure_tie mode=on
 // TRACE: result-position=2 node=3 original-index=3 cycle=10 direction=top reason=lower-pressure-delta op=pto.vsel
 // TRACE-NEXT: vpto-scheduler: result-position=3 node=2 original-index=2 cycle=10 direction=top reason=only-candidate op=pto.vcmp
+// TRACE: vpto-scheduler: function=pressure_idle mode=on
+// TRACE: vpto-scheduler: schedule-result block=0 region=0 nodes=18 work-units={{[0-9]+}} pressure-idles=1 peak={vector:2,predicate:8}
+// TRACE: vpto-scheduler: result-position=7 node=9 original-index=9 cycle=10 direction=top reason={{[^ ]+}} op=pto.vsel pressure-idle=true
 
 // ANALYZE: vpto-scheduler: function=aabbcc mode=analyze target=a5 model=generic-a5-v1
 // ANALYZE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
@@ -78,6 +85,32 @@ module attributes {pto.target_arch = "a5"} {
       %consume = pto.vsel %x0, %x1, %p0 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
       %new_user = pto.vsel %trigger, %x1, %new : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
       %consume_user = pto.vmax %consume, %x1, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+
+  func.func @pressure_idle(%x0: !pto.vreg<64xf32>,
+                           %x1: !pto.vreg<64xf32>,
+                           %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %p0 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p1 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p2 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p3 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p4 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p5 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p6 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p7 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %p8 = pto.vcmp %x0, %x1, %active, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %s0 = pto.vsel %x0, %x1, %p0 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s1 = pto.vsel %x0, %x1, %p1 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s2 = pto.vsel %x0, %x1, %p2 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s3 = pto.vsel %x0, %x1, %p3 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s4 = pto.vsel %x0, %x1, %p4 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s5 = pto.vsel %x0, %x1, %p5 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s6 = pto.vsel %x0, %x1, %p6 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s7 = pto.vsel %x0, %x1, %p7 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s8 = pto.vsel %x0, %x1, %p8 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
     }
     return
   }
