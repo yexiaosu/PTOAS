@@ -26,3 +26,11 @@ there are no synthetic ordering edges. Its intended target order is
 The deterministic inputs match the CCE artifact: descending scores, modulo-4
 ties, one dominant expert, and an all-equal row. `compare.py` requires exact
 equality for all 36 signed 32-bit winner indices.
+
+## Explicit AABBCC control
+
+The sibling case `topk-gate-aabbcc-explicit` keeps the scheduler off and
+expresses the CCE pair schedule directly in VPTO source. It shares this case's
+shape, input generation, ABI, golden, MTE wave, and Bisheng MISCHED setting.
+Use the two cases together to distinguish the quality of AABBCC itself from
+the fine-grained order selected by the VPTO scheduler.

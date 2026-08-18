@@ -109,6 +109,140 @@ schedule but exceeds predicate pressure and regresses CA SIM median ticks by
 2.82x. The result is a successful real-equivalent scheduler coverage test, not
 a performance improvement.
 
+## Follow-up pressure-driven idle experiment
+
+The scheduler was then changed experimentally so that it advances to the next
+pending dependency event only when every currently available candidate would
+exceed at least one modeled pressure limit. It does not emit a hardware NOP.
+If there is no pending event, pressure remains a soft objective and scheduling
+continues. Fresh model replay verifies the condition and the logical-cycle
+advance before IR application.
+
+On this fixture, each 757-node region records 17 pressure-driven advances. The
+critical-path lower bound, last scheduled issue cycle, and completion remain
+1820, 1820, and 1830 model cycles. Peak pressure changes from Vector 32 /
+Predicate 13 to Vector 32 / Predicate 8. Both regions retain full known model
+coverage and pass schedule verification, replay, and application without a
+fallback.
+
+| Metric | Original Scheduler ON | Pressure-idle Scheduler ON |
+|---|---:|---:|
+| Pressure-driven entries per pair region | 0 | 17 |
+| Peak Vector / Predicate | 32 / 13 | 32 / 8 |
+| Dynamic PLDI / PSTI / SMEM_BAR | 238 / 238 / 476 | 68 / 68 / 136 |
+| Dynamic retired log lines | 2585 | 1905 |
+| Tick runs | 11443, 11444, 11443 | 5548, 5558, 5546 |
+| Tick min / median / max | 11443 / 11443 / 11444 | 5546 / 5548 / 5558 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass |
+
+The experiment reduces each predicate spill/load count and its associated
+barrier count by 71.4%, and reduces the Scheduler-ON median tick count by 51.5%
+(2.06x faster). It does not close the gap to Scheduler OFF: 5548 versus 4053
+baseline median ticks is still a 36.9% regression. Most importantly, the final
+backend still emits predicate spills even though the scheduler's simplified
+SSA pressure estimate no longer exceeds its Predicate limit of 8. The current
+limit is therefore not a calibrated physical allocation boundary, and the
+model does not yet capture all final register-allocation interference,
+implicit temporaries, or lowering effects.
+
+Follow-up artifacts are under the same result root:
+
+- Trace compile: `pressure-idle-aabbcc-compile-on`
+- Scheduler OFF reference: `pressure-idle-aabbcc-off-run1`
+- Scheduler ON runs: `pressure-idle-aabbcc-on-run1`,
+  `pressure-idle-aabbcc-on-run2`, and `pressure-idle-aabbcc-on-run3`
+- Smoke runs: `pressure-idle-smoke-vadd` and
+  `pressure-idle-smoke-vlds-post-update`
+
+## Explicit hand-ordered AABBCC control
+
+An additional `topk-gate-aabbcc-explicit` control keeps the VPTO scheduler
+OFF and expresses the issue #574 hand-written AABBCC order directly in VPTO.
+It has the same input, output ABI, operation counts, strict golden semantics,
+MTE wave, and Bisheng `MISCHED=0` setting as the original fixture. Within each
+two-token rank it uses the following fine-grained order:
+
+```text
+AA  (VMAX0, VMAX1) x 6
+BB  VCMAX0, VCMAX1, broadcast0, broadcast1
+CC  (VCMP0, VSEL0) x 6, (VCMP1, VSEL1) x 6,
+    (VMIN0, VMIN1) x 6, VCMIN0, VCMIN1, broadcast0, broadcast1
+DD  VSTI0, VSTI1,
+    (VCMP0, VSEL0) x 6, (VCMP1, VSEL1) x 6
+```
+
+This differs materially from merely observing an AABBCC macro-stage label in
+the scheduler result. The original scheduler emits all ready predicate
+producers first and delays their consumers; pressure-driven idle reduces the
+batch size but retains the same producer-batching shape. The explicit control
+closes every compute predicate immediately.
+
+| Per 757-node pair region | ABC source OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
+|---|---:|---:|---:|---:|
+| Model Vector / Predicate peak | 26 / 7 | 32 / 7 | 32 / 13 | 32 / 8 |
+| Mean Vector live-range length | 30.09 | 32.92 | 31.28 | 32.34 |
+| Mean Predicate live-range length | 4.99 | 4.82 | 16.16 | 11.49 |
+| 204 compute-predicate lengths | 204 x 1 | 204 x 1 | 148 x 12; 56 x 14 | 122 x 7; 26 x 8; 48 x 9; 8 x 10 |
+| Dynamic PLDI / PSTI / SMEM_BAR | 0 / 0 / 0 | 0 / 0 / 0 | 238 / 238 / 476 | 68 / 68 / 136 |
+
+Live-range length is measured in final VPTO operation positions from SSA
+definition to last use, before register allocation. The 204-row distribution
+excludes setup predicates and the function-wide active mask. It exactly
+captures each rank's match and winner-mask `VCMP` result. Both regions have the
+same result.
+
+The analyze-only trace for the explicit control has 757 nodes, 2544 edges,
+full known model coverage, and critical-path lower bound 1820 model cycles.
+Monotonic source replay gives last issue 3570 and completion 3580. This is
+shorter than the ABC source replay of 5070/5080 but is not equal to real CA
+ticks: it is a dependency-only model without real per-instruction resource and
+latency calibration.
+
+| Final device / CA metric | ABC source OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
+|---|---:|---:|---:|---:|
+| Static device instruction slots | 888 | 888 | 1366 | 1026 |
+| Dynamic retired log lines | 1633 | 1633 | 2585 | 1905 |
+| Dynamic VMAX / VCMAX / VMIN / VCMIN | 216 / 36 / 216 / 36 | same | same | same |
+| Dynamic VCMP / VSEL | 420 / 432 | same | same | same |
+| Derived SIMD span | 1606 | 1696 | 9033 | 3130 |
+| Derived EXIPC | 0.903 | 0.855 | 0.161 | 0.463 |
+| Tick runs | 4052, 4053, 4056 | 4132, 4138, 4132 | 11443, 11444, 11443 | 5548, 5558, 5546 |
+| Tick median | 4053 | 4132 | 11443 | 5548 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass |
+
+The explicit control is only 1.95% slower than the current ABC source, but is
+25.5% faster than pressure-idle Scheduler ON and 63.9% faster than the
+original Scheduler ON result. Most importantly, it has no predicate
+spill/reload/barrier instructions. This confirms the implication of issue
+#574: AABBCC itself does not inherently cause spilling. The regression comes
+from the scheduler-generated fine-grained order inside AABBCC, especially
+extending `VCMP` live ranges, rather than from the macro-stage order.
+
+The current candidate comparison explains the result. Once projected pressure
+is not above its soft limit, all excess scores are zero and critical-path
+height is compared before pressure delta. A newly ready `VSEL` that would end
+a predicate live range can therefore lose to another high-height `VCMP` that
+creates one. Pressure-driven idle reacts only after every available candidate
+would exceed a limit; it cannot repair the already lengthened live ranges.
+
+The next scheduling experiment should preserve macro AABBCC parallelism while
+adding a near-limit, critical-path-slack-aware consumer preference: when a
+ready last-use consumer can close a Predicate range without delaying a truly
+urgent chain, select it before opening another Predicate range. The preference
+should be continuous before the hard excess point and should keep the explicit
+control's alternating token-0/token-1 VMAX/VMIN chains. Pressure-driven idle
+remains a fallback for the all-candidates-over-limit state. This is narrower
+than globally moving pressure delta ahead of critical path, which could erase
+useful ILP. A schedule acceptance gate remains deliberately deferred while
+this fixture is used to improve the strategy itself.
+
+Explicit-control artifacts are under the same result root:
+
+- Analyze trace: `explicit-aabbcc-analysis`
+- CA runs: `explicit-aabbcc-off-run1`, `explicit-aabbcc-off-run2`, and
+  `explicit-aabbcc-off-run3`
+- Smoke run: `explicit-control-smoke-vadd`
+
 ## Saved artifacts
 
 - All results: `/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim`
