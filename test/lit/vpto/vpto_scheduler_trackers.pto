@@ -20,6 +20,7 @@
 // CHECK-NEXT: boundary independent-latency: pass
 // CHECK-NEXT: boundary fanout-budget-heap: pass
 // CHECK-NEXT: scheduler verify-replay: pass
+// CHECK-NEXT: scheduler pressure-idle replay: pass
 // CHECK-NEXT: scheduler semantic rejection: pass
 // CHECK-NEXT: scheduler budget: pass
 // CHECK-NEXT: scheduler unbounded-pressure-delta: pass
