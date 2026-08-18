@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 
 using namespace mlir;
@@ -598,10 +599,34 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
   ok &= check(succeeded(replayVPTOScheduleResult(model, *fixture->dag, *result,
                                                  budget, scheduleFailure)),
               "scheduler result model replay");
+  auto pressureIdle = llvm::find_if(
+      result->entries, [](const VPTOScheduleEntry &entry) {
+        return entry.pressureDrivenIdle;
+      });
+  ok &= check(pressureIdle != result->entries.end() &&
+                  result->peakPressure[PredicatePressure] == 2,
+              "scheduler must idle before exceeding predicate pressure");
   if (!ok) {
     return false;
   }
   llvm::outs() << "scheduler verify-replay: pass\n";
+
+  VPTOScheduleResult missingIdle = *result;
+  size_t idlePosition = static_cast<size_t>(
+      std::distance(result->entries.begin(), pressureIdle));
+  missingIdle.entries[idlePosition].pressureDrivenIdle = false;
+  VPTOSchedulingBudget missingIdleBudget(128);
+  VPTOScheduleFailure missingIdleFailure;
+  ok = check(failed(replayVPTOScheduleResult(
+                 model, *fixture->dag, missingIdle, missingIdleBudget,
+                 missingIdleFailure)) &&
+                 missingIdleFailure.kind ==
+                     VPTOScheduleFailureKind::ModelReplay,
+             "model replay must reject missing pressure-idle metadata");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "scheduler pressure-idle replay: pass\n";
 
   VPTOSchedulingBudget exhaustedApplyBudget(0);
   VPTOScheduleFailure applyBudgetFailure;
@@ -1126,7 +1151,8 @@ static bool schedulesMatch(const VPTOScheduleResult &lhs,
     const VPTOScheduleEntry &left = std::get<0>(entries);
     const VPTOScheduleEntry &right = std::get<1>(entries);
     return left.unit == right.unit && left.direction == right.direction &&
-           left.issueCycle == right.issueCycle && left.reason == right.reason;
+           left.issueCycle == right.issueCycle && left.reason == right.reason &&
+           left.pressureDrivenIdle == right.pressureDrivenIdle;
   });
 }
 
