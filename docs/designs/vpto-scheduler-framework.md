@@ -364,7 +364,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 | ID | 名称 | limit | weight | spill cost | value contribution |
 | ---: | --- | ---: | ---: | ---: | --- |
 | 0 | vector | 32 | 1 | 1 | 每个 `!pto.vreg` 为 1 unit |
-| 1 | predicate | 8 | 1 | 1 | 每个 `!pto.mask` 为 1 unit |
+| 1 | predicate | 7 | 1 | 1 | 每个 `!pto.mask` 为 1 unit；按当前后端实际分配的 P1-P7 校准 |
 
 其他值类型不计入压力。`limit` 不是禁止调度的硬上限；如果所有候选节点都会超限，Pass 仍会选择压力恶化最小的节点，把当前调度区间排完。
 
