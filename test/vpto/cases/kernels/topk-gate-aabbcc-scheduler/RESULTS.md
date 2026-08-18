@@ -243,6 +243,47 @@ Explicit-control artifacts are under the same result root:
   `explicit-aabbcc-off-run3`
 - Smoke run: `explicit-control-smoke-vadd`
 
+## Predicate-limit calibration experiment
+
+The generic A5 Predicate pressure limit was reduced from 8 to 7 to match the
+registers that the current backend actually allocates, P1-P7. The function-wide
+active mask occupies P1, so only six registers remain available for the
+temporary `VCMP` results. With limit 7, pressure-driven idle therefore consumes
+one ready predicate after six producers instead of allowing a seventh producer.
+
+Both 757-node pair regions still have full known model coverage. Each records
+17 pressure-driven advances, and the critical-path lower bound, last scheduled
+issue cycle, and completion remain 1820, 1820, and 1830 model cycles. Peak
+pressure is Vector 32 / Predicate 7. The 204 compute-predicate live ranges per
+region are 54 of length 6 and 150 of length 8; none of these longer positional
+ranges overlap beyond the calibrated peak.
+
+| Metric | Predicate limit 8 | Predicate limit 7 |
+|---|---:|---:|
+| Pressure-driven entries per pair region | 17 | 17 |
+| Peak Vector / Predicate | 32 / 8 | 32 / 7 |
+| Compute-predicate live-range distribution | 122 x 7; 26 x 8; 48 x 9; 8 x 10 | 54 x 6; 150 x 8 |
+| Dynamic PLDI / PSTI / predicate barrier | 68 / 68 / 136 | 0 / 0 / 0 |
+| Tick runs | 5548, 5558, 5546 | 4105, 4102, 4108 |
+| Tick min / median / max | 5546 / 5548 / 5558 | 4102 / 4105 / 4108 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass |
+
+The limit-7 result removes every predicate spill, reload, and associated
+barrier seen in the CA instruction logs. Its median is 26.0% faster than the
+limit-8 pressure-idle result, 0.65% faster than explicit AABBCC Scheduler OFF
+(4132 ticks), and 1.28% slower than the ABC Scheduler-OFF reference (4053
+ticks). This confirms that the physical boundary relevant to this lowering is
+seven allocated Predicate registers, not eight architectural names available
+to ordinary SSA values. It also shows that the remaining difference from the
+ABC reference is fine-grained ordering cost rather than spill cost.
+
+Limit-7 artifacts are under the same result root:
+
+- Trace compile: `predicate-limit7-aabbcc-trace`
+- Scheduler ON runs: `predicate-limit7-aabbcc-on-run1`,
+  `predicate-limit7-aabbcc-on-run2`, and `predicate-limit7-aabbcc-on-run3`
+- Smoke run: `predicate-limit7-smoke-vadd`
+
 ## Saved artifacts
 
 - All results: `/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim`

@@ -112,7 +112,7 @@ VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
   };
   pressureSets = {
       {VectorPressure, "vector", 32, 1, 1},
-      {PredicatePressure, "predicate", 8, 1, 1},
+      {PredicatePressure, "predicate", 7, 1, 1},
   };
   schedClasses = {
       {StructuralClass, "structural", true, 0, 0, {}, {}},
