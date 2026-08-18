@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+
+// RUN: pto-test-opt %s '-pto-vpto-scheduler=mode=on trace=true' > /dev/null 2> %t.trace
+// RUN: FileCheck %s --check-prefix=TRACE < %t.trace
+
+// TRACE: vpto-scheduler: function=topk_gate_ops mode=on
+// TRACE: op=pto.vdup
+// TRACE-SAME: known=true
+// TRACE: op=pto.vci
+// TRACE-SAME: known=true
+// TRACE: op=pto.vsts
+// TRACE-SAME: known=true
+// TRACE: op=pto.vlds
+// TRACE-SAME: known=true
+// TRACE: vpto-scheduler: schedule-result
+// TRACE: vpto-scheduler: coverage
+// TRACE-SAME: unsupported=0
+// TRACE-SAME: unclassified=0
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @topk_gate_ops(%ub: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    %c0_i32 = arith.constant 0 : i32
+    pto.vecscope {
+      %active = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %seed = pto.vdup %c0_i32, %active : i32, !pto.mask<b32> -> !pto.vreg<64xsi32>
+      %indices = pto.vci %c0_i32 {order = "ASC"} : i32 -> !pto.vreg<64xsi32>
+      pto.vsts %indices, %ub[%c0], %active : !pto.vreg<64xsi32>, !pto.ptr<si32, ub>, !pto.mask<b32>
+      %loaded = pto.vlds %ub[%c0] : !pto.ptr<si32, ub> -> !pto.vreg<64xsi32>
+      %result = pto.vmin %loaded, %seed, %active : !pto.vreg<64xsi32>, !pto.vreg<64xsi32>, !pto.mask<b32> -> !pto.vreg<64xsi32>
+    }
+    return
+  }
+}
