@@ -77,6 +77,7 @@ static bool hasExplicitVectorPredicateModel(Operation *op) {
       "pto.pand",    "pto.por",      "pto.pxor",     "pto.pnot",
       "pto.vsel",    "pto.vscatter", "pto.vmax",     "pto.vmin",
       "pto.vcmax",   "pto.vcmin",    "pto.vadd",     "pto.vabs",
+      "pto.vdup",    "pto.vci",      "pto.vlds",     "pto.vsts",
   };
   if (!op) {
     return false;
