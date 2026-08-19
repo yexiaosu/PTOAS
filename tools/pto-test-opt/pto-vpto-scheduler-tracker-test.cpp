@@ -48,7 +48,8 @@ enum PressureSetID : unsigned {
 
 class TrackerTestModel final : public VPTOSchedModel {
 public:
-  explicit TrackerTestModel(bool trackUnboundedPressure = false)
+  explicit TrackerTestModel(bool trackUnboundedPressure = false,
+                            unsigned predicateLimit = 2)
       : trackUnboundedPressure(trackUnboundedPressure) {
     machine.target = "test";
     machine.version = "tracker-test-v1";
@@ -61,7 +62,7 @@ public:
     };
     pressureSets = {
         {VectorPressure, "vector", 8, 1, 1},
-        {PredicatePressure, "predicate", 2, 2, 4},
+        {PredicatePressure, "predicate", predicateLimit, 2, 4},
     };
     if (trackUnboundedPressure) {
       pressureSets.push_back(
@@ -459,6 +460,145 @@ static bool testPressureTracker(MLIRContext &context,
   return true;
 }
 
+static VPTOSchedCandidate makeStrategyCandidate(
+    const VPTOSchedModel &model, VPTOSUnit &unit, unsigned criticalPath,
+    unsigned originalIndex, ArrayRef<int64_t> current,
+    int64_t predicateDelta, int64_t predicateReleased,
+    int64_t predicateIntroduced) {
+  VPTOSchedCandidate candidate;
+  candidate.unit = &unit;
+  candidate.criticalPath = criticalPath;
+  candidate.originalIndex = originalIndex;
+  candidate.pressure.delta = {0, predicateDelta};
+  candidate.pressure.released = {0, predicateReleased};
+  candidate.pressure.introduced = {0, predicateIntroduced};
+  candidate.pressure.projected = {current[VectorPressure],
+                                  current[PredicatePressure] + predicateDelta};
+  candidate.pressure.projectedExcess = {0, 0};
+  std::optional<unsigned> predicateLimit =
+      model.getPressureSets()[PredicatePressure].limit;
+  if (predicateLimit) {
+    candidate.pressure.projectedExcess[PredicatePressure] =
+        std::max<int64_t>(0, candidate.pressure.projected[PredicatePressure] -
+                                static_cast<int64_t>(*predicateLimit));
+  }
+  return candidate;
+}
+
+static bool testPressureAwareStrategy(MLIRContext &context) {
+  TrackerTestModel model(/*trackUnboundedPressure=*/false,
+                         /*predicateLimit=*/4);
+  FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
+  if (!check(succeeded(fixture), "cannot build strategy fixture")) {
+    return false;
+  }
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = fixture->dag->getUnits();
+  bool hasEnoughUnits = units.size() >= 3;
+  if (!check(hasEnoughUnits, "strategy fixture unit count")) {
+    return false;
+  }
+
+  const VPTOSchedStrategy &strategy = getDefaultVPTOSchedStrategy();
+  std::string detail;
+  SmallVector<int64_t> nearLimitPressure = {2, 3};
+  VPTOSchedCandidate producer = makeStrategyCandidate(
+      model, *units[0], 10, 0, nearLimitPressure, 1, 0, 1);
+  VPTOSchedCandidate consumer = makeStrategyCandidate(
+      model, *units[2], 9, 2, nearLimitPressure, -1, 1, 0);
+  VPTOScheduleContext nearLimitContext{
+      model, *fixture->dag, VPTOSchedDirection::Top, 0, nearLimitPressure};
+  FailureOr<VPTOSchedDecision> decision = strategy.pickCandidate(
+      nearLimitContext, {producer, consumer}, detail);
+  bool ok = check(succeeded(decision) && decision->unit == consumer.unit &&
+                      decision->reason == "near-limit-live-range-closing",
+                  "near-limit strategy must close a live range within the "
+                  "critical-path window");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "strategy near-limit closing: pass\n";
+
+  SmallVector<int64_t> lowPressure = {2, 1};
+  producer = makeStrategyCandidate(model, *units[0], 10, 0, lowPressure, 1, 0,
+                                   1);
+  consumer = makeStrategyCandidate(model, *units[2], 9, 2, lowPressure, -1, 1,
+                                   0);
+  VPTOScheduleContext lowPressureContext{
+      model, *fixture->dag, VPTOSchedDirection::Top, 0, lowPressure};
+  decision =
+      strategy.pickCandidate(lowPressureContext, {producer, consumer}, detail);
+  ok = check(succeeded(decision) && decision->unit == producer.unit &&
+                 decision->reason == "longer-critical-path",
+             "low-pressure strategy must preserve critical-path priority");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "strategy low-pressure critical path: pass\n";
+
+  SmallVector<int64_t> atLimitPressure = {2, 4};
+  producer = makeStrategyCandidate(model, *units[0], 10, 0, atLimitPressure,
+                                   0, 0, 0);
+  consumer = makeStrategyCandidate(model, *units[2], 9, 2, atLimitPressure,
+                                   -1, 1, 0);
+  VPTOScheduleContext atLimitContext{
+      model, *fixture->dag, VPTOSchedDirection::Top, 0, atLimitPressure};
+  decision =
+      strategy.pickCandidate(atLimitContext, {producer, consumer}, detail);
+  ok = check(succeeded(decision) && decision->unit == producer.unit &&
+                 decision->reason == "longer-critical-path",
+             "strategy must not enter near-limit mode without a pressure "
+             "producer");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "strategy no-producer critical path: pass\n";
+
+  producer = makeStrategyCandidate(model, *units[0], 10, 0,
+                                   nearLimitPressure, 1, 0, 1);
+  consumer = makeStrategyCandidate(model, *units[2], 8, 2,
+                                   nearLimitPressure, -1, 1, 0);
+  decision = strategy.pickCandidate(nearLimitContext, {producer, consumer},
+                                    detail);
+  ok = check(succeeded(decision) && decision->unit == producer.unit &&
+                 decision->reason == "urgent-critical-path",
+             "near-limit strategy must not delay a candidate outside the "
+             "critical-path window");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "strategy urgent critical path: pass\n";
+
+  VPTOSchedCandidate later = makeStrategyCandidate(
+      model, *units[0], 10, 7, lowPressure, 1, 0, 1);
+  VPTOSchedCandidate earlier = makeStrategyCandidate(
+      model, *units[1], 10, 3, lowPressure, 1, 0, 1);
+  decision =
+      strategy.pickCandidate(lowPressureContext, {later, earlier}, detail);
+  ok = check(succeeded(decision) && decision->unit == earlier.unit &&
+                 decision->reason == "deterministic-tie-break",
+             "strategy must use original order as its deterministic tie-break");
+  if (ok) {
+    llvm::outs() << "strategy deterministic tie-break: pass\n";
+  }
+  return ok;
+}
+
+static bool testGenericA5PredicateLimit() {
+  VPTOGenericA5SchedModel model;
+  auto predicate = llvm::find_if(
+      model.getPressureSets(),
+      [](const VPTORegPressureSet &pressureSet) {
+        return pressureSet.name == "predicate";
+      });
+  bool ok = check(predicate != model.getPressureSets().end() &&
+                      predicate->limit && *predicate->limit == 7,
+                  "generic A5 predicate pressure limit must remain 7");
+  if (ok) {
+    llvm::outs() << "model predicate-limit: 7\n";
+  }
+  return ok;
+}
+
 static bool testBoundary(MLIRContext &context, const TrackerTestModel &model) {
   FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
   if (!check(succeeded(fixture), "cannot build boundary fixture")) {
@@ -628,6 +768,23 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
   }
   llvm::outs() << "scheduler pressure-idle replay: pass\n";
 
+  VPTOScheduleResult illegalIdle = *result;
+  illegalIdle.entries.front().pressureDrivenIdle = true;
+  illegalIdle.entries.front().issueCycle = 1;
+  VPTOSchedulingBudget illegalIdleBudget(128);
+  VPTOScheduleFailure illegalIdleFailure;
+  ok = check(failed(replayVPTOScheduleResult(
+                 model, *fixture->dag, illegalIdle, illegalIdleBudget,
+                 illegalIdleFailure)) &&
+                 illegalIdleFailure.kind ==
+                     VPTOScheduleFailureKind::ModelReplay,
+             "model replay must reject pressure idle while a safe candidate "
+             "is available");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "scheduler illegal pressure-idle rejection: pass\n";
+
   VPTOSchedulingBudget exhaustedApplyBudget(0);
   VPTOScheduleFailure applyBudgetFailure;
   ok = check(failed(applyVPTOScheduleResult(*fixture->dag, *result,
@@ -677,6 +834,30 @@ static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
              "scheduler must report the shared work-unit budget");
   if (ok) {
     llvm::outs() << "scheduler budget: pass\n";
+  }
+  return ok;
+}
+
+static bool testPressureNoPendingProgress(MLIRContext &context) {
+  TrackerTestModel model(/*trackUnboundedPressure=*/false,
+                         /*predicateLimit=*/0);
+  FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
+  if (!check(succeeded(fixture), "cannot build no-pending fixture")) {
+    return false;
+  }
+
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, *fixture->dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  bool ok = check(succeeded(result) && !result->entries.empty() &&
+                      result->entries.front().issueCycle == 0 &&
+                      !result->entries.front().pressureDrivenIdle,
+                  "all-over-limit scheduling must progress when no pending "
+                  "event exists");
+  if (ok) {
+    llvm::outs() << "scheduler no-pending pressure progress: pass\n";
   }
   return ok;
 }
@@ -1129,10 +1310,17 @@ static bool verifyPressureOracle(const TrackerTestModel &model,
 }
 
 static bool hasValidDecisionMetadata(const VPTOScheduleResult &result) {
-  static constexpr std::array<StringLiteral, 7> reasons = {
-      "lower-excess-growth",    "lower-projected-excess",
-      "longer-critical-path",   "lower-pressure-delta",
-      "earlier-original-order", "stable-candidate-order",
+  static constexpr std::array<StringLiteral, 11> reasons = {
+      "pressure-safe-candidate",
+      "lower-excess-growth",
+      "lower-projected-excess",
+      "near-limit-live-range-closing",
+      "near-limit-pressure-preserving",
+      "urgent-critical-path",
+      "longer-critical-path",
+      "lower-pressure-delta",
+      "deterministic-tie-break",
+      "stable-candidate-order",
       "only-candidate"};
   return llvm::all_of(result.entries, [&](const VPTOScheduleEntry &entry) {
     return entry.direction == VPTOSchedDirection::Top &&
@@ -1406,8 +1594,11 @@ int main() {
 
   TrackerTestModel model;
   if (!testResourceTracker(context, model) ||
-      !testPressureTracker(context, model) || !testBoundary(context, model) ||
+      !testPressureTracker(context, model) ||
+      !testPressureAwareStrategy(context) ||
+      !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
+      !testPressureNoPendingProgress(context) ||
       !testUnboundedPressureScheduling(context) ||
       !testRandomDAGDifferential(context)) {
     return 1;
