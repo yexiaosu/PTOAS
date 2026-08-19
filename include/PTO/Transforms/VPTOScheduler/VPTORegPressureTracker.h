@@ -25,9 +25,15 @@
 namespace mlir::pto {
 
 struct VPTORegPressureEvaluation {
-  SmallVector<int64_t> delta;
-  SmallVector<int64_t> projected;
-  SmallVector<int64_t> projectedExcess;
+  SmallVector<int64_t, 2> delta;
+  /// Direction-local pressure removed by operand last uses (top-down) or
+  /// result definitions (bottom-up).
+  SmallVector<int64_t, 2> released;
+  /// Direction-local pressure introduced by result definitions (top-down) or
+  /// operand liveness (bottom-up).
+  SmallVector<int64_t, 2> introduced;
+  SmallVector<int64_t, 2> projected;
+  SmallVector<int64_t, 2> projectedExcess;
 };
 
 class VPTORegPressureTracker {

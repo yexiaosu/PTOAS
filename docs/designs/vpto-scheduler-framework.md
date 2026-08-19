@@ -460,7 +460,7 @@ VPTOScheduleContext
 VPTOSchedCandidate
   unit / direction / issueCycle
   criticalPath / originalIndex
-  pressure(delta/projected/projectedExcess)
+  pressure(delta/released/introduced/projected/projectedExcess)
 
 VPTOSchedStrategy::pickCandidate(context, candidates)
   -> VPTOSchedDecision
@@ -473,7 +473,7 @@ VPTOScheduler
        unit / direction / issueCycle / reason
 ```
 
-`VPTOScheduler` 构造 Context 和 Candidate，但不解释其中的评分信息；`VPTODefaultSchedStrategy` 负责当前 pressure、critical path 和原始位置策略。Scheduler 构造函数接受任意 `VPTOSchedStrategy`，因此增加新策略不需要修改调度主循环。Decision 的方向、逻辑周期和选择原因会随节点一起保存到 `VPTOScheduleResult`，on trace 因而可以说明节点是根据 excess、critical path、pressure delta 还是原始顺序选中的。Candidate 当前只保存 pressure 和 critical-path 评价，后续可以在不改变 Scheduler/Boundary 职责的情况下增加真实的 resource 或 hazard 评价。
+`VPTOScheduler` 构造 Context 和 Candidate，但不解释其中的评分信息；`VPTODefaultSchedStrategy` 负责当前 pressure、critical path 和原始位置策略。Scheduler 构造函数接受任意 `VPTOSchedStrategy`，因此增加新策略不需要修改调度主循环。Decision 的方向、逻辑周期和选择原因会随节点一起保存到 `VPTOScheduleResult`，on trace 因而可以说明节点是根据 excess、临界压力下的 live-range 关闭、critical path、pressure delta 还是确定性 tie-break 选中的。Candidate 当前只保存 pressure 和 critical-path 评价，后续可以在不改变 Scheduler/Boundary 职责的情况下增加真实的 resource 或 hazard 评价。
 
 ### 计算一个候选节点的压力影响
 
@@ -481,6 +481,8 @@ VPTOScheduler
 
 ```text
 pressureDelta[s]
+releasedPressure[s]
+introducedPressure[s]
 projectedPressure[s] = currentPressure[s] + pressureDelta[s]
 
 if limit[s] is known:
@@ -494,11 +496,13 @@ else:
 其中：
 
 - `pressureDelta`：选择该节点后，存活值数量增加或减少多少；
+- `releasedPressure`：正向调度中该节点作为最后一次使用而结束的 live range 数量；
+- `introducedPressure`：正向调度中该节点结果新建立的 live range 数量；
 - `projectedPressure`：选择后的存活值数量；
 - `currentExcess`：当前已经超过模型上限多少；
 - `projectedExcess`：选择后会超过模型上限多少。
 
-默认 Strategy 再汇总出三个整数代价：
+默认 Strategy 再汇总出 excess、普通 pressure delta，以及只对接近上限的 pressure set 生效的 projected/released 代价。某个集合具有已知上限，并且任一当前候选新引入的 pressure 已经可以耗尽当前 headroom 时，该集合进入 near-limit 状态：
 
 ```text
 excessGrowthCost =
@@ -510,19 +514,26 @@ projectedExcessCost =
 
 pressureDeltaCost =
   sum(weight[s] * pressureDelta[s])
+
+nearLimitProjectedCost =
+  sum(spillCost[s] * projectedPressure[s])
+
+nearLimitReleaseCredit =
+  sum(spillCost[s] * releasedPressure[s])
 ```
 
-三个代价依次表示“这次选择新增了多少超限”“选择后总共超限多少”“存活值总量倾向增加还是减少”。乘法和累加都会检查 `int64_t` 溢出。压力上限是可选数据：没有可信上限时，该集合不参与前两个 excess 代价，但仍以 `weight * pressureDelta` 参与第三个代价，Tracker 也继续记录它的 current 和 peak。Strategy 不为这种集合虚构默认上限。权重和超限代价不能为负，否则当前调度区间按模型无效处理并保持原顺序。
+这些代价分别表示“是否/多少新增超限”“选择后总共超限多少”“临界压力下选择后的存活量和关闭的 live range 数”“普通状态下存活值总量倾向增加还是减少”。乘法和累加都会检查 `int64_t` 溢出。压力上限是可选数据：没有可信上限时，该集合不参与 excess 或 near-limit 代价，但仍以 `weight * pressureDelta` 参与普通 delta 代价，Tracker 也继续记录它的 current 和 peak。Strategy 不为这种集合虚构默认上限。权重和超限代价不能为负，否则当前调度区间按模型无效处理并保持原顺序。
 
 ### 多个候选节点之间如何选择
 
 `VPTODefaultSchedStrategy` 按以下顺序逐项比较候选节点；只有上一项相同才比较下一项，不把所有指标混成一个总分：
 
-1. 优先不新增超限，即更小的 `excessGrowthCost`；
-2. 再优先让选择后的总超限更小，即更小的 `projectedExcessCost`；
-3. 再优先推进距离区间出口更远的依赖链，即更大的 `height`；
-4. 再优先减少当前存活值，即更小的 `pressureDeltaCost`；
-5. 最后选择原始位置更靠前的节点，即更小的 `originalIndex`。
+1. 优先 pressure-safe candidate，再比较 `excessGrowthCost` 和 `projectedExcessCost`；
+2. 如果任一 pressure set 进入 near-limit 状态，先保留位于 critical-path urgency window 内的候选。窗口宽度是最长关键链候选的一次 modeled write latency；窗口外候选不会仅因能够释放 pressure 而延迟真正紧急的链；
+3. 在 urgency window 内，优先更小的 `nearLimitProjectedCost`，再优先更大的 `nearLimitReleaseCredit`，因此 last-use consumer 可以在真正超限前结束 live range；
+4. pressure 充足时，或上述指标相同后，继续优先更大的 `height`；
+5. 再比较更小的 `pressureDeltaCost`；
+6. 最后选择更小的 `originalIndex`，并记录 `deterministic-tie-break`。
 
 最后使用原始位置决胜，保证相同输入和模型总能得到完全相同的顺序。
 
@@ -537,15 +548,15 @@ A0 -> B0 -> C0
 A1 -> B1 -> C1
 ```
 
-开始时 A0/A1 都是周期 0 的候选；B0/B1 到周期 10 才能选择；C0/C1 到周期 20 才能选择。因此当前算法形成：
+开始时 A0/A1 都是周期 0 的候选；B0/B1 到周期 10 才能选择；C0/C1 到周期 20 才能选择。一种可能的宏观顺序是：
 
 ```text
 A0 A1 B0 B1 C0 C1
 ```
 
-即 AABBCC。每一层内部再按压力、剩余依赖链长度和原始位置决定顺序。
+即描述性的 AABBCC。但 ABCABC/AABBCC 不是算法目标或输出契约；实际细粒度顺序由 ready 状态、critical-path urgency 和 pressure 决定。
 
-当一个 predicate value 的生产者和消费者同时可选时，能够完成其最后一次使用并释放该 predicate value 的节点通常会因为压力变化更小而优先。如果消费者仍在等待依赖延迟，且至少一个当前候选不会超过压力上限，Pass 会继续选择当前候选；如果所有当前候选都会超过至少一个已知压力上限，Pass 会推进到最早的 pending 周期，让压力释放节点参与下一轮候选评价。没有 pending 节点时，上限仍是软约束，Pass 会选择当前候选中压力恶化最小的节点。
+当一个 pressure producer 和 last-use consumer 同时可选、当前 headroom 会被一个候选耗尽、并且 consumer 仍处于 urgency window 时，consumer 会在真正超限前优先。低压力时仍优先关键链；consumer 落在 urgency window 外时，紧急关键链也仍然优先。如果消费者尚在等待依赖延迟，且至少一个当前候选不会超过压力上限，Pass 会继续选择当前候选；如果所有当前候选都会超过至少一个已知压力上限，Pass 会推进到最早的 pending 周期，让压力释放节点参与下一轮候选评价。没有 pending 节点时，上限仍是软约束，Pass 必须继续取得进展。
 
 ## 如何检查并应用新顺序
 
@@ -645,9 +656,9 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_cli.pto` | A5 默认 on、显式模式、trace 约束、target 约束、Bisheng 冲突 |
 | `vpto_scheduler_coverage.pto` | boundary reason 和 unclassified coverage |
 | `vpto_scheduler_dependencies.pto` | SSA、memory range、volatile、unknown memory、post-update、SPR/CTRL、barrier |
-| `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace baseline+AABBCC、pressure tie-break、pressure-driven idle、报告开关不改变 IR |
+| `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace 双链示例、pressure tie-break、pressure-driven idle、报告开关不改变 IR |
 | `vpto_scheduler_unknown_fallback.pto` | analyze 对 unknown region 继续静态分析且不报 scheduler fallback，on 保序并继续后续 region |
-| `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、独立 top/bottom Boundary、fan-out commit 原子预算、pending heap、verify/replay、随机 DAG differential test |
+| `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending heap、verify/replay、随机 DAG differential test |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |
 
 随机 DAG differential test 使用 8 个固定 seed，覆盖完整 permutation、Must edge、ready cycle、独立 pressure oracle、decision metadata、非法结果拒绝、精确/不足预算以及最终 apply 顺序。
