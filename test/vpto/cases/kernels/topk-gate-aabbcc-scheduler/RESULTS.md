@@ -177,7 +177,7 @@ producers first and delays their consumers; pressure-driven idle reduces the
 batch size but retains the same producer-batching shape. The explicit control
 closes every compute predicate immediately.
 
-| Per 757-node pair region | ABC source OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
+| Per 757-node pair region | Pair-fused ABC OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
 |---|---:|---:|---:|---:|
 | Model Vector / Predicate peak | 26 / 7 | 32 / 7 | 32 / 13 | 32 / 8 |
 | Mean Vector live-range length | 30.09 | 32.92 | 31.28 | 32.34 |
@@ -198,7 +198,7 @@ shorter than the ABC source replay of 5070/5080 but is not equal to real CA
 ticks: it is a dependency-only model without real per-instruction resource and
 latency calibration.
 
-| Final device / CA metric | ABC source OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
+| Final device / CA metric | Pair-fused ABC OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
 |---|---:|---:|---:|---:|
 | Static device instruction slots | 888 | 888 | 1366 | 1026 |
 | Dynamic retired log lines | 1633 | 1633 | 2585 | 1905 |
@@ -210,13 +210,19 @@ latency calibration.
 | Tick median | 4053 | 4132 | 11443 | 5548 |
 | Strict compare | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass |
 
-The explicit control is only 1.95% slower than the current ABC source, but is
+The explicit control is only 1.95% slower than the pair-fused ABC source, but is
 25.5% faster than pressure-idle Scheduler ON and 63.9% faster than the
 original Scheduler ON result. Most importantly, it has no predicate
 spill/reload/barrier instructions. This confirms the implication of issue
 #574: AABBCC itself does not inherently cause spilling. The regression comes
 from the scheduler-generated fine-grained order inside AABBCC, especially
 extending `VCMP` live ranges, rather than from the macro-stage order.
+
+This comparison is deliberately limited to the existing two-token VPTO
+fixture. It does not compare against the original CCE reproducer's
+single-token ABC scope boundary. The pair-fused source already exposes two
+tokens to the hardware issue window at the same time, so its Scheduler-OFF
+number is an optimized control rather than the fair issue #574 ABC baseline.
 
 The current candidate comparison explains the result. Once projected pressure
 is not above its soft limit, all excess scores are zero and critical-path
@@ -242,6 +248,71 @@ Explicit-control artifacts are under the same result root:
 - CA runs: `explicit-aabbcc-off-run1`, `explicit-aabbcc-off-run2`, and
   `explicit-aabbcc-off-run3`
 - Smoke run: `explicit-control-smoke-vadd`
+
+## Single-token ABC control
+
+The `topk-gate-abc-single-token` control restores the scope boundary that was
+missing from the earlier comparison. It keeps the same `N`, `E`, `K`, input,
+strict golden result, kernel ABI, outer MTE wave, and Bisheng `MISCHED=0`
+setting. The only structural change from the pair-fused source is that each of
+the four tokens owns a separate `PSET`/`VEC_SCOPE` and its own `VCI`, padding,
+and nine-rank top-k chain. Consequently, Scheduler OFF now means the same thing
+as in the original CCE ABC construction: token B cannot enter the vector issue
+window until token A's scope has completed.
+
+| Final device / CA metric | Single-token ABC OFF | Pair-fused ABC OFF | Explicit AABBCC OFF | Scheduler limit 7 |
+|---|---:|---:|---:|---:|
+| Dynamic PSET | 4 | 2 | 2 | 2 |
+| Dynamic VCI | 24 | 12 | 12 | 12 |
+| Dynamic VCMP / VSEL | 432 / 432 | 420 / 432 | 420 / 432 | 420 / 432 |
+| Dynamic PLDI / PSTI | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| EX instructions | 1484 | 1450 | 1450 | 1450 |
+| EX active cycles | 1032 | 998 | 798 | 974 |
+| EX dual-issue cycles | 452 | 452 | 652 | 476 |
+| Derived SIMD span | 2882 | 1606 | 1696 | 1660 |
+| Tick runs | 5347, 5348, 5340 | 4052, 4053, 4056 | 4132, 4138, 4132 | 4105, 4102, 4108 |
+| Tick median | 5347 | 4053 | 4132 | 4105 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass |
+
+The fair result has the same direction as issue #574. Explicit hand-ordered
+AABBCC is 22.72% faster than single-token ABC, while the pair-fused ABC source
+is 24.20% faster. Predicate-limit-7 scheduling is 23.23% faster than the fair
+single-token control and 0.65% faster than explicit AABBCC. None of these three
+fast variants spills predicates, so the improvement over single-token ABC is
+latency hiding rather than spill avoidance.
+
+The CA log makes the hidden latency concrete. The four single-token `PSET`
+instructions retire at cycles 1785, 2503, 3221, and 3939, exactly 718 cycles
+apart. Its EX active-cycle gap histogram contains 72 gaps of 13 cycles and 68
+gaps of 8 cycles. These are dependency bubbles repeated independently in each
+token's reduction/broadcast/compare chain. Its 2882-cycle derived SIMD span is
+also close to the approximately 2907-cycle SIMD interval of the original CCE
+ABC report.
+
+Pair fusion does not change Scheduler OFF into compiler reordering. Instead,
+it changes what the hardware is allowed to see. With two independent tokens
+inside one `VEC_SCOPE`, both instruction streams reach the CA issue window.
+When token 0 is waiting for a reduction result such as
+`VCMAX`/`VCMIN -> VDUP -> VCMP`, the scoreboard can issue a dependency-ready
+instruction from token 1. The pair therefore takes about 808 or 769 cycles,
+instead of reproducing two approximately 718-cycle single-token intervals.
+The pair-fused gap histogram has only 2 gaps of 13 cycles and 12 gaps of 8
+cycles. This is the precise sense in which the source had already fused two
+tokens into one vecscope and obtained cross-token latency hiding before the
+VPTO scheduler did any work.
+
+Explicit AABBCC exposes the same two-token window but makes the chains more
+lockstep: its 652 dual-issue cycles exceed pair-fused ABC's 452. It still has
+36 gaps of 12 cycles and 34 gaps of 7 cycles, which explains why its final
+4132 ticks are slightly slower than pair-fused ABC despite higher dual issue.
+The predicate-limit-7 schedule reduces that fine-grained ordering cost while
+preserving the no-spill property.
+
+Single-token-control artifacts are under the same result root:
+
+- CA runs: `single-token-abc-off-run1`, `single-token-abc-off-run2`, and
+  `single-token-abc-off-run3`
+- Smoke run: `single-token-control-smoke-vadd`
 
 ## Predicate-limit calibration experiment
 
@@ -270,12 +341,14 @@ ranges overlap beyond the calibrated peak.
 
 The limit-7 result removes every predicate spill, reload, and associated
 barrier seen in the CA instruction logs. Its median is 26.0% faster than the
-limit-8 pressure-idle result, 0.65% faster than explicit AABBCC Scheduler OFF
-(4132 ticks), and 1.28% slower than the ABC Scheduler-OFF reference (4053
-ticks). This confirms that the physical boundary relevant to this lowering is
-seven allocated Predicate registers, not eight architectural names available
-to ordinary SSA values. It also shows that the remaining difference from the
-ABC reference is fine-grained ordering cost rather than spill cost.
+limit-8 pressure-idle result, 23.23% faster than the fair single-token ABC
+control (5347 ticks), 0.65% faster than explicit AABBCC Scheduler OFF (4132
+ticks), and 1.28% slower than the pair-fused ABC control (4053 ticks). This
+confirms that the physical boundary relevant to this lowering is seven
+allocated Predicate registers, not eight architectural names available to
+ordinary SSA values. The remaining 52-tick difference from pair-fused ABC is
+fine-grained ordering cost rather than spill cost; pair-fused ABC is an
+optimized latency-hiding control, not the original reproducer's baseline.
 
 Limit-7 artifacts are under the same result root:
 
@@ -287,6 +360,8 @@ Limit-7 artifacts are under the same result root:
 ## Saved artifacts
 
 - All results: `/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim`
+- Single-token ABC runs: `single-token-abc-off-run1`,
+  `single-token-abc-off-run2`, `single-token-abc-off-run3`
 - OFF runs: `aabbcc-off-run1`, `aabbcc-off-run2`, `aabbcc-off-run3`
 - ON runs: `aabbcc-on-run1`, `aabbcc-on-run2`, `aabbcc-on-run3`
 - Extracted device ELFs/text: `assembly/off`, `assembly/on`
