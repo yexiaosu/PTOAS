@@ -5,7 +5,9 @@ This VPTO runtime fixture reproduces the single-group compute graph from
 `token_tile=4`. Each vecscope starts in ABCABC source order for a two-token
 pair; the VPTO scheduler can derive an AABBCC-style latency-hiding order from
 the dependency graph. Scheduler OFF and ON use identical source, data, golden,
-and downstream Bisheng mischeduler settings.
+and downstream Bisheng mischeduler settings. Because two tokens already share
+one vecscope, Scheduler OFF is a pair-fused ABC control, not the original CCE
+single-token ABCABC boundary.
 
 ## CCE to VPTO mapping
 
@@ -34,3 +36,8 @@ expresses the CCE pair schedule directly in VPTO source. It shares this case's
 shape, input generation, ABI, golden, MTE wave, and Bisheng MISCHED setting.
 Use the two cases together to distinguish the quality of AABBCC itself from
 the fine-grained order selected by the VPTO scheduler.
+
+The sibling case `topk-gate-abc-single-token` is the fair control for the
+original CCE ABCABC mode. It uses four independent vecscopes, one per token,
+so neither the compiler nor the CA issue window can overlap vector
+instructions across tokens.
