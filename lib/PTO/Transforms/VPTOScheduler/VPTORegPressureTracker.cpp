@@ -76,6 +76,8 @@ VPTORegPressureEvaluation
 VPTORegPressureTracker::evaluateTop(const VPTOSUnit &unit) const {
   VPTORegPressureEvaluation evaluation;
   evaluation.delta.assign(current.size(), 0);
+  evaluation.released.assign(current.size(), 0);
+  evaluation.introduced.assign(current.size(), 0);
 
   DenseMap<Value, unsigned> candidateUses;
   for (Value operand : unit.getOperation()->getOperands())
@@ -83,12 +85,18 @@ VPTORegPressureTracker::evaluateTop(const VPTOSUnit &unit) const {
   for (const auto &entry : candidateUses) {
     Value value = entry.first;
     if (liveValues.contains(value) && !isLiveOut(value) &&
-        remainingUses.lookup(value) == entry.second)
+        remainingUses.lookup(value) == entry.second) {
       addValuePressure(value, -1, evaluation.delta);
+      addValuePressure(value, 1, evaluation.released);
+    }
   }
   for (Value result : unit.getOperation()->getResults()) {
-    if (!liveValues.contains(result) && resultNeedsLiveness(result))
+    bool introducesLiveResult =
+        !liveValues.contains(result) && resultNeedsLiveness(result);
+    if (introducesLiveResult) {
       addValuePressure(result, 1, evaluation.delta);
+      addValuePressure(result, 1, evaluation.introduced);
+    }
   }
   updateSummary(evaluation);
   return evaluation;
@@ -98,14 +106,20 @@ VPTORegPressureEvaluation
 VPTORegPressureTracker::evaluateBottom(const VPTOSUnit &unit) const {
   VPTORegPressureEvaluation evaluation;
   evaluation.delta.assign(current.size(), 0);
+  evaluation.released.assign(current.size(), 0);
+  evaluation.introduced.assign(current.size(), 0);
   for (Value result : unit.getOperation()->getResults()) {
-    if (liveValues.contains(result))
+    if (liveValues.contains(result)) {
       addValuePressure(result, -1, evaluation.delta);
+      addValuePressure(result, 1, evaluation.released);
+    }
   }
   DenseSet<Value> uniqueOperands;
   for (Value operand : unit.getOperation()->getOperands()) {
-    if (uniqueOperands.insert(operand).second && !liveValues.contains(operand))
+    if (uniqueOperands.insert(operand).second && !liveValues.contains(operand)) {
       addValuePressure(operand, 1, evaluation.delta);
+      addValuePressure(operand, 1, evaluation.introduced);
+    }
   }
   updateSummary(evaluation);
   return evaluation;

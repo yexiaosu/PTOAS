@@ -1215,8 +1215,12 @@ def VPTOScheduler : Pass<"pto-vpto-scheduler", "ModuleOp"> {
     dependency DAG construction, coverage, and original-order pressure
     analysis. `analyze` stops after that common prefix without mutating IR.
     `on` additionally performs deterministic top-down list scheduling through
-    an injectable candidate strategy, followed by validation, replay, and
-    application of each verified result.
+    an injectable pressure-aware candidate strategy. It preserves critical
+    path priority at low pressure, prefers live-range-closing candidates near
+    a modeled pressure limit within one modeled-latency urgency window, and
+    retains verified pressure-driven advancement when all ready candidates
+    exceed a limit. Validation and fresh replay precede application of each
+    verified result.
   }];
   let constructor = "mlir::pto::createVPTOSchedulerPass()";
   let options = [
