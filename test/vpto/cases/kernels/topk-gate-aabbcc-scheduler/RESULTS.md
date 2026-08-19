@@ -1,227 +1,43 @@
 # A5 CA SIM validation
 
-This report consolidates the VPTO scheduler stage-two experiments. The current
-result is the near-limit pressure-aware scheduler with the calibrated A5
-Predicate limit of 7. The earlier limit-7 run is equivalent for this fixture
-and is intentionally not retained as a separate configuration.
+## Near-limit pressure-aware scheduling validation (2026-08-19)
 
-## Result summary
+This section records the validation of implementation commit
+`cebb779526d74e1d417e5c36d2c1db53820589cf`. The scheduler does not target a
+literal ABCABC or AABBCCDD shape. It ranks candidates from their modeled
+critical-path urgency, projected bounded-set pressure, and SSA live-range
+release. Low-pressure scheduling remains critical-path driven. When a
+candidate can consume the remaining pressure headroom, a non-urgent candidate
+that preserves pressure or closes live ranges wins; an urgent chain remains
+protected by a one-modeled-write-latency window. Advancing to a pending event
+is still restricted to the all-candidates-over-limit state and is checked by
+fresh replay.
 
-All current configurations ran three times with the repository validation
-runner, real CA-model execution, and strict exact comparison.
+The policy is independent of TopK operation names, token/rank indices, and
+fixed schedule shapes. Scheduler OFF remains an exact no-op, analyze remains
+non-mutating, unknown scheduling classes are rejected, and schedule
+verification, fresh replay, and IR application remain separate gates.
 
-| Configuration | Role | Predicate / Vector peak | Dynamic PLDI / PSTI / spill barrier | Tick runs | Min / median / max | Strict compare |
-|---|---|---:|---:|---|---:|---:|
-| Near-limit Scheduler ON | Current scheduler result | 7 / 32 | 0 / 0 / 0 | 4110, 4116, 4113 | 4110 / 4113 / 4116 | 3/3 pass |
-| Pair-fused Scheduler OFF | Same input, exact no-op control | 7 / 26 | 0 / 0 / 0 | 4053, 4054, 4059 | 4053 / 4054 / 4059 | 3/3 pass |
-| Explicit AABBCC OFF | Hand-ordered no-spill diagnostic control | 7 / 32 | 0 / 0 / 0 | 4150, 4154, 4142 | 4142 / 4150 / 4154 | 3/3 pass |
-| Single-token ABC OFF | Issue #574 external-scope baseline | n/a | 0 / 0 / 0 | 5357, 5357, 5351 | 5351 / 5357 / 5357 | 3/3 pass |
-
-The current Scheduler-ON median is 1.46% above the fresh pair-fused OFF
-control, 0.89% below the explicit AABBCC control, and 23.22% below the
-single-token ABC control. It removes the spill failure of the original
-scheduler but does not outperform pair-fused OFF.
-
-ABC and AABB are descriptive source/schedule labels, not optimization targets.
-Pair-fused OFF already exposes two independent token chains inside one
-vecscope and hardware issue window. Scheduler stage two operates within each
-vecscope and does not perform cross-vecscope fusion.
-
-## Development comparison
-
-The experiments that materially changed the result are retained below. The
-old limit-7 result is omitted because the current near-limit result has the
-same pressure-idle count, modeled peaks, rank-loop predicate live ranges, and
-EX active/dual-issue counts.
-
-| Scheduler generation | Predicate peak | Dynamic PLDI / PSTI / spill barrier | Median ticks | Outcome |
-|---|---:|---:|---:|---|
-| Original stage-two scheduler | 13 | 238 / 238 / 476 | 11443 | Large producer batches extend Predicate ranges and spill |
-| Pressure-driven idle, Predicate limit 8 | 8 | 68 / 68 / 136 | 5548 | Fewer spills, but the modeled limit is above the backend-safe boundary |
-| Current near-limit policy, Predicate limit 7 | 7 | 0 / 0 / 0 | 4113 | No Predicate or Vector spill; current retained result |
-
-The main improvement came from calibrating Predicate pressure to the backend's
-P1-P7 allocation and retaining pressure-driven event advancement. The
-near-limit strategy adds a generic pre-limit preference, but on this fixture it
-changes only three setup positions per region and does not change the main
-rank-loop schedule.
-
-## Current algorithm result
-
-The scheduler ranks candidates using their modeled critical-path urgency,
-projected bounded-set pressure, and SSA live-range release:
-
-1. A candidate that remains within all pressure limits beats one that exceeds
-   a limit.
-2. Excess growth and projected excess remain the first weighted costs.
-3. When a ready producer can consume the remaining headroom, candidates enter
-   near-limit ranking.
-4. A one-modeled-write-latency urgency band protects a materially more urgent
-   critical path.
-5. Within that band, lower projected pressure and greater live-range release
-   are preferred.
-6. Critical path, pressure delta, and original order provide the remaining
-   deterministic ordering.
-
-If every available candidate exceeds a bounded pressure set and a dependency
-event is pending, the scheduler advances to that event. It emits no hardware
-NOP. Fresh replay verifies that no safe candidate existed and that the cycle
-advance, pressure state, dependencies, and final order are valid. If no event
-is pending, scheduling must continue rather than deadlock.
-
-The policy uses dataflow and pressure properties only. It contains no TopK
-operation-name, token-index, rank-count, or fixed ABC/AABB rule.
-
-## Scheduler trace
-
-Implementation validated:
-`cebb779526d74e1d417e5c36d2c1db53820589cf`.
-
-| Metric | Pair region 0 | Pair region 1 |
-|---|---:|---:|
-| Nodes / edges | 757 / 2544 | 757 / 2544 |
-| Live-ins / live-outs | 27 / 27 | 27 / 27 |
-| Known / unknown classes | 757 / 0 | 757 / 0 |
-| Dependency critical-path lower bound | 1820 | 1820 |
-| Source-order replay last issue / completion | 5070 / 5080 | 5070 / 5080 |
-| Scheduled result last issue / completion | 1820 / 1830 | 1820 / 1830 |
-| Modeled Vector / Predicate peak | 32 / 7 | 32 / 7 |
-| Pressure-driven event advances | 17 | 17 |
-| Compute-predicate live ranges | 54 x 6; 150 x 8 | 54 x 6; 150 x 8 |
-
-Coverage is 1514 schedulable operations, with zero structural, boundary,
-unsupported, or unclassified operations. Both regions pass schedule
-verification, fresh replay, and IR application. There is no unknown class,
-fallback, verifier failure, replay failure, or apply failure.
-
-Across both regions the selected-candidate reasons are:
-
-| Reason | Count |
-|---|---:|
-| `deterministic-tie-break` | 732 |
-| `longer-critical-path` | 376 |
-| `lower-pressure-delta` | 38 |
-| `pressure-safe-candidate` | 32 |
-| `near-limit-pressure-preserving` | 2 |
-| `only-candidate` | 334 |
-
-No `near-limit-live-range-closing` decision occurs in this TopK trace. Its
-generic behavior is covered by focused strategy tests. The two
-`near-limit-pressure-preserving` selections move two setup loads ahead of one
-setup compare in each region. The 204 rank-loop compute-predicate ranges per
-region remain unchanged, with mean positional length 7.47.
-
-The 5070 source replay and 1820 scheduled result are not symmetric hardware
-performance estimates. Source replay keeps a monotonically nondecreasing time
-over the fixed IR order, while the ON result is created from the full DAG ready
-set. The current model also lacks a calibrated finite OOO window and real
-issue-width/resource model. These logical cycles are dependency diagnostics,
-not evidence that ON is faster than OFF.
-
-## Final device and CA metrics
-
-| Metric | Near-limit Scheduler ON | Pair-fused OFF | Explicit AABBCC OFF | Single-token ABC OFF |
-|---|---:|---:|---:|---:|
-| Device `.text` bytes / slots | 3552 / 888 | 3552 / 888 | 3552 / 888 | 2328 / 582 |
-| Static unique VLDI / VSTI in executed vector body | 12 / 20 | 12 / 20 | n/a | n/a |
-| Dynamic VLDI / VSTI | 24 / 40 | 24 / 40 | 24 / 40 | 24 / 40 |
-| Dynamic PLDI / PSTI / spill barrier | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
-| EX instructions | 1450 | 1450 | 1450 | 1484 |
-| EX active / dual-issue cycles | 974 / 476 | 998 / 452 | 798 / 652 | 1032 / 452 |
-| Derived SIMD span | 1660 | 1606 | 1696 | 2882 |
-| Retired instruction-log entries | 1631 | 1635 | 1636 | 1694 |
-
-`EX` denotes the CA `RVECEX` vector-compute pipeline. Active cycles contain at
-least one retired `RVECEX`; dual-issue cycles contain two. The current result
-packs 24 more EX pairs than pair-fused OFF, but its SIMD span is 54 cycles
-longer. More simultaneously live Vector values therefore did not create more
-useful ready work.
-
-### Spill evidence
-
-Predicate and Vector spill freedom is checked from the final CA instruction
-stream, not inferred from the textual pressure peak alone.
-
-- The current result uses V0-V31 and reaches the modeled Vector boundary of
-  32 without allocating outside that physical set.
-- Scheduler ON and pair-fused OFF have identical expected Vector transfers:
-  12 unique VLDI and 20 unique VSTI in the compiled vector body, executed
-  twice as 24/40 dynamic instructions.
-- The 12 VLDI are the two tokens' six score loads. The 20 VSTI are two setup
-  stores plus nine rank stores for each token. There is no additional
-  save/restore pair attributable to Vector spilling.
-- PLDI, PSTI, and their spill-related SMEM barrier are absent from the dynamic
-  stream.
-- The CA popped log covers every vector PC from the first PSET at device-text
-  offset `0x200` through the final SEND at `0xddd4`. Unretired slots are in the
-  scalar/MTE prelude and after the final SEND, not hidden vector spill code.
-- Scheduler ON, pair-fused OFF, and explicit AABBCC all retain 888 static
-  instruction slots.
-
-The installed Bisheng `llvm-objdump` recognizes the A5 HiIPU ELF but prints
-`<not available>` for its instruction mnemonics. Static opcode claims above
-therefore come from complete CA vector-PC coverage and decoded retired
-instructions, not from an empty grep over undecoded objdump output.
-
-The current Scheduler-ON device `.text` SHA-256 is
-`b4fe848df860b37f4d19610da570736a2d49a835626360a294c0d333e3396b4c`.
-It differs from prior device text, ruling out stale artifact reuse.
-
-## Control interpretation
-
-### Pair-fused Scheduler OFF
-
-The source contains two independent token chains in each vecscope. OFF does
-not perform compiler scheduling, but the CA issue window can use one token's
-ready work while the other token waits for a reduction or broadcast result.
-Its Predicate / Vector source-order pressure peak is 7 / 26, and it is the
-fastest fresh control at median 4054 ticks.
-
-### Explicit AABBCC OFF
-
-This case expresses a hand-ordered fine-grained pair schedule while keeping
-the scheduler off. It has the same ABI, operation mix, MTE wave, golden result,
-and Bisheng mischeduler setting as the main fixture. It is a diagnostic
-no-spill control, not an order the generic scheduler must reproduce. Its
-median is 4150 ticks.
-
-### Single-token ABC OFF
-
-This case places each token in its own vecscope and matches the external scope
-boundary of issue #574. Later tokens cannot enter the same vector issue window
-to hide the current token's dependency latency. It remains the fair external
-ABC baseline at median 5357 ticks, not an input that stage two is expected to
-fuse.
-
-## Provenance
+### Provenance and command
 
 - Server worktree:
   `/home/wanglan/PTOAS/.worktrees/ca-sim-workspaces/vpto-sched-aabbcc-sim`
 - Branch: `codex/vpto-sched-aabbcc-sim`
-- Validation implementation:
-  `cebb779526d74e1d417e5c36d2c1db53820589cf`
+- Validation commit: `cebb779526d74e1d417e5c36d2c1db53820589cf`
 - Build: `/home/wanglan/PTOAS/.worktrees/ca-sim-builds/vpto-sched-aabbcc-sim`
-- Python/PTOAS: the worktree's `.venv/bin/python` and `.venv/bin/ptoas`
+- Python/PTOAS: the server worktree's `.venv/bin/python` and
+  `.venv/bin/ptoas`; `_core` and `libPTOASCompiler.so` also resolve inside
+  that venv
 - LLVM/MLIR: `/home/wanglan/llvm-workspaces/build-vpto19`
 - CANN/Bisheng: `/usr/local/CANN/cann-9.1.0`, Bisheng 15.0.5
-- Simulator:
+- CA model library:
   `/usr/local/CANN/cann-9.1.0/x86_64-linux/simulator/dav_3510/lib`
-- Read-only PTO-ISA: `/home/wanglan/pto-isa`, commit
-  `311ca0c83f5571dc165681fee0a427983c555d3c`
 - Result root:
   `/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim/near-limit-cebb77952`
 
-The editable Python package, `_core`, `libPTOASCompiler.so`, and RUNPATH were
-verified to resolve inside this worktree/venv or the LLVM directory above.
-
-## Reproduction
-
-All cases use the repository runner. `CASE_NAME`, scheduler mode, and a unique
-`WORK_SPACE` vary by configuration.
+Each run used the repository runner and a unique `WORK_SPACE`:
 
 ```bash
-export RESULT_ROOT=/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim/near-limit-cebb77952
-export WORK_SPACE="$RESULT_ROOT/<configuration>-run-<n>"
 export ASCEND_HOME_PATH=/usr/local/CANN/cann-9.1.0
 export SIM_LIB_DIR="$ASCEND_HOME_PATH/x86_64-linux/simulator/dav_3510/lib"
 export PTOAS_BIN="$PTO_SOURCE_DIR/.venv/bin/ptoas"
@@ -233,23 +49,455 @@ export PTOAS_FLAGS="--pto-arch a5 --pto-backend=vpto --vpto-scheduler=on"
 ```
 
 The saved trace compile adds `--vpto-scheduler-trace` and uses
-`COMPILE_ONLY=1`. Controls use their corresponding case name and
-`--vpto-scheduler=off`.
+`COMPILE_ONLY=1`. Both smoke cases, `micro-op/binary-vector/vadd` and
+`micro-op/vector-load-store/vlds-post-update`, started and stopped the real CA
+model and passed strict comparison before the TopK runs.
 
-Before the target runs, both smoke cases started and stopped the real CA model
-and passed strict comparison:
+### Scheduler trace
 
-- `micro-op/binary-vector/vadd`: 12973 ticks
-- `micro-op/vector-load-store/vlds-post-update`: 2427 ticks
+| Metric | Region 0 | Region 1 |
+|---|---:|---:|
+| Nodes / edges | 757 / 2544 | 757 / 2544 |
+| Known / unknown classes | 757 / 0 | 757 / 0 |
+| Critical-path lower bound | 1820 | 1820 |
+| Source last issue / completion | 5070 / 5080 | 5070 / 5080 |
+| Scheduled last issue / completion | 1820 / 1830 | 1820 / 1830 |
+| Modeled Vector / Predicate peak | 32 / 7 | 32 / 7 |
+| Pressure-driven event advances | 17 | 17 |
+| Compute-predicate live ranges | 54 x 6; 150 x 8 | 54 x 6; 150 x 8 |
+
+Coverage is 1514 schedulable operations, with zero structural, boundary,
+unsupported, or unclassified operations. The final candidate reasons across
+both regions are 732 deterministic tie-breaks, 376 longer critical paths, 38
+lower pressure deltas, 32 pressure-safe candidates, two near-limit
+pressure-preserving candidates, and 334 only-candidate decisions. There is no
+unknown class, fallback, verifier failure, replay failure, or apply failure.
+
+The 204 compute-predicate ranges per region have mean positional length 7.47.
+Compared with the earlier Predicate-limit-7 schedule, only result positions
+28-30 in each region differ: two setup loads move ahead of one setup compare.
+The complete rank-loop predicate distribution is unchanged, so the new policy
+does not serialize the exposed token chains. The focused tests separately
+exercise the near-limit last-use-closing and urgent-critical-path branches that
+this fixture does not select.
+
+### Final device code and CA SIM
+
+Static counts come from the CANN HiIPU `llvm-objdump` output for the embedded
+`.aicore_binary`; dynamic counts come from
+`core0.veccore0.instr_popped_log.dump`. "Retired entries" counts instruction
+records containing a PC. SIMD span uses the same saved-results interval
+convention as the earlier tables.
+
+| Metric | Pair-fused Scheduler ON | Pair-fused Scheduler OFF | Explicit AABBCC OFF | Single-token ABC OFF |
+|---|---:|---:|---:|---:|
+| Static `.text` instruction slots | 888 | 888 | 888 | 582 |
+| Static PLDI / PSTI / SMEM_BAR | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| Dynamic PLDI / PSTI / SMEM_BAR | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| Retired instruction-log entries | 1631 | 1635 | 1636 | 1694 |
+| EX instructions | 1450 | 1450 | 1450 | 1484 |
+| EX active / dual-issue cycles | 974 / 476 | 998 / 452 | 798 / 652 | 1032 / 452 |
+| Derived SIMD span | 1660 | 1606 | 1696 | 2882 |
+| Tick runs | 4110, 4116, 4113 | 4053, 4054, 4059 | 4150, 4154, 4142 | 5357, 5357, 5351 |
+| Tick min / median / max | 4110 / 4113 / 4116 | 4053 / 4054 / 4059 | 4142 / 4150 / 4154 | 5351 / 5357 / 5357 |
+| Strict exact compare | 3/3 pass | 3/3 pass | 3/3 pass | 3/3 pass |
+
+The Scheduler-ON device `.text` SHA-256 is
+`b4fe848df860b37f4d19610da570736a2d49a835626360a294c0d333e3396b4c`.
+It differs from the earlier Predicate-limit-7 device text, while retaining
+zero static and dynamic predicate spill/reload/barrier instructions. This
+rules out stale artifact reuse.
+
+The fresh Scheduler-ON median is 0.19% above the earlier limit-7 median (4113
+versus 4105), a non-material eight-tick change, and 1.46% above the fresh
+pair-fused Scheduler-OFF control (4113 versus 4054). It is 0.89% faster than
+the fresh explicit AABBCC control and 23.22% faster than the fresh single-token
+ABC control. The remaining 59-tick gap to pair-fused OFF is not predicate
+spill cost: all spill counts are zero, the compute-predicate ranges match the
+prior no-spill schedule, and EX active/dual-issue counts remain 974/476. It is
+the fine-grained setup/order and unmodeled backend/hardware latency cost left
+by the simplified scheduling model.
+
+For continuity with the historical baselines below:
+
+| Configuration | Predicate peak | Dynamic PLDI / PSTI / barrier | Median ticks |
+|---|---:|---:|---:|
+| Original Scheduler ON | 13 | 238 / 238 / 476 | 11443 |
+| Pressure idle, Predicate limit 8 | 8 | 68 / 68 / 136 | 5548 |
+| Pressure idle, Predicate limit 7 | 7 | 0 / 0 / 0 | 4105 |
+| Near-limit generic policy, Predicate limit 7 | 7 | 0 / 0 / 0 | 4113 |
+
+Artifacts are retained under the result root as `main-on-trace`,
+`main-on-run-{1,2,3}`, `main-off-run-{1,2,3}`,
+`explicit-off-run-{1,2,3}`, `single-off-run-{1,2,3}`, `smoke-vadd`, and
+`smoke-vlds-post-update`. Extracted objects, device text, and disassembly are
+under `assembly/{main-on,main-off,explicit-off,single-off}`.
+
+This report records the validation performed on 2026-08-18 for the VPTO
+scheduler stage-two baseline `1aec0919154a8a0cba87bd848f78974d2ee2df64`.
+
+## Provenance
+
+- Worktree: `/home/wanglan/PTOAS/.worktrees/ca-sim-workspaces/vpto-sched-aabbcc-sim`
+- Branch: `codex/vpto-sched-aabbcc-sim`
+- Build: `/home/wanglan/PTOAS/.worktrees/ca-sim-builds/vpto-sched-aabbcc-sim`
+- Venv Python and PTOAS: worktree `.venv/bin/python` and `.venv/bin/ptoas`
+- LLVM: `/home/wanglan/llvm-workspaces/build-vpto19`
+- CANN/Bisheng: `/usr/local/CANN/cann-9.1.0`, Bisheng 15.0.5
+- Simulator: `/usr/local/CANN/cann-9.1.0/x86_64-linux/simulator/dav_3510/lib`
+- Read-only PTO-ISA: `/home/wanglan/pto-isa`, commit `311ca0c83f5571dc165681fee0a427983c555d3c`
+
+The Python package, `_core`, `libPTOASCompiler.so`, and RUNPATH all resolve
+inside this worktree/venv or the LLVM directory above.
+
+The authoritative #574 CCE artifact is commit
+`623c008588397063b540178d3ba0cebae3d51a38` under
+`docs/issues/574-topk-gate-vf-aabbcc-misched` in the read-only checkout:
+
+`/home/wanglan/PTOAS/.worktrees/ca-sim-workspaces/vpto-sched2-sim-508-574-1168-rebase-llvm19/sim-results/issues-508-574-1168/external/PTOAS-official-574`
+
+Relevant SHA-256 values are:
+
+- `topk_gate_vf.cpp`: `d256db92e986b9d0a07468f08845c693958f423846738d7f98c2d239e119e6f8`
+- `main_vf.cpp`: `2334c29f9fb5430c6ae568ac32d643f21c15376e545af300e3d5074b6e3507da`
+- `run_vf_sim.sh`: `13ef69f63af9fbaeb2c1d0449c421571768dadcd325cae6c7389aa369a7ceffc`
+- `VF_AABBCC_MISCHED_REPORT.md`: `a9a34343bcfc848e2e68b48bcb9402066c5110d6c826a76b38d7663ba46b3864`
+
+The original uses `-mllvm -cce-aicore-vec-misched=0` for `MISCHED=0`.
+PTOAS does the same by default; neither control command passes
+`--enable-bisheng-vec-misched`.
+
+## Reproduction command
+
+Both modes use the repository runner. `MODE` is `off` or `on`; ON additionally
+uses `--vpto-scheduler-trace` for the saved trace compile.
+
+```bash
+export RESULT_ROOT=/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim
+export WORK_SPACE="$RESULT_ROOT/aabbcc-${MODE}-run1"
+export ASCEND_HOME_PATH=/usr/local/CANN/cann-9.1.0
+export SIM_LIB_DIR="$ASCEND_HOME_PATH/x86_64-linux/simulator/dav_3510/lib"
+export PTOAS_BIN="$PTO_SOURCE_DIR/.venv/bin/ptoas"
+export CASE_NAME=kernels/topk-gate-aabbcc-scheduler
+export DEVICE=SIM
+export COMPILE_ONLY=0
+export PTOAS_FLAGS="--pto-arch a5 --pto-backend=vpto --vpto-scheduler=${MODE}"
+"$PTO_SOURCE_DIR/test/vpto/scripts/run_host_vpto_validation.sh"
+```
+
+## Scheduler trace
+
+Each of the two pair regions has 757 nodes, 2544 edges, 27 live-ins/outs,
+757 known classes, and zero unknown classes. Coverage is 1514 schedulable,
+zero unsupported, and zero unclassified. The critical-path lower bound is
+1820 model cycles. Replaying source order monotonically gives last issue 5070
+and completion 5080; the scheduled result gives last issue 1820 and completion
+1830. Source-order pressure peaks at Vector 26 / Predicate 7; scheduled pressure
+peaks at Vector 32 / Predicate 13.
+
+`schedule-result` is printed only after schedule verification, fresh model
+replay, and IR application all succeed. Both regions emit it; no skip,
+fallback, verifier failure, or apply failure is present. The result order is
+AABBCCDD within each rank.
+
+Trace log:
+
+`/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim/aabbcc-compile-on/kernels_topk-gate-aabbcc-scheduler/validation.log`
+
+The trace compile and SIM compile have identical extracted device `.text`
+SHA-256 `5ac0f89ab5abfdcf5691ce4631d09850ec14b240ddde8d7f5296d80293694418`.
+
+## Device instructions and CA SIM
+
+| Metric | Scheduler OFF | Scheduler ON |
+|---|---:|---:|
+| Static `.text` instruction slots | 888 | 1366 |
+| Static PLDI / PSTI / SMEM_BAR | 0 / 0 / 0 | 119 / 119 / 238 |
+| Dynamic PLDI / PSTI / SMEM_BAR | 0 / 0 / 0 | 238 / 238 / 476 |
+| Dynamic retired log lines | 1633 | 2585 |
+| VMAX / VCMAX / VMIN / VCMIN | 216 / 36 / 216 / 36 | same |
+| VCMP / VSEL | 420 / 432 | same |
+| VCI / VDUP-family / VLDI / VSTI | 12 / 80 / 24 / 40 | same |
+| Derived SIMD span | 1606 | 9033 |
+| Derived EXIPC | 0.903 | 0.161 |
+| Tick runs | 4052, 4053, 4056 | 11443, 11444, 11443 |
+| Tick min / median / max | 4052 / 4053 / 4056 | 11443 / 11443 / 11444 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass |
+
+SIMD span is retirement-log last-minus-first RV cycle plus the 26-cycle tail
+used by the #574 report. EXIPC is the unchanged 1450 compute/issue operations
+divided by that span. No CA summary occupancy file was produced, so no
+unsupported occupancy or stall estimate is claimed.
+
+The VPTO source contains all original padding and final winner-mask operations.
+The final device mix is smaller than the raw CCE artifact because PTOAS/Bisheng
+CSEs the identical pair padding predicates and removes the last post-K winner
+mask, whose result has no subsequent rank. This does not change the 36 output
+indices or their strict golden semantics.
+
+The final retired sequence confirms ABCD-ABCD with Scheduler OFF and
+AABBCCDD with Scheduler ON. ON then inserts the spill/barrier sequence visible
+above. Stage two therefore shortens its simplified dependency-only logical
+schedule but exceeds predicate pressure and regresses CA SIM median ticks by
+2.82x. The result is a successful real-equivalent scheduler coverage test, not
+a performance improvement.
+
+## Follow-up pressure-driven idle experiment
+
+The scheduler was then changed experimentally so that it advances to the next
+pending dependency event only when every currently available candidate would
+exceed at least one modeled pressure limit. It does not emit a hardware NOP.
+If there is no pending event, pressure remains a soft objective and scheduling
+continues. Fresh model replay verifies the condition and the logical-cycle
+advance before IR application.
+
+On this fixture, each 757-node region records 17 pressure-driven advances. The
+critical-path lower bound, last scheduled issue cycle, and completion remain
+1820, 1820, and 1830 model cycles. Peak pressure changes from Vector 32 /
+Predicate 13 to Vector 32 / Predicate 8. Both regions retain full known model
+coverage and pass schedule verification, replay, and application without a
+fallback.
+
+| Metric | Original Scheduler ON | Pressure-idle Scheduler ON |
+|---|---:|---:|
+| Pressure-driven entries per pair region | 0 | 17 |
+| Peak Vector / Predicate | 32 / 13 | 32 / 8 |
+| Dynamic PLDI / PSTI / SMEM_BAR | 238 / 238 / 476 | 68 / 68 / 136 |
+| Dynamic retired log lines | 2585 | 1905 |
+| Tick runs | 11443, 11444, 11443 | 5548, 5558, 5546 |
+| Tick min / median / max | 11443 / 11443 / 11444 | 5546 / 5548 / 5558 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass |
+
+The experiment reduces each predicate spill/load count and its associated
+barrier count by 71.4%, and reduces the Scheduler-ON median tick count by 51.5%
+(2.06x faster). It does not close the gap to Scheduler OFF: 5548 versus 4053
+baseline median ticks is still a 36.9% regression. Most importantly, the final
+backend still emits predicate spills even though the scheduler's simplified
+SSA pressure estimate no longer exceeds its Predicate limit of 8. The current
+limit is therefore not a calibrated physical allocation boundary, and the
+model does not yet capture all final register-allocation interference,
+implicit temporaries, or lowering effects.
+
+Follow-up artifacts are under the same result root:
+
+- Trace compile: `pressure-idle-aabbcc-compile-on`
+- Scheduler OFF reference: `pressure-idle-aabbcc-off-run1`
+- Scheduler ON runs: `pressure-idle-aabbcc-on-run1`,
+  `pressure-idle-aabbcc-on-run2`, and `pressure-idle-aabbcc-on-run3`
+- Smoke runs: `pressure-idle-smoke-vadd` and
+  `pressure-idle-smoke-vlds-post-update`
+
+## Explicit hand-ordered AABBCC control
+
+An additional `topk-gate-aabbcc-explicit` control keeps the VPTO scheduler
+OFF and expresses the issue #574 hand-written AABBCC order directly in VPTO.
+It has the same input, output ABI, operation counts, strict golden semantics,
+MTE wave, and Bisheng `MISCHED=0` setting as the original fixture. Within each
+two-token rank it uses the following fine-grained order:
+
+```text
+AA  (VMAX0, VMAX1) x 6
+BB  VCMAX0, VCMAX1, broadcast0, broadcast1
+CC  (VCMP0, VSEL0) x 6, (VCMP1, VSEL1) x 6,
+    (VMIN0, VMIN1) x 6, VCMIN0, VCMIN1, broadcast0, broadcast1
+DD  VSTI0, VSTI1,
+    (VCMP0, VSEL0) x 6, (VCMP1, VSEL1) x 6
+```
+
+This differs materially from merely observing an AABBCC macro-stage label in
+the scheduler result. The original scheduler emits all ready predicate
+producers first and delays their consumers; pressure-driven idle reduces the
+batch size but retains the same producer-batching shape. The explicit control
+closes every compute predicate immediately.
+
+| Per 757-node pair region | Pair-fused ABC OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
+|---|---:|---:|---:|---:|
+| Model Vector / Predicate peak | 26 / 7 | 32 / 7 | 32 / 13 | 32 / 8 |
+| Mean Vector live-range length | 30.09 | 32.92 | 31.28 | 32.34 |
+| Mean Predicate live-range length | 4.99 | 4.82 | 16.16 | 11.49 |
+| 204 compute-predicate lengths | 204 x 1 | 204 x 1 | 148 x 12; 56 x 14 | 122 x 7; 26 x 8; 48 x 9; 8 x 10 |
+| Dynamic PLDI / PSTI / SMEM_BAR | 0 / 0 / 0 | 0 / 0 / 0 | 238 / 238 / 476 | 68 / 68 / 136 |
+
+Live-range length is measured in final VPTO operation positions from SSA
+definition to last use, before register allocation. The 204-row distribution
+excludes setup predicates and the function-wide active mask. It exactly
+captures each rank's match and winner-mask `VCMP` result. Both regions have the
+same result.
+
+The analyze-only trace for the explicit control has 757 nodes, 2544 edges,
+full known model coverage, and critical-path lower bound 1820 model cycles.
+Monotonic source replay gives last issue 3570 and completion 3580. This is
+shorter than the ABC source replay of 5070/5080 but is not equal to real CA
+ticks: it is a dependency-only model without real per-instruction resource and
+latency calibration.
+
+| Final device / CA metric | Pair-fused ABC OFF | Explicit AABBCC OFF | Original scheduler AABBCC | Pressure-idle AABBCC |
+|---|---:|---:|---:|---:|
+| Static device instruction slots | 888 | 888 | 1366 | 1026 |
+| Dynamic retired log lines | 1633 | 1633 | 2585 | 1905 |
+| Dynamic VMAX / VCMAX / VMIN / VCMIN | 216 / 36 / 216 / 36 | same | same | same |
+| Dynamic VCMP / VSEL | 420 / 432 | same | same | same |
+| Derived SIMD span | 1606 | 1696 | 9033 | 3130 |
+| Derived EXIPC | 0.903 | 0.855 | 0.161 | 0.463 |
+| Tick runs | 4052, 4053, 4056 | 4132, 4138, 4132 | 11443, 11444, 11443 | 5548, 5558, 5546 |
+| Tick median | 4053 | 4132 | 11443 | 5548 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass |
+
+The explicit control is only 1.95% slower than the pair-fused ABC source, but is
+25.5% faster than pressure-idle Scheduler ON and 63.9% faster than the
+original Scheduler ON result. Most importantly, it has no predicate
+spill/reload/barrier instructions. This confirms the implication of issue
+#574: AABBCC itself does not inherently cause spilling. The regression comes
+from the scheduler-generated fine-grained order inside AABBCC, especially
+extending `VCMP` live ranges, rather than from the macro-stage order.
+
+This comparison is deliberately limited to the existing two-token VPTO
+fixture. It does not compare against the original CCE reproducer's
+single-token ABC scope boundary. The pair-fused source already exposes two
+tokens to the hardware issue window at the same time, so its Scheduler-OFF
+number is an optimized control rather than the fair issue #574 ABC baseline.
+
+The current candidate comparison explains the result. Once projected pressure
+is not above its soft limit, all excess scores are zero and critical-path
+height is compared before pressure delta. A newly ready `VSEL` that would end
+a predicate live range can therefore lose to another high-height `VCMP` that
+creates one. Pressure-driven idle reacts only after every available candidate
+would exceed a limit; it cannot repair the already lengthened live ranges.
+
+The next scheduling experiment should preserve macro AABBCC parallelism while
+adding a near-limit, critical-path-slack-aware consumer preference: when a
+ready last-use consumer can close a Predicate range without delaying a truly
+urgent chain, select it before opening another Predicate range. The preference
+should be continuous before the hard excess point and should keep the explicit
+control's alternating token-0/token-1 VMAX/VMIN chains. Pressure-driven idle
+remains a fallback for the all-candidates-over-limit state. This is narrower
+than globally moving pressure delta ahead of critical path, which could erase
+useful ILP. A schedule acceptance gate remains deliberately deferred while
+this fixture is used to improve the strategy itself.
+
+Explicit-control artifacts are under the same result root:
+
+- Analyze trace: `explicit-aabbcc-analysis`
+- CA runs: `explicit-aabbcc-off-run1`, `explicit-aabbcc-off-run2`, and
+  `explicit-aabbcc-off-run3`
+- Smoke run: `explicit-control-smoke-vadd`
+
+## Single-token ABC control
+
+The `topk-gate-abc-single-token` control restores the scope boundary that was
+missing from the earlier comparison. It keeps the same `N`, `E`, `K`, input,
+strict golden result, kernel ABI, outer MTE wave, and Bisheng `MISCHED=0`
+setting. The only structural change from the pair-fused source is that each of
+the four tokens owns a separate `PSET`/`VEC_SCOPE` and its own `VCI`, padding,
+and nine-rank top-k chain. Consequently, Scheduler OFF now means the same thing
+as in the original CCE ABC construction: token B cannot enter the vector issue
+window until token A's scope has completed.
+
+| Final device / CA metric | Single-token ABC OFF | Pair-fused ABC OFF | Explicit AABBCC OFF | Scheduler limit 7 |
+|---|---:|---:|---:|---:|
+| Dynamic PSET | 4 | 2 | 2 | 2 |
+| Dynamic VCI | 24 | 12 | 12 | 12 |
+| Dynamic VCMP / VSEL | 432 / 432 | 420 / 432 | 420 / 432 | 420 / 432 |
+| Dynamic PLDI / PSTI | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| EX instructions | 1484 | 1450 | 1450 | 1450 |
+| EX active cycles | 1032 | 998 | 798 | 974 |
+| EX dual-issue cycles | 452 | 452 | 652 | 476 |
+| Derived SIMD span | 2882 | 1606 | 1696 | 1660 |
+| Tick runs | 5347, 5348, 5340 | 4052, 4053, 4056 | 4132, 4138, 4132 | 4105, 4102, 4108 |
+| Tick median | 5347 | 4053 | 4132 | 4105 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass | 3/3 exact pass |
+
+The fair result has the same direction as issue #574. Explicit hand-ordered
+AABBCC is 22.72% faster than single-token ABC, while the pair-fused ABC source
+is 24.20% faster. Predicate-limit-7 scheduling is 23.23% faster than the fair
+single-token control and 0.65% faster than explicit AABBCC. None of these three
+fast variants spills predicates, so the improvement over single-token ABC is
+latency hiding rather than spill avoidance.
+
+The CA log makes the hidden latency concrete. The four single-token `PSET`
+instructions retire at cycles 1785, 2503, 3221, and 3939, exactly 718 cycles
+apart. Its EX active-cycle gap histogram contains 72 gaps of 13 cycles and 68
+gaps of 8 cycles. These are dependency bubbles repeated independently in each
+token's reduction/broadcast/compare chain. Its 2882-cycle derived SIMD span is
+also close to the approximately 2907-cycle SIMD interval of the original CCE
+ABC report.
+
+Pair fusion does not change Scheduler OFF into compiler reordering. Instead,
+it changes what the hardware is allowed to see. With two independent tokens
+inside one `VEC_SCOPE`, both instruction streams reach the CA issue window.
+When token 0 is waiting for a reduction result such as
+`VCMAX`/`VCMIN -> VDUP -> VCMP`, the scoreboard can issue a dependency-ready
+instruction from token 1. The pair therefore takes about 808 or 769 cycles,
+instead of reproducing two approximately 718-cycle single-token intervals.
+The pair-fused gap histogram has only 2 gaps of 13 cycles and 12 gaps of 8
+cycles. This is the precise sense in which the source had already fused two
+tokens into one vecscope and obtained cross-token latency hiding before the
+VPTO scheduler did any work.
+
+Explicit AABBCC exposes the same two-token window but makes the chains more
+lockstep: its 652 dual-issue cycles exceed pair-fused ABC's 452. It still has
+36 gaps of 12 cycles and 34 gaps of 7 cycles, which explains why its final
+4132 ticks are slightly slower than pair-fused ABC despite higher dual issue.
+The predicate-limit-7 schedule reduces that fine-grained ordering cost while
+preserving the no-spill property.
+
+Single-token-control artifacts are under the same result root:
+
+- CA runs: `single-token-abc-off-run1`, `single-token-abc-off-run2`, and
+  `single-token-abc-off-run3`
+- Smoke run: `single-token-control-smoke-vadd`
+
+## Predicate-limit calibration experiment
+
+The generic A5 Predicate pressure limit was reduced from 8 to 7 to match the
+registers that the current backend actually allocates, P1-P7. The function-wide
+active mask occupies P1, so only six registers remain available for the
+temporary `VCMP` results. With limit 7, pressure-driven idle therefore consumes
+one ready predicate after six producers instead of allowing a seventh producer.
+
+Both 757-node pair regions still have full known model coverage. Each records
+17 pressure-driven advances, and the critical-path lower bound, last scheduled
+issue cycle, and completion remain 1820, 1820, and 1830 model cycles. Peak
+pressure is Vector 32 / Predicate 7. The 204 compute-predicate live ranges per
+region are 54 of length 6 and 150 of length 8; none of these longer positional
+ranges overlap beyond the calibrated peak.
+
+| Metric | Predicate limit 8 | Predicate limit 7 |
+|---|---:|---:|
+| Pressure-driven entries per pair region | 17 | 17 |
+| Peak Vector / Predicate | 32 / 8 | 32 / 7 |
+| Compute-predicate live-range distribution | 122 x 7; 26 x 8; 48 x 9; 8 x 10 | 54 x 6; 150 x 8 |
+| Dynamic PLDI / PSTI / predicate barrier | 68 / 68 / 136 | 0 / 0 / 0 |
+| Tick runs | 5548, 5558, 5546 | 4105, 4102, 4108 |
+| Tick min / median / max | 5546 / 5548 / 5558 | 4102 / 4105 / 4108 |
+| Strict compare | 3/3 exact pass | 3/3 exact pass |
+
+The limit-7 result removes every predicate spill, reload, and associated
+barrier seen in the CA instruction logs. Its median is 26.0% faster than the
+limit-8 pressure-idle result, 23.23% faster than the fair single-token ABC
+control (5347 ticks), 0.65% faster than explicit AABBCC Scheduler OFF (4132
+ticks), and 1.28% slower than the pair-fused ABC control (4053 ticks). This
+confirms that the physical boundary relevant to this lowering is seven
+allocated Predicate registers, not eight architectural names available to
+ordinary SSA values. The remaining 52-tick difference from pair-fused ABC is
+fine-grained ordering cost rather than spill cost; pair-fused ABC is an
+optimized latency-hiding control, not the original reproducer's baseline.
+
+Limit-7 artifacts are under the same result root:
+
+- Trace compile: `predicate-limit7-aabbcc-trace`
+- Scheduler ON runs: `predicate-limit7-aabbcc-on-run1`,
+  `predicate-limit7-aabbcc-on-run2`, and `predicate-limit7-aabbcc-on-run3`
+- Smoke run: `predicate-limit7-smoke-vadd`
 
 ## Saved artifacts
 
-Under the result root:
+- All results: `/home/wanglan/PTOAS/.worktrees/ca-sim-results/vpto-sched-aabbcc-sim`
+- Single-token ABC runs: `single-token-abc-off-run1`,
+  `single-token-abc-off-run2`, `single-token-abc-off-run3`
+- OFF runs: `aabbcc-off-run1`, `aabbcc-off-run2`, `aabbcc-off-run3`
+- ON runs: `aabbcc-on-run1`, `aabbcc-on-run2`, `aabbcc-on-run3`
+- Extracted device ELFs/text: `assembly/off`, `assembly/on`
+- Smoke runs: `smoke-vadd`, `smoke-vlds-post-update`
 
-- Trace compile: `main-on-trace`
-- Scheduler ON: `main-on-run-{1,2,3}`
-- Pair-fused OFF: `main-off-run-{1,2,3}`
-- Explicit AABBCC OFF: `explicit-off-run-{1,2,3}`
-- Single-token ABC OFF: `single-off-run-{1,2,3}`
-- Smoke: `smoke-vadd`, `smoke-vlds-post-update`
-- Extracted device text: `assembly/{main-on,main-off,explicit-off,single-off}`
+Both smoke cases started/stopped the CA model and passed strict comparison.
