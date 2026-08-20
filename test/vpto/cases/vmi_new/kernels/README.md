@@ -31,6 +31,16 @@ See LICENSE in the root of the software repository for the full text of the Lice
 | `swiglu_mx_quant` | 4 | 当前保留 FP8/OCP 等价性行；FP4 和 CCE 已标记异常的 CUBLAS `scale_alg=1` 暂缓 |
 | `simdvf_per_block_cast` | 1 | 对齐 PTOAS PR #488 中的 16x256 f16 + 4x8 scale -> fp8 per-block cast case |
 
+## TileKernels scheduler 实验用例
+
+`tilekernels-*` 目录是从 TileKernels-vmi 算法数据流改写的 scheduler 压力实验
+fixture，不属于上表的 36 个目标 CCE 迁移 case，也不改变
+[CCE_CASE_SCOPE.md](CCE_CASE_SCOPE.md) 定义的支持范围。它们用于在相同输入和
+golden 下比较 natural-order、pressure-stress 以及 Scheduler OFF/ON。
+
+CA-model SIM 的压力、真实 spill/reload、三次 ticks 和 strict compare 结果见
+[TILEKERNELS_SCHEDULER_PRESSURE_RESULTS.md](TILEKERNELS_SCHEDULER_PRESSURE_RESULTS.md)。
+
 ## 设计上暂缓
 
 下列目标 CCE 行是真实存在的，但在对应 VMI 语义设计清楚前，不应通过临时拼凑的
