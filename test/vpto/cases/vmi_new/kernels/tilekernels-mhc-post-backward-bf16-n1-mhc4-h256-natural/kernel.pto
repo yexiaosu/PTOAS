@@ -1,0 +1,1422 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @vmi_tilekernels_mhc_post_backward_bf16_n1_mhc4_h256_natural_kernel(
+      %do_gm: !pto.ptr<bf16, gm>, %comb_gm: !pto.ptr<f32, gm>,
+      %res_gm: !pto.ptr<bf16, gm>, %post_gm: !pto.ptr<f32, gm>,
+      %x_gm: !pto.ptr<bf16, gm>, %dcomb_gm: !pto.ptr<f32, gm>,
+      %dres_gm: !pto.ptr<bf16, gm>, %dpost_gm: !pto.ptr<f32, gm>,
+      %dx_gm: !pto.ptr<bf16, gm>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c3 = arith.constant 3 : index
+    %c4 = arith.constant 4 : index
+    %c5 = arith.constant 5 : index
+    %c6 = arith.constant 6 : index
+    %c7 = arith.constant 7 : index
+    %c8 = arith.constant 8 : index
+    %c9 = arith.constant 9 : index
+    %c10 = arith.constant 10 : index
+    %c11 = arith.constant 11 : index
+    %c12 = arith.constant 12 : index
+    %c13 = arith.constant 13 : index
+    %c14 = arith.constant 14 : index
+    %c15 = arith.constant 15 : index
+    %c16 = arith.constant 16 : index
+    %c64 = arith.constant 64 : index
+    %c128 = arith.constant 128 : index
+    %c192 = arith.constant 192 : index
+    %c256 = arith.constant 256 : index
+    %c320 = arith.constant 320 : index
+    %c384 = arith.constant 384 : index
+    %c448 = arith.constant 448 : index
+    %c512 = arith.constant 512 : index
+    %c576 = arith.constant 576 : index
+    %c640 = arith.constant 640 : index
+    %c704 = arith.constant 704 : index
+    %c768 = arith.constant 768 : index
+    %c832 = arith.constant 832 : index
+    %c896 = arith.constant 896 : index
+    %c960 = arith.constant 960 : index
+    %c1024 = arith.constant 1024 : index
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %c32_i64 = arith.constant 32 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %c512_i64 = arith.constant 512 : i64
+    %c2048_i64 = arith.constant 2048 : i64
+    %c4096_i64 = arith.constant 4096 : i64
+    %c8192_i64 = arith.constant 8192 : i64
+    %c12288_i64 = arith.constant 12288 : i64
+    %c16384_i64 = arith.constant 16384 : i64
+    %c24576_i64 = arith.constant 24576 : i64
+    %c32768_i64 = arith.constant 32768 : i64
+    %c36864_i64 = arith.constant 36864 : i64
+    %c40960_i64 = arith.constant 40960 : i64
+    %c49152_i64 = arith.constant 49152 : i64
+    %c53248_i64 = arith.constant 53248 : i64
+    %c0_f32 = arith.constant 0.0 : f32
+    %ub_do = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_comb = pto.castptr %c4096_i64 : i64 -> !pto.ptr<f32, ub>
+    %ub_res = pto.castptr %c8192_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_post = pto.castptr %c12288_i64 : i64 -> !pto.ptr<f32, ub>
+    %ub_x = pto.castptr %c16384_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_dcomb = pto.castptr %c24576_i64 : i64 -> !pto.ptr<f32, ub>
+    %ub_dres = pto.castptr %c32768_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_dpost = pto.castptr %c36864_i64 : i64 -> !pto.ptr<f32, ub>
+    %ub_dx = pto.castptr %c40960_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_post_acc = pto.castptr %c49152_i64 : i64 -> !pto.ptr<f32, ub>
+    %ub_comb_acc = pto.castptr %c53248_i64 : i64 -> !pto.ptr<f32, ub>
+    pto.mte_gm_ub %do_gm, %ub_do, %c0_i64, %c2048_i64 nburst(%c1_i64, %c2048_i64, %c2048_i64) : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %comb_gm, %ub_comb, %c0_i64, %c64_i64 nburst(%c1_i64, %c64_i64, %c64_i64) : !pto.ptr<f32, gm>, !pto.ptr<f32, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %res_gm, %ub_res, %c0_i64, %c2048_i64 nburst(%c1_i64, %c2048_i64, %c2048_i64) : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %post_gm, %ub_post, %c0_i64, %c32_i64 nburst(%c1_i64, %c32_i64, %c32_i64) : !pto.ptr<f32, gm>, !pto.ptr<f32, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %x_gm, %ub_x, %c0_i64, %c512_i64 nburst(%c1_i64, %c512_i64, %c512_i64) : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.vecscope {
+      %mask = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<64xpred>
+      %zeros = pto.vmi.vbrc %c0_f32 : f32 -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %zeros, %ub_post_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_post_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_post_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_post_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c256]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c320]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c384]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c448]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c512]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c576]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c640]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c704]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c768]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c832]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c896]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      pto.vmi.vstore %zeros, %ub_comb_acc[%c960]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %p_0_0 = pto.vmi.vload %ub_post[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_0_1 = pto.vmi.vload %ub_post[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_0_2 = pto.vmi.vload %ub_post[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_0_3 = pto.vmi.vload %ub_post[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_0_0 = pto.vmi.vload %ub_comb[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_0_1 = pto.vmi.vload %ub_comb[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_0_2 = pto.vmi.vload %ub_comb[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_0_3 = pto.vmi.vload %ub_comb[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_1_0 = pto.vmi.vload %ub_comb[%c4] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_1_1 = pto.vmi.vload %ub_comb[%c5] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_1_2 = pto.vmi.vload %ub_comb[%c6] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_1_3 = pto.vmi.vload %ub_comb[%c7] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_2_0 = pto.vmi.vload %ub_comb[%c8] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_2_1 = pto.vmi.vload %ub_comb[%c9] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_2_2 = pto.vmi.vload %ub_comb[%c10] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_2_3 = pto.vmi.vload %ub_comb[%c11] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_3_0 = pto.vmi.vload %ub_comb[%c12] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_3_1 = pto.vmi.vload %ub_comb[%c13] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_3_2 = pto.vmi.vload %ub_comb[%c14] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_0_3_3 = pto.vmi.vload %ub_comb[%c15] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %x_bf_0 = pto.vmi.vload %ub_x[%c0]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_0 = pto.vmi.vcvt %x_bf_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_0_0 = pto.vmi.vload %ub_do[%c0]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_0_0 = pto.vmi.vcvt %d_bf_0_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_0_1 = pto.vmi.vload %ub_do[%c256]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_0_1 = pto.vmi.vcvt %d_bf_0_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_0_2 = pto.vmi.vload %ub_do[%c512]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_0_2 = pto.vmi.vcvt %d_bf_0_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_0_3 = pto.vmi.vload %ub_do[%c768]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_0_3 = pto.vmi.vcvt %d_bf_0_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_0_0 = pto.vmi.vload %ub_res[%c0]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_0_0 = pto.vmi.vcvt %res_bf_0_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_0_1 = pto.vmi.vload %ub_res[%c256]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_0_1 = pto.vmi.vcvt %res_bf_0_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_0_2 = pto.vmi.vload %ub_res[%c512]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_0_2 = pto.vmi.vcvt %res_bf_0_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_0_3 = pto.vmi.vload %ub_res[%c768]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_0_3 = pto.vmi.vcvt %res_bf_0_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %dx_0_0 = pto.vmi.vmul %d_0_0, %p_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dx_0_1 = pto.vmi.vmula %dx_0_0, %d_0_1, %p_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_0_2 = pto.vmi.vmula %dx_0_1, %d_0_2, %p_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_0_3 = pto.vmi.vmula %dx_0_2, %d_0_3, %p_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_bf_0 = pto.vmi.vcvt %dx_0_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dx_bf_0, %ub_dx[%c0]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_0_0_0 = pto.vmi.vmul %d_0_0, %comb_0_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_0_0_1 = pto.vmi.vmula %dr_0_0_0, %d_0_1, %comb_0_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_0_2 = pto.vmi.vmula %dr_0_0_1, %d_0_2, %comb_0_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_0_3 = pto.vmi.vmula %dr_0_0_2, %d_0_3, %comb_0_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_0_0 = pto.vmi.vcvt %dr_0_0_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_0_0, %ub_dres[%c0]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_0_1_0 = pto.vmi.vmul %d_0_0, %comb_0_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_0_1_1 = pto.vmi.vmula %dr_0_1_0, %d_0_1, %comb_0_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_1_2 = pto.vmi.vmula %dr_0_1_1, %d_0_2, %comb_0_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_1_3 = pto.vmi.vmula %dr_0_1_2, %d_0_3, %comb_0_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_0_1 = pto.vmi.vcvt %dr_0_1_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_0_1, %ub_dres[%c256]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_0_2_0 = pto.vmi.vmul %d_0_0, %comb_0_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_0_2_1 = pto.vmi.vmula %dr_0_2_0, %d_0_1, %comb_0_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_2_2 = pto.vmi.vmula %dr_0_2_1, %d_0_2, %comb_0_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_2_3 = pto.vmi.vmula %dr_0_2_2, %d_0_3, %comb_0_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_0_2 = pto.vmi.vcvt %dr_0_2_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_0_2, %ub_dres[%c512]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_0_3_0 = pto.vmi.vmul %d_0_0, %comb_0_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_0_3_1 = pto.vmi.vmula %dr_0_3_0, %d_0_1, %comb_0_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_3_2 = pto.vmi.vmula %dr_0_3_1, %d_0_2, %comb_0_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_0_3_3 = pto.vmi.vmula %dr_0_3_2, %d_0_3, %comb_0_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_0_3 = pto.vmi.vcvt %dr_0_3_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_0_3, %ub_dres[%c768]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %pa_0_0 = pto.vmi.vload %ub_post_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_0_0 = pto.vmi.vmula %pa_0_0, %d_0_0, %x_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_0_0, %ub_post_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_0_1 = pto.vmi.vload %ub_post_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_0_1 = pto.vmi.vmula %pa_0_1, %d_0_1, %x_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_0_1, %ub_post_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_0_2 = pto.vmi.vload %ub_post_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_0_2 = pto.vmi.vmula %pa_0_2, %d_0_2, %x_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_0_2, %ub_post_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_0_3 = pto.vmi.vload %ub_post_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_0_3 = pto.vmi.vmula %pa_0_3, %d_0_3, %x_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_0_3, %ub_post_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_0_0 = pto.vmi.vload %ub_comb_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_0_0 = pto.vmi.vmula %ca_0_0_0, %d_0_0, %res_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_0_0, %ub_comb_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_0_1 = pto.vmi.vload %ub_comb_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_0_1 = pto.vmi.vmula %ca_0_0_1, %d_0_1, %res_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_0_1, %ub_comb_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_0_2 = pto.vmi.vload %ub_comb_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_0_2 = pto.vmi.vmula %ca_0_0_2, %d_0_2, %res_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_0_2, %ub_comb_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_0_3 = pto.vmi.vload %ub_comb_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_0_3 = pto.vmi.vmula %ca_0_0_3, %d_0_3, %res_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_0_3, %ub_comb_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_1_0 = pto.vmi.vload %ub_comb_acc[%c256]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_1_0 = pto.vmi.vmula %ca_0_1_0, %d_0_0, %res_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_1_0, %ub_comb_acc[%c256]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_1_1 = pto.vmi.vload %ub_comb_acc[%c320]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_1_1 = pto.vmi.vmula %ca_0_1_1, %d_0_1, %res_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_1_1, %ub_comb_acc[%c320]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_1_2 = pto.vmi.vload %ub_comb_acc[%c384]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_1_2 = pto.vmi.vmula %ca_0_1_2, %d_0_2, %res_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_1_2, %ub_comb_acc[%c384]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_1_3 = pto.vmi.vload %ub_comb_acc[%c448]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_1_3 = pto.vmi.vmula %ca_0_1_3, %d_0_3, %res_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_1_3, %ub_comb_acc[%c448]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_2_0 = pto.vmi.vload %ub_comb_acc[%c512]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_2_0 = pto.vmi.vmula %ca_0_2_0, %d_0_0, %res_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_2_0, %ub_comb_acc[%c512]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_2_1 = pto.vmi.vload %ub_comb_acc[%c576]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_2_1 = pto.vmi.vmula %ca_0_2_1, %d_0_1, %res_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_2_1, %ub_comb_acc[%c576]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_2_2 = pto.vmi.vload %ub_comb_acc[%c640]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_2_2 = pto.vmi.vmula %ca_0_2_2, %d_0_2, %res_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_2_2, %ub_comb_acc[%c640]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_2_3 = pto.vmi.vload %ub_comb_acc[%c704]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_2_3 = pto.vmi.vmula %ca_0_2_3, %d_0_3, %res_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_2_3, %ub_comb_acc[%c704]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_3_0 = pto.vmi.vload %ub_comb_acc[%c768]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_3_0 = pto.vmi.vmula %ca_0_3_0, %d_0_0, %res_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_3_0, %ub_comb_acc[%c768]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_3_1 = pto.vmi.vload %ub_comb_acc[%c832]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_3_1 = pto.vmi.vmula %ca_0_3_1, %d_0_1, %res_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_3_1, %ub_comb_acc[%c832]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_3_2 = pto.vmi.vload %ub_comb_acc[%c896]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_3_2 = pto.vmi.vmula %ca_0_3_2, %d_0_2, %res_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_3_2, %ub_comb_acc[%c896]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_0_3_3 = pto.vmi.vload %ub_comb_acc[%c960]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_0_3_3 = pto.vmi.vmula %ca_0_3_3, %d_0_3, %res_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_0_3_3, %ub_comb_acc[%c960]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %p_1_0 = pto.vmi.vload %ub_post[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_1_1 = pto.vmi.vload %ub_post[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_1_2 = pto.vmi.vload %ub_post[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_1_3 = pto.vmi.vload %ub_post[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_0_0 = pto.vmi.vload %ub_comb[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_0_1 = pto.vmi.vload %ub_comb[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_0_2 = pto.vmi.vload %ub_comb[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_0_3 = pto.vmi.vload %ub_comb[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_1_0 = pto.vmi.vload %ub_comb[%c4] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_1_1 = pto.vmi.vload %ub_comb[%c5] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_1_2 = pto.vmi.vload %ub_comb[%c6] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_1_3 = pto.vmi.vload %ub_comb[%c7] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_2_0 = pto.vmi.vload %ub_comb[%c8] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_2_1 = pto.vmi.vload %ub_comb[%c9] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_2_2 = pto.vmi.vload %ub_comb[%c10] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_2_3 = pto.vmi.vload %ub_comb[%c11] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_3_0 = pto.vmi.vload %ub_comb[%c12] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_3_1 = pto.vmi.vload %ub_comb[%c13] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_3_2 = pto.vmi.vload %ub_comb[%c14] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_1_3_3 = pto.vmi.vload %ub_comb[%c15] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %x_bf_1 = pto.vmi.vload %ub_x[%c64]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_1 = pto.vmi.vcvt %x_bf_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_1_0 = pto.vmi.vload %ub_do[%c64]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_1_0 = pto.vmi.vcvt %d_bf_1_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_1_1 = pto.vmi.vload %ub_do[%c320]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_1_1 = pto.vmi.vcvt %d_bf_1_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_1_2 = pto.vmi.vload %ub_do[%c576]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_1_2 = pto.vmi.vcvt %d_bf_1_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_1_3 = pto.vmi.vload %ub_do[%c832]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_1_3 = pto.vmi.vcvt %d_bf_1_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_1_0 = pto.vmi.vload %ub_res[%c64]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_1_0 = pto.vmi.vcvt %res_bf_1_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_1_1 = pto.vmi.vload %ub_res[%c320]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_1_1 = pto.vmi.vcvt %res_bf_1_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_1_2 = pto.vmi.vload %ub_res[%c576]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_1_2 = pto.vmi.vcvt %res_bf_1_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_1_3 = pto.vmi.vload %ub_res[%c832]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_1_3 = pto.vmi.vcvt %res_bf_1_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %dx_1_0 = pto.vmi.vmul %d_1_0, %p_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dx_1_1 = pto.vmi.vmula %dx_1_0, %d_1_1, %p_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_1_2 = pto.vmi.vmula %dx_1_1, %d_1_2, %p_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_1_3 = pto.vmi.vmula %dx_1_2, %d_1_3, %p_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_bf_1 = pto.vmi.vcvt %dx_1_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dx_bf_1, %ub_dx[%c64]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_1_0_0 = pto.vmi.vmul %d_1_0, %comb_1_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_1_0_1 = pto.vmi.vmula %dr_1_0_0, %d_1_1, %comb_1_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_0_2 = pto.vmi.vmula %dr_1_0_1, %d_1_2, %comb_1_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_0_3 = pto.vmi.vmula %dr_1_0_2, %d_1_3, %comb_1_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_1_0 = pto.vmi.vcvt %dr_1_0_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_1_0, %ub_dres[%c64]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_1_1_0 = pto.vmi.vmul %d_1_0, %comb_1_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_1_1_1 = pto.vmi.vmula %dr_1_1_0, %d_1_1, %comb_1_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_1_2 = pto.vmi.vmula %dr_1_1_1, %d_1_2, %comb_1_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_1_3 = pto.vmi.vmula %dr_1_1_2, %d_1_3, %comb_1_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_1_1 = pto.vmi.vcvt %dr_1_1_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_1_1, %ub_dres[%c320]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_1_2_0 = pto.vmi.vmul %d_1_0, %comb_1_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_1_2_1 = pto.vmi.vmula %dr_1_2_0, %d_1_1, %comb_1_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_2_2 = pto.vmi.vmula %dr_1_2_1, %d_1_2, %comb_1_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_2_3 = pto.vmi.vmula %dr_1_2_2, %d_1_3, %comb_1_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_1_2 = pto.vmi.vcvt %dr_1_2_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_1_2, %ub_dres[%c576]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_1_3_0 = pto.vmi.vmul %d_1_0, %comb_1_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_1_3_1 = pto.vmi.vmula %dr_1_3_0, %d_1_1, %comb_1_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_3_2 = pto.vmi.vmula %dr_1_3_1, %d_1_2, %comb_1_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_1_3_3 = pto.vmi.vmula %dr_1_3_2, %d_1_3, %comb_1_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_1_3 = pto.vmi.vcvt %dr_1_3_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_1_3, %ub_dres[%c832]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %pa_1_0 = pto.vmi.vload %ub_post_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_1_0 = pto.vmi.vmula %pa_1_0, %d_1_0, %x_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_1_0, %ub_post_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_1_1 = pto.vmi.vload %ub_post_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_1_1 = pto.vmi.vmula %pa_1_1, %d_1_1, %x_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_1_1, %ub_post_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_1_2 = pto.vmi.vload %ub_post_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_1_2 = pto.vmi.vmula %pa_1_2, %d_1_2, %x_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_1_2, %ub_post_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_1_3 = pto.vmi.vload %ub_post_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_1_3 = pto.vmi.vmula %pa_1_3, %d_1_3, %x_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_1_3, %ub_post_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_0_0 = pto.vmi.vload %ub_comb_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_0_0 = pto.vmi.vmula %ca_1_0_0, %d_1_0, %res_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_0_0, %ub_comb_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_0_1 = pto.vmi.vload %ub_comb_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_0_1 = pto.vmi.vmula %ca_1_0_1, %d_1_1, %res_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_0_1, %ub_comb_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_0_2 = pto.vmi.vload %ub_comb_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_0_2 = pto.vmi.vmula %ca_1_0_2, %d_1_2, %res_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_0_2, %ub_comb_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_0_3 = pto.vmi.vload %ub_comb_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_0_3 = pto.vmi.vmula %ca_1_0_3, %d_1_3, %res_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_0_3, %ub_comb_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_1_0 = pto.vmi.vload %ub_comb_acc[%c256]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_1_0 = pto.vmi.vmula %ca_1_1_0, %d_1_0, %res_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_1_0, %ub_comb_acc[%c256]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_1_1 = pto.vmi.vload %ub_comb_acc[%c320]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_1_1 = pto.vmi.vmula %ca_1_1_1, %d_1_1, %res_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_1_1, %ub_comb_acc[%c320]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_1_2 = pto.vmi.vload %ub_comb_acc[%c384]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_1_2 = pto.vmi.vmula %ca_1_1_2, %d_1_2, %res_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_1_2, %ub_comb_acc[%c384]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_1_3 = pto.vmi.vload %ub_comb_acc[%c448]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_1_3 = pto.vmi.vmula %ca_1_1_3, %d_1_3, %res_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_1_3, %ub_comb_acc[%c448]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_2_0 = pto.vmi.vload %ub_comb_acc[%c512]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_2_0 = pto.vmi.vmula %ca_1_2_0, %d_1_0, %res_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_2_0, %ub_comb_acc[%c512]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_2_1 = pto.vmi.vload %ub_comb_acc[%c576]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_2_1 = pto.vmi.vmula %ca_1_2_1, %d_1_1, %res_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_2_1, %ub_comb_acc[%c576]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_2_2 = pto.vmi.vload %ub_comb_acc[%c640]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_2_2 = pto.vmi.vmula %ca_1_2_2, %d_1_2, %res_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_2_2, %ub_comb_acc[%c640]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_2_3 = pto.vmi.vload %ub_comb_acc[%c704]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_2_3 = pto.vmi.vmula %ca_1_2_3, %d_1_3, %res_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_2_3, %ub_comb_acc[%c704]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_3_0 = pto.vmi.vload %ub_comb_acc[%c768]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_3_0 = pto.vmi.vmula %ca_1_3_0, %d_1_0, %res_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_3_0, %ub_comb_acc[%c768]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_3_1 = pto.vmi.vload %ub_comb_acc[%c832]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_3_1 = pto.vmi.vmula %ca_1_3_1, %d_1_1, %res_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_3_1, %ub_comb_acc[%c832]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_3_2 = pto.vmi.vload %ub_comb_acc[%c896]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_3_2 = pto.vmi.vmula %ca_1_3_2, %d_1_2, %res_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_3_2, %ub_comb_acc[%c896]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_1_3_3 = pto.vmi.vload %ub_comb_acc[%c960]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_1_3_3 = pto.vmi.vmula %ca_1_3_3, %d_1_3, %res_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_1_3_3, %ub_comb_acc[%c960]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %p_2_0 = pto.vmi.vload %ub_post[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_2_1 = pto.vmi.vload %ub_post[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_2_2 = pto.vmi.vload %ub_post[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_2_3 = pto.vmi.vload %ub_post[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_0_0 = pto.vmi.vload %ub_comb[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_0_1 = pto.vmi.vload %ub_comb[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_0_2 = pto.vmi.vload %ub_comb[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_0_3 = pto.vmi.vload %ub_comb[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_1_0 = pto.vmi.vload %ub_comb[%c4] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_1_1 = pto.vmi.vload %ub_comb[%c5] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_1_2 = pto.vmi.vload %ub_comb[%c6] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_1_3 = pto.vmi.vload %ub_comb[%c7] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_2_0 = pto.vmi.vload %ub_comb[%c8] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_2_1 = pto.vmi.vload %ub_comb[%c9] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_2_2 = pto.vmi.vload %ub_comb[%c10] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_2_3 = pto.vmi.vload %ub_comb[%c11] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_3_0 = pto.vmi.vload %ub_comb[%c12] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_3_1 = pto.vmi.vload %ub_comb[%c13] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_3_2 = pto.vmi.vload %ub_comb[%c14] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_2_3_3 = pto.vmi.vload %ub_comb[%c15] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %x_bf_2 = pto.vmi.vload %ub_x[%c128]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_2 = pto.vmi.vcvt %x_bf_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_2_0 = pto.vmi.vload %ub_do[%c128]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_2_0 = pto.vmi.vcvt %d_bf_2_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_2_1 = pto.vmi.vload %ub_do[%c384]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_2_1 = pto.vmi.vcvt %d_bf_2_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_2_2 = pto.vmi.vload %ub_do[%c640]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_2_2 = pto.vmi.vcvt %d_bf_2_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_2_3 = pto.vmi.vload %ub_do[%c896]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_2_3 = pto.vmi.vcvt %d_bf_2_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_2_0 = pto.vmi.vload %ub_res[%c128]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_2_0 = pto.vmi.vcvt %res_bf_2_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_2_1 = pto.vmi.vload %ub_res[%c384]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_2_1 = pto.vmi.vcvt %res_bf_2_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_2_2 = pto.vmi.vload %ub_res[%c640]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_2_2 = pto.vmi.vcvt %res_bf_2_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_2_3 = pto.vmi.vload %ub_res[%c896]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_2_3 = pto.vmi.vcvt %res_bf_2_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %dx_2_0 = pto.vmi.vmul %d_2_0, %p_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dx_2_1 = pto.vmi.vmula %dx_2_0, %d_2_1, %p_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_2_2 = pto.vmi.vmula %dx_2_1, %d_2_2, %p_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_2_3 = pto.vmi.vmula %dx_2_2, %d_2_3, %p_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_bf_2 = pto.vmi.vcvt %dx_2_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dx_bf_2, %ub_dx[%c128]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_2_0_0 = pto.vmi.vmul %d_2_0, %comb_2_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_2_0_1 = pto.vmi.vmula %dr_2_0_0, %d_2_1, %comb_2_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_0_2 = pto.vmi.vmula %dr_2_0_1, %d_2_2, %comb_2_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_0_3 = pto.vmi.vmula %dr_2_0_2, %d_2_3, %comb_2_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_2_0 = pto.vmi.vcvt %dr_2_0_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_2_0, %ub_dres[%c128]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_2_1_0 = pto.vmi.vmul %d_2_0, %comb_2_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_2_1_1 = pto.vmi.vmula %dr_2_1_0, %d_2_1, %comb_2_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_1_2 = pto.vmi.vmula %dr_2_1_1, %d_2_2, %comb_2_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_1_3 = pto.vmi.vmula %dr_2_1_2, %d_2_3, %comb_2_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_2_1 = pto.vmi.vcvt %dr_2_1_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_2_1, %ub_dres[%c384]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_2_2_0 = pto.vmi.vmul %d_2_0, %comb_2_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_2_2_1 = pto.vmi.vmula %dr_2_2_0, %d_2_1, %comb_2_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_2_2 = pto.vmi.vmula %dr_2_2_1, %d_2_2, %comb_2_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_2_3 = pto.vmi.vmula %dr_2_2_2, %d_2_3, %comb_2_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_2_2 = pto.vmi.vcvt %dr_2_2_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_2_2, %ub_dres[%c640]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_2_3_0 = pto.vmi.vmul %d_2_0, %comb_2_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_2_3_1 = pto.vmi.vmula %dr_2_3_0, %d_2_1, %comb_2_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_3_2 = pto.vmi.vmula %dr_2_3_1, %d_2_2, %comb_2_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_2_3_3 = pto.vmi.vmula %dr_2_3_2, %d_2_3, %comb_2_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_2_3 = pto.vmi.vcvt %dr_2_3_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_2_3, %ub_dres[%c896]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %pa_2_0 = pto.vmi.vload %ub_post_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_2_0 = pto.vmi.vmula %pa_2_0, %d_2_0, %x_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_2_0, %ub_post_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_2_1 = pto.vmi.vload %ub_post_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_2_1 = pto.vmi.vmula %pa_2_1, %d_2_1, %x_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_2_1, %ub_post_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_2_2 = pto.vmi.vload %ub_post_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_2_2 = pto.vmi.vmula %pa_2_2, %d_2_2, %x_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_2_2, %ub_post_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_2_3 = pto.vmi.vload %ub_post_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_2_3 = pto.vmi.vmula %pa_2_3, %d_2_3, %x_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_2_3, %ub_post_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_0_0 = pto.vmi.vload %ub_comb_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_0_0 = pto.vmi.vmula %ca_2_0_0, %d_2_0, %res_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_0_0, %ub_comb_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_0_1 = pto.vmi.vload %ub_comb_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_0_1 = pto.vmi.vmula %ca_2_0_1, %d_2_1, %res_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_0_1, %ub_comb_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_0_2 = pto.vmi.vload %ub_comb_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_0_2 = pto.vmi.vmula %ca_2_0_2, %d_2_2, %res_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_0_2, %ub_comb_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_0_3 = pto.vmi.vload %ub_comb_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_0_3 = pto.vmi.vmula %ca_2_0_3, %d_2_3, %res_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_0_3, %ub_comb_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_1_0 = pto.vmi.vload %ub_comb_acc[%c256]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_1_0 = pto.vmi.vmula %ca_2_1_0, %d_2_0, %res_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_1_0, %ub_comb_acc[%c256]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_1_1 = pto.vmi.vload %ub_comb_acc[%c320]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_1_1 = pto.vmi.vmula %ca_2_1_1, %d_2_1, %res_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_1_1, %ub_comb_acc[%c320]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_1_2 = pto.vmi.vload %ub_comb_acc[%c384]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_1_2 = pto.vmi.vmula %ca_2_1_2, %d_2_2, %res_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_1_2, %ub_comb_acc[%c384]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_1_3 = pto.vmi.vload %ub_comb_acc[%c448]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_1_3 = pto.vmi.vmula %ca_2_1_3, %d_2_3, %res_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_1_3, %ub_comb_acc[%c448]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_2_0 = pto.vmi.vload %ub_comb_acc[%c512]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_2_0 = pto.vmi.vmula %ca_2_2_0, %d_2_0, %res_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_2_0, %ub_comb_acc[%c512]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_2_1 = pto.vmi.vload %ub_comb_acc[%c576]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_2_1 = pto.vmi.vmula %ca_2_2_1, %d_2_1, %res_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_2_1, %ub_comb_acc[%c576]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_2_2 = pto.vmi.vload %ub_comb_acc[%c640]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_2_2 = pto.vmi.vmula %ca_2_2_2, %d_2_2, %res_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_2_2, %ub_comb_acc[%c640]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_2_3 = pto.vmi.vload %ub_comb_acc[%c704]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_2_3 = pto.vmi.vmula %ca_2_2_3, %d_2_3, %res_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_2_3, %ub_comb_acc[%c704]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_3_0 = pto.vmi.vload %ub_comb_acc[%c768]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_3_0 = pto.vmi.vmula %ca_2_3_0, %d_2_0, %res_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_3_0, %ub_comb_acc[%c768]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_3_1 = pto.vmi.vload %ub_comb_acc[%c832]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_3_1 = pto.vmi.vmula %ca_2_3_1, %d_2_1, %res_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_3_1, %ub_comb_acc[%c832]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_3_2 = pto.vmi.vload %ub_comb_acc[%c896]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_3_2 = pto.vmi.vmula %ca_2_3_2, %d_2_2, %res_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_3_2, %ub_comb_acc[%c896]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_2_3_3 = pto.vmi.vload %ub_comb_acc[%c960]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_2_3_3 = pto.vmi.vmula %ca_2_3_3, %d_2_3, %res_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_2_3_3, %ub_comb_acc[%c960]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %p_3_0 = pto.vmi.vload %ub_post[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_3_1 = pto.vmi.vload %ub_post[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_3_2 = pto.vmi.vload %ub_post[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %p_3_3 = pto.vmi.vload %ub_post[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_0_0 = pto.vmi.vload %ub_comb[%c0] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_0_1 = pto.vmi.vload %ub_comb[%c1] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_0_2 = pto.vmi.vload %ub_comb[%c2] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_0_3 = pto.vmi.vload %ub_comb[%c3] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_1_0 = pto.vmi.vload %ub_comb[%c4] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_1_1 = pto.vmi.vload %ub_comb[%c5] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_1_2 = pto.vmi.vload %ub_comb[%c6] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_1_3 = pto.vmi.vload %ub_comb[%c7] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_2_0 = pto.vmi.vload %ub_comb[%c8] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_2_1 = pto.vmi.vload %ub_comb[%c9] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_2_2 = pto.vmi.vload %ub_comb[%c10] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_2_3 = pto.vmi.vload %ub_comb[%c11] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_3_0 = pto.vmi.vload %ub_comb[%c12] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_3_1 = pto.vmi.vload %ub_comb[%c13] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_3_2 = pto.vmi.vload %ub_comb[%c14] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_3_3_3 = pto.vmi.vload %ub_comb[%c15] {dist_mode = "brc"}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %x_bf_3 = pto.vmi.vload %ub_x[%c192]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_3 = pto.vmi.vcvt %x_bf_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_3_0 = pto.vmi.vload %ub_do[%c192]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_3_0 = pto.vmi.vcvt %d_bf_3_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_3_1 = pto.vmi.vload %ub_do[%c448]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_3_1 = pto.vmi.vcvt %d_bf_3_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_3_2 = pto.vmi.vload %ub_do[%c704]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_3_2 = pto.vmi.vcvt %d_bf_3_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %d_bf_3_3 = pto.vmi.vload %ub_do[%c960]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %d_3_3 = pto.vmi.vcvt %d_bf_3_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_3_0 = pto.vmi.vload %ub_res[%c192]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_3_0 = pto.vmi.vcvt %res_bf_3_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_3_1 = pto.vmi.vload %ub_res[%c448]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_3_1 = pto.vmi.vcvt %res_bf_3_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_3_2 = pto.vmi.vload %ub_res[%c704]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_3_2 = pto.vmi.vcvt %res_bf_3_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %res_bf_3_3 = pto.vmi.vload %ub_res[%c960]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %res_3_3 = pto.vmi.vcvt %res_bf_3_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %dx_3_0 = pto.vmi.vmul %d_3_0, %p_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dx_3_1 = pto.vmi.vmula %dx_3_0, %d_3_1, %p_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_3_2 = pto.vmi.vmula %dx_3_1, %d_3_2, %p_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_3_3 = pto.vmi.vmula %dx_3_2, %d_3_3, %p_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dx_bf_3 = pto.vmi.vcvt %dx_3_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dx_bf_3, %ub_dx[%c192]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_3_0_0 = pto.vmi.vmul %d_3_0, %comb_3_0_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_3_0_1 = pto.vmi.vmula %dr_3_0_0, %d_3_1, %comb_3_0_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_0_2 = pto.vmi.vmula %dr_3_0_1, %d_3_2, %comb_3_0_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_0_3 = pto.vmi.vmula %dr_3_0_2, %d_3_3, %comb_3_0_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_3_0 = pto.vmi.vcvt %dr_3_0_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_3_0, %ub_dres[%c192]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_3_1_0 = pto.vmi.vmul %d_3_0, %comb_3_1_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_3_1_1 = pto.vmi.vmula %dr_3_1_0, %d_3_1, %comb_3_1_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_1_2 = pto.vmi.vmula %dr_3_1_1, %d_3_2, %comb_3_1_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_1_3 = pto.vmi.vmula %dr_3_1_2, %d_3_3, %comb_3_1_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_3_1 = pto.vmi.vcvt %dr_3_1_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_3_1, %ub_dres[%c448]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_3_2_0 = pto.vmi.vmul %d_3_0, %comb_3_2_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_3_2_1 = pto.vmi.vmula %dr_3_2_0, %d_3_1, %comb_3_2_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_2_2 = pto.vmi.vmula %dr_3_2_1, %d_3_2, %comb_3_2_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_2_3 = pto.vmi.vmula %dr_3_2_2, %d_3_3, %comb_3_2_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_3_2 = pto.vmi.vcvt %dr_3_2_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_3_2, %ub_dres[%c704]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %dr_3_3_0 = pto.vmi.vmul %d_3_0, %comb_3_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %dr_3_3_1 = pto.vmi.vmula %dr_3_3_0, %d_3_1, %comb_3_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_3_2 = pto.vmi.vmula %dr_3_3_1, %d_3_2, %comb_3_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_3_3_3 = pto.vmi.vmula %dr_3_3_2, %d_3_3, %comb_3_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %dr_bf_3_3 = pto.vmi.vcvt %dr_3_3_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %dr_bf_3_3, %ub_dres[%c960]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %pa_3_0 = pto.vmi.vload %ub_post_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_3_0 = pto.vmi.vmula %pa_3_0, %d_3_0, %x_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_3_0, %ub_post_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_3_1 = pto.vmi.vload %ub_post_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_3_1 = pto.vmi.vmula %pa_3_1, %d_3_1, %x_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_3_1, %ub_post_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_3_2 = pto.vmi.vload %ub_post_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_3_2 = pto.vmi.vmula %pa_3_2, %d_3_2, %x_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_3_2, %ub_post_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %pa_3_3 = pto.vmi.vload %ub_post_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %pa_next_3_3 = pto.vmi.vmula %pa_3_3, %d_3_3, %x_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %pa_next_3_3, %ub_post_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_0_0 = pto.vmi.vload %ub_comb_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_0_0 = pto.vmi.vmula %ca_3_0_0, %d_3_0, %res_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_0_0, %ub_comb_acc[%c0]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_0_1 = pto.vmi.vload %ub_comb_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_0_1 = pto.vmi.vmula %ca_3_0_1, %d_3_1, %res_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_0_1, %ub_comb_acc[%c64]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_0_2 = pto.vmi.vload %ub_comb_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_0_2 = pto.vmi.vmula %ca_3_0_2, %d_3_2, %res_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_0_2, %ub_comb_acc[%c128]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_0_3 = pto.vmi.vload %ub_comb_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_0_3 = pto.vmi.vmula %ca_3_0_3, %d_3_3, %res_3_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_0_3, %ub_comb_acc[%c192]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_1_0 = pto.vmi.vload %ub_comb_acc[%c256]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_1_0 = pto.vmi.vmula %ca_3_1_0, %d_3_0, %res_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_1_0, %ub_comb_acc[%c256]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_1_1 = pto.vmi.vload %ub_comb_acc[%c320]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_1_1 = pto.vmi.vmula %ca_3_1_1, %d_3_1, %res_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_1_1, %ub_comb_acc[%c320]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_1_2 = pto.vmi.vload %ub_comb_acc[%c384]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_1_2 = pto.vmi.vmula %ca_3_1_2, %d_3_2, %res_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_1_2, %ub_comb_acc[%c384]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_1_3 = pto.vmi.vload %ub_comb_acc[%c448]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_1_3 = pto.vmi.vmula %ca_3_1_3, %d_3_3, %res_3_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_1_3, %ub_comb_acc[%c448]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_2_0 = pto.vmi.vload %ub_comb_acc[%c512]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_2_0 = pto.vmi.vmula %ca_3_2_0, %d_3_0, %res_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_2_0, %ub_comb_acc[%c512]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_2_1 = pto.vmi.vload %ub_comb_acc[%c576]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_2_1 = pto.vmi.vmula %ca_3_2_1, %d_3_1, %res_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_2_1, %ub_comb_acc[%c576]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_2_2 = pto.vmi.vload %ub_comb_acc[%c640]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_2_2 = pto.vmi.vmula %ca_3_2_2, %d_3_2, %res_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_2_2, %ub_comb_acc[%c640]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_2_3 = pto.vmi.vload %ub_comb_acc[%c704]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_2_3 = pto.vmi.vmula %ca_3_2_3, %d_3_3, %res_3_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_2_3, %ub_comb_acc[%c704]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_3_0 = pto.vmi.vload %ub_comb_acc[%c768]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_3_0 = pto.vmi.vmula %ca_3_3_0, %d_3_0, %res_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_3_0, %ub_comb_acc[%c768]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_3_1 = pto.vmi.vload %ub_comb_acc[%c832]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_3_1 = pto.vmi.vmula %ca_3_3_1, %d_3_1, %res_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_3_1, %ub_comb_acc[%c832]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_3_2 = pto.vmi.vload %ub_comb_acc[%c896]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_3_2 = pto.vmi.vmula %ca_3_3_2, %d_3_2, %res_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_3_2, %ub_comb_acc[%c896]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %ca_3_3_3 = pto.vmi.vload %ub_comb_acc[%c960]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %ca_next_3_3_3 = pto.vmi.vmula %ca_3_3_3, %d_3_3, %res_3_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %ca_next_3_3_3, %ub_comb_acc[%c960]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      %post_acc_0 = pto.vmi.vload %ub_post_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %post_sum_0 = pto.vmi.vcadd %post_acc_0, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %post_sum_0, %ub_dpost[%c0], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %post_acc_1 = pto.vmi.vload %ub_post_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %post_sum_1 = pto.vmi.vcadd %post_acc_1, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %post_sum_1, %ub_dpost[%c1], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %post_acc_2 = pto.vmi.vload %ub_post_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %post_sum_2 = pto.vmi.vcadd %post_acc_2, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %post_sum_2, %ub_dpost[%c2], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %post_acc_3 = pto.vmi.vload %ub_post_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %post_sum_3 = pto.vmi.vcadd %post_acc_3, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %post_sum_3, %ub_dpost[%c3], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_0 = pto.vmi.vload %ub_comb_acc[%c0]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_0 = pto.vmi.vcadd %comb_acc_0, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_0, %ub_dcomb[%c0], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_1 = pto.vmi.vload %ub_comb_acc[%c64]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_1 = pto.vmi.vcadd %comb_acc_1, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_1, %ub_dcomb[%c1], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_2 = pto.vmi.vload %ub_comb_acc[%c128]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_2 = pto.vmi.vcadd %comb_acc_2, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_2, %ub_dcomb[%c2], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_3 = pto.vmi.vload %ub_comb_acc[%c192]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_3 = pto.vmi.vcadd %comb_acc_3, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_3, %ub_dcomb[%c3], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_4 = pto.vmi.vload %ub_comb_acc[%c256]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_4 = pto.vmi.vcadd %comb_acc_4, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_4, %ub_dcomb[%c4], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_5 = pto.vmi.vload %ub_comb_acc[%c320]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_5 = pto.vmi.vcadd %comb_acc_5, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_5, %ub_dcomb[%c5], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_6 = pto.vmi.vload %ub_comb_acc[%c384]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_6 = pto.vmi.vcadd %comb_acc_6, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_6, %ub_dcomb[%c6], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_7 = pto.vmi.vload %ub_comb_acc[%c448]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_7 = pto.vmi.vcadd %comb_acc_7, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_7, %ub_dcomb[%c7], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_8 = pto.vmi.vload %ub_comb_acc[%c512]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_8 = pto.vmi.vcadd %comb_acc_8, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_8, %ub_dcomb[%c8], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_9 = pto.vmi.vload %ub_comb_acc[%c576]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_9 = pto.vmi.vcadd %comb_acc_9, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_9, %ub_dcomb[%c9], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_10 = pto.vmi.vload %ub_comb_acc[%c640]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_10 = pto.vmi.vcadd %comb_acc_10, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_10, %ub_dcomb[%c10], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_11 = pto.vmi.vload %ub_comb_acc[%c704]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_11 = pto.vmi.vcadd %comb_acc_11, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_11, %ub_dcomb[%c11], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_12 = pto.vmi.vload %ub_comb_acc[%c768]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_12 = pto.vmi.vcadd %comb_acc_12, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_12, %ub_dcomb[%c12], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_13 = pto.vmi.vload %ub_comb_acc[%c832]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_13 = pto.vmi.vcadd %comb_acc_13, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_13, %ub_dcomb[%c13], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_14 = pto.vmi.vload %ub_comb_acc[%c896]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_14 = pto.vmi.vcadd %comb_acc_14, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_14, %ub_dcomb[%c14], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      %comb_acc_15 = pto.vmi.vload %ub_comb_acc[%c960]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %comb_sum_15 = pto.vmi.vcadd %comb_acc_15, %mask {group = 1, reassoc}
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+      pto.vmi.vstore %comb_sum_15, %ub_dcomb[%c15], %c1 {group = 1}
+          : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+    }
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.mte_ub_gm %ub_dcomb, %dcomb_gm, %c64_i64 nburst(%c1_i64, %c64_i64, %c64_i64) : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+    pto.mte_ub_gm %ub_dres, %dres_gm, %c2048_i64 nburst(%c1_i64, %c2048_i64, %c2048_i64) : !pto.ptr<bf16, ub>, !pto.ptr<bf16, gm>, i64, i64, i64, i64
+    pto.mte_ub_gm %ub_dpost, %dpost_gm, %c32_i64 nburst(%c1_i64, %c32_i64, %c32_i64) : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+    pto.mte_ub_gm %ub_dx, %dx_gm, %c512_i64 nburst(%c1_i64, %c512_i64, %c512_i64) : !pto.ptr<bf16, ub>, !pto.ptr<bf16, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}
