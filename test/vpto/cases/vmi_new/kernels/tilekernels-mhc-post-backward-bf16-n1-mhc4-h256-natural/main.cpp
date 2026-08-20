@@ -105,15 +105,24 @@ int main() {
   ACL_CHECK(aclrtMalloc((void **)&dXDevice, kXBytes,
                         ACL_MEM_MALLOC_HUGE_FIRST));
 
-  ReadFile("./v1.bin", kDOutBytes, dOutHost, kDOutBytes);
-  ReadFile("./v2.bin", kCombBytes, combHost, kCombBytes);
-  ReadFile("./v3.bin", kResidualBytes, residualHost, kResidualBytes);
-  ReadFile("./v4.bin", kPostBytes, postHost, kPostBytes);
-  ReadFile("./v5.bin", kXBytes, xHost, kXBytes);
-  ReadFile("./v6.bin", kCombBytes, dCombHost, kCombBytes);
-  ReadFile("./v7.bin", kResidualBytes, dResidualHost, kResidualBytes);
-  ReadFile("./v8.bin", kPostBytes, dPostHost, kPostBytes);
-  ReadFile("./v9.bin", kXBytes, dXHost, kXBytes);
+  size_t dOutFileBytes = kDOutBytes;
+  size_t combFileBytes = kCombBytes;
+  size_t residualFileBytes = kResidualBytes;
+  size_t postFileBytes = kPostBytes;
+  size_t xFileBytes = kXBytes;
+  size_t dCombFileBytes = kCombBytes;
+  size_t dResidualFileBytes = kResidualBytes;
+  size_t dPostFileBytes = kPostBytes;
+  size_t dXFileBytes = kXBytes;
+  ReadFile("./v1.bin", dOutFileBytes, dOutHost, kDOutBytes);
+  ReadFile("./v2.bin", combFileBytes, combHost, kCombBytes);
+  ReadFile("./v3.bin", residualFileBytes, residualHost, kResidualBytes);
+  ReadFile("./v4.bin", postFileBytes, postHost, kPostBytes);
+  ReadFile("./v5.bin", xFileBytes, xHost, kXBytes);
+  ReadFile("./v6.bin", dCombFileBytes, dCombHost, kCombBytes);
+  ReadFile("./v7.bin", dResidualFileBytes, dResidualHost, kResidualBytes);
+  ReadFile("./v8.bin", dPostFileBytes, dPostHost, kPostBytes);
+  ReadFile("./v9.bin", dXFileBytes, dXHost, kXBytes);
 
   ACL_CHECK(aclrtMemcpy(dOutDevice, kDOutBytes, dOutHost, kDOutBytes,
                        ACL_MEMCPY_HOST_TO_DEVICE));
