@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s | FileCheck %s --check-prefix=VPTO --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi'
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-scheduler=off --emit-vpto %s | FileCheck %s --check-prefix=VPTO --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi'
 
 // FA4 narrows four one-chunk f32 streams before block-strided stores. Prefer
 // the one-chunk c -> ls2 cast relation before group_store requests contiguous

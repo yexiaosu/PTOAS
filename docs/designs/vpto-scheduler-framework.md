@@ -165,7 +165,7 @@ VPTOSchedulingSemantics
 | `SchedulingBoundary` | 结束当前调度区间，自身不参与排序 |
 | `Unsupported` | 已明确知道当前实现不能调度它；结束当前调度区间 |
 
-这里有两层分类，不能混淆：`schedulingClass` 决定操作是否进入调度区间；A5 模型中的 `sched class` 决定进入后使用什么延迟和压力参数。操作可以安全进入区间，但 A5 模型暂时不认识它；`analyze` 仍会报告该区间的 DAG 和原始顺序压力，`on` 则保持该区间的原顺序。
+这里有两层分类，不能混淆：`schedulingClass` 决定操作是否进入调度区间；A5 模型中的 `sched class` 决定进入后使用什么延迟和压力参数。当前 A5 模型按 operation 声明的 pipe 或 micro-op family 分配通用 sched class，不维护 opcode 白名单。防御性的 unknown 处理仍保留给将来没有 family/pipe 覆盖的模型实现；`analyze` 会继续报告这类区间的 DAG 和原始顺序压力，`on` 则保持该区间的原顺序。
 
 ### 操作分类顺序
 
@@ -276,7 +276,7 @@ Data, Anti, Output, Memory, Control, Sync, Artificial, Cluster
 SSA
   -> memory
   -> implicit state and sync
-  -> unknown-model fallback
+  -> defensive unknown-model fallback
   -> critical path
   -> dependency counts
 ```
@@ -327,9 +327,11 @@ SSA
 - 最近一个屏障到所有后续节点的 `Sync/Must` 依赖；
 - latency 均为 0。
 
-### A5 模型不认识某个节点时
+### 模型不认识某个节点时
 
-如果操作可以安全进入调度区间，但 A5 模型返回 `known=false`，依赖图构建器会在它与原顺序相邻节点之间增加 latency 为 0 的 `Artificial/Must` 保序依赖。这些边用于静态分析报告和依赖图完整性。
+当前 A5 模型对所有由 scheduling semantics 判定为 `Schedulable` 的 operation 提供通用 sched class。Vector、Cube、MTE 和 SIMT micro-op 按各自 family 分类；带 `OpPipeInterface` 的 operation 优先按 pipe 分类；仍无法细分的 schedulable operation 使用已知的 `generic-zero` 类。
+
+框架仍允许其他模型返回 `known=false`。遇到这种节点时，依赖图构建器会在它与原顺序相邻节点之间增加 latency 为 0 的 `Artificial/Must` 保序依赖。这些边用于静态分析报告和依赖图完整性。
 
 `analyze` 会把这些节点报告为 `known=false`，但不会称为调度 fallback。`on` 在真正排序前检查整个调度区间；只要存在一个模型未知节点，就列出所有未知操作并保持整个区间的原顺序，不会只重排其中一部分。
 
@@ -353,13 +355,13 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 | 字段 | 当前值 |
 | --- | --- |
 | target | `a5` |
-| version | `generic-a5-v1` |
+| version | `generic-a5-v2` |
 
 当前 A5 模型中与 resource 和 hazard 有关的字段或实现都是为框架占位的 mock 值。`VPTOSchedBoundary` 仍持有相应 tracker，保留后续扩展契约，但当前调度、重放和 `analyze` 报告都不使用或展示这些数据，不能据此得出实际硬件性能分析结论。
 
 ### 逻辑延迟
 
-当前只有 A5 模型明确支持的 vector 和 predicate 指令按非零 `write latency` 处理，当前值为 10。这个延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。其他已知指令不增加这类逻辑等待时间；模型未知的指令会使整个调度区间保持原顺序。
+当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并按非零 `write latency` 处理，当前值为 10。这个延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
 
 ### vector/predicate SSA value 的压力参数
 
@@ -372,7 +374,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 
 ## 共同分析前缀与 `on` 调度后缀
 
-`analyze` 和 `on` 共用调度区间划分、依赖图构建、分类覆盖率统计和原始顺序压力分析。原始顺序压力报告逐节点输出 `delta/current/peak`，不要求所有 sched class 都是 known，因此 unknown region 仍然有完整的静态分析结果。
+`analyze` 和 `on` 共用调度区间划分、依赖图构建、分类覆盖率统计和原始顺序压力分析。原始顺序压力报告逐节点输出 `delta/current/peak`，不要求所有 sched class 都是 known，因此防御性的 unknown region 仍然有完整的静态分析结果。
 
 `analyze` 在这个公共前缀结束后直接返回，不调用 Scheduler、结果检查器或 model replay，也不产生 `VPTOScheduleResult`。`on` 才继续执行调度、检查、重放和应用；启用 trace 时，它输出与 `analyze` 相同的调度前报告，并额外输出 `schedule-result`。当前两种报告都不展示占位的 resource/hazard 数据。
 
@@ -629,7 +631,7 @@ SemanticVerification, ModelReplay, Apply
 
 - `off` 和 `analyze` 不修改 IR；
 - `analyze` 不依赖 sched class 完整性，也不调用 Scheduler、结果检查器或 model replay；
-- `on` 只修改 A5 模型完整、正确性检查和独立重放都通过的调度区间；
+- `on` 只修改 sched class 完整、正确性检查和独立重放都通过的调度区间；
 - 调度区间不会跨越基本块、vecscope 或明确边界；
 - SSA 数据、保守内存冲突、隐式状态和完整屏障都由 `Must` 依赖保序；
 - 相同 IR、A5 模型和选项会得到相同的调度顺序及跳过原因；
@@ -640,8 +642,8 @@ SemanticVerification, ModelReplay, Apply
 当前实现限制：
 
 - 逻辑周期只来自 `Must` 依赖延迟，不是硬件发射时间线；
-- A5 只有模型明确支持的 vector/predicate 操作使用非零延迟；
-- Scalar、MTE、Control 和 Structural 类使用零调度成本；Cube 和未登记 vector 类保持原顺序；
+- A5 的所有 Vector micro-op 和 `PIPE_V`/`PIPE_V2` operation 共用当前 vector/predicate 非零延迟；
+- Scalar、Cube、MTE、Control、Structural 和未细分的 generic 类使用零调度成本；
 - 只统计 vector 和 predicate 两类压力；
 - pressure-driven idle 只在所有当前候选都会超过已知压力上限时触发，仍依赖当前未校准的逻辑 latency，不代表真实硬件空转周期；
 - 不支持跨基本块调度、双向调度、指令捆绑/配对、bank conflict、NOP、软件流水或 Cube kernel 调度；
@@ -659,7 +661,7 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_coverage.pto` | boundary reason 和 unclassified coverage |
 | `vpto_scheduler_dependencies.pto` | SSA、memory range、volatile、unknown memory、post-update、SPR/CTRL、barrier |
 | `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace 双链示例、pressure tie-break、pressure-driven idle、报告开关不改变 IR |
-| `vpto_scheduler_unknown_fallback.pto` | analyze 对 unknown region 继续静态分析且不报 scheduler fallback，on 保序并继续后续 region |
+| `vpto_scheduler_generic_op_coverage.pto` | vcvt/vmul/vdiv/vexp/vmula/vcadd 等通用 Vector micro-op 使用统一 sched class，on 不因 opcode 未登记而跳过 region |
 | `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending heap、verify/replay、随机 DAG differential test |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |
 
@@ -670,7 +672,7 @@ SemanticVerification, ModelReplay, Apply
 以下项目不是当前行为，实施前需要分别补充模型依据、正确性测试和性能验收：
 
 1. **校准 A5 模型数据**：根据 hardware RA、CA 和 NPU 数据校准 vector/predicate limit、contribution、weight、spill cost 和 operation latency，避免把当前静态初值当作最终硬件事实。
-2. **扩大显式模型覆盖**：从真实 emission-ready VPTO fixture 提取 operation 闭包，为更多 vector/predicate operation 建立可审计的 sched class；保持语义不完整的 operation 为 unknown。
+2. **细化 operation 模型**：在通用 pipe/family 覆盖之上，根据可信硬件数据为确有差异的 operation 增加可审计的 latency 或 resource 参数；没有数据时继续使用通用类。
 3. **建立代表性性能 gate**：完善 compare/select、mask-or+scatter 和双链 AABBCC fixture，记录静态 pressure、最终 assembly spill/barrier 指标、CA/NPU ticks、EXIPC、编译时间和内存增量。
 4. **扩展调度范围与策略**：在 correctness semantics 和模型充分后评估 bidirectional scheduling、跨 block调度、bundle/pair、software pipelining 及 Cube kernel scheduling。
 5. **模型声明机制**：在静态 C++ 模型稳定后评估 TableGen 或生成式描述，同时保持 `VPTOSchedModel` 只读接口不变。
