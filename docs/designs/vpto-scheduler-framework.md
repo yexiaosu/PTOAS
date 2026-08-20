@@ -239,7 +239,9 @@ byteSize   = elementByteSize
 - 到达基本块末尾时结束最后一个片段；
 - 只有至少包含一个 `Schedulable` 的片段才成为调度区间；只有辅助结构操作的片段被忽略。
 
-每个 `VPTOSchedRegion` 保存所属基本块、区间编号、连续操作列表，以及前后边界和形成边界的原因。原因可能是 block 开始/结束、实现 `OpTrait::IsTerminator` 的 op、包含 nested region 的 op，或 `分类名:操作名`。
+每个 `VPTOSchedRegion` 保存所属基本块、区间编号、连续操作列表、跨越整个区间的 live-through 值，以及前后边界和形成边界的原因。原因可能是 block 开始/结束、实现 `OpTrait::IsTerminator` 的 op、包含 nested region 的 op，或 `分类名:操作名`。
+
+构建器在基本块内反向计算活跃值，并从函数级 liveness 引入基本块出口值。对于嵌套在 loop-like operation 中的基本块，定义于循环外但被循环区域捕获的值在回边上仍然存活，因此也作为基本块出口活跃值参与计算。一个值如果在调度区间入口和出口都活跃，就记录为该区间的 live-through；即使区间内没有直接引用它，它占用的寄存器压力也不能忽略。
 
 ### 分类覆盖率
 
@@ -289,7 +291,7 @@ SSA
 - 依赖延迟取定义者在 A5 模型中的 `writeLatency`；
 - 定义者不在当前调度区间：该值记为入口存活值，即 live-in。
 
-如果一个结果在当前调度区间之外仍被使用，就记为出口存活值，即 live-out。定义者位于区间外、但既在区间内使用又在区间后继续使用的 live-through 值，同时记为 live-in 和 live-out；这样正向跟踪不会在区间内最后一次使用后提前释放它，反向跟踪也会从正确的出口压力开始。
+如果一个结果在当前调度区间之外仍被使用，就记为出口存活值，即 live-out。定义者位于区间外、且在区间入口和出口都活跃的 live-through 值，同时记为 live-in 和 live-out；这既包括“在区间内使用后仍继续存活”的值，也包括“区间内完全不引用但跨过区间”的值。这样正向跟踪不会遗漏或提前释放周边代码仍需保留的寄存器，反向跟踪也会从正确的出口压力开始。
 
 更新后地址与普通 SSA 结果使用相同的数据依赖，只把原因记录为 `post-update address operand #N`，方便分析报告定位。
 
@@ -390,7 +392,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 
 工作量计数在以下位置增加：
 
-- 建图时每扫描一个 SSA operand 或 result user；
+- 建图时每扫描一个 live-through 值、SSA operand 或 result user；
 - 建图时每解析一个 memory access、遍历一个候选节点对或比较一对 memory access；
 - 建图时每扫描一个隐式 effect、模型分类或新增一条依赖边；
 - 计算关键路径时每处理一个节点或一条边；
