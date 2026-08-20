@@ -1,0 +1,162 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s '-pto-vpto-scheduler=mode=analyze' > /dev/null 2> %t.analyze
+// RUN: FileCheck %s --check-prefix=ANALYZE < %t.analyze
+// RUN: pto-test-opt %s '-pto-vpto-scheduler=mode=on trace=true' > %t.on 2> %t.trace
+// RUN: FileCheck %s --check-prefix=ORDER < %t.on
+// RUN: FileCheck %s --check-prefix=ON < %t.trace
+
+// Thirty-four independent producer/consumer chains all contribute to the
+// stored reduction. The input order deliberately groups real producers before
+// their consumers; there are no unused values or synthetic dependencies.
+
+// ANALYZE: vpto-scheduler: function=vector_pressure mode=analyze
+// ANALYZE: region=0 before=block-start after=block-end nodes=102
+// ANALYZE-SAME: unknown-classes=0
+// ANALYZE: pressure node=32
+// ANALYZE-SAME: current={vector:35,predicate:1}
+// ANALYZE-SAME: peak={vector:35,predicate:1}
+// ANALYZE: pressure node=33 delta={vector:-1,predicate:0}
+// ANALYZE-SAME: current={vector:34,predicate:1}
+// ANALYZE: coverage schedulable=102 structural=0 boundary=0 unsupported=0 unclassified=0
+
+// ORDER-LABEL: func.func @vector_pressure
+// ORDER-COUNT-30: pto.vmax
+// ORDER-COUNT-30: pto.vabs
+// ORDER-NEXT: pto.vadd
+// ORDER-NEXT: pto.vmax
+
+// ON: vpto-scheduler: function=vector_pressure mode=on
+// ON: region=0 before=block-start after=block-end nodes=102
+// ON-SAME: unknown-classes=0
+// ON: schedule-result block=0 region=0 nodes=102
+// ON-SAME: peak={vector:32,predicate:1}
+// ON: result-position=60 node=68 original-index=68
+// ON-SAME: op=pto.vadd
+// ON-NEXT: vpto-scheduler: result-position=61 node=30 original-index=30
+// ON-SAME: op=pto.vmax
+// ON: coverage schedulable=102 structural=0 boundary=0 unsupported=0 unclassified=0
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @vector_pressure(%lhs: !pto.vreg<64xf32>,
+                             %rhs: !pto.vreg<64xf32>,
+                             %active: !pto.mask<b32>,
+                             %out: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %p00 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p01 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p02 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p03 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p04 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p05 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p06 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p07 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p08 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p09 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p10 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p11 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p12 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p13 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p14 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p15 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p16 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p17 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p18 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p19 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p20 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p21 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p22 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p23 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p24 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p25 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p26 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p27 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p28 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p29 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p30 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p31 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p32 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p33 = pto.vmax %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+
+      %q00 = pto.vabs %p00, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q01 = pto.vabs %p01, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q02 = pto.vabs %p02, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q03 = pto.vabs %p03, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q04 = pto.vabs %p04, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q05 = pto.vabs %p05, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q06 = pto.vabs %p06, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q07 = pto.vabs %p07, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q08 = pto.vabs %p08, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q09 = pto.vabs %p09, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q10 = pto.vabs %p10, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q11 = pto.vabs %p11, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q12 = pto.vabs %p12, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q13 = pto.vabs %p13, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q14 = pto.vabs %p14, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q15 = pto.vabs %p15, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q16 = pto.vabs %p16, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q17 = pto.vabs %p17, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q18 = pto.vabs %p18, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q19 = pto.vabs %p19, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q20 = pto.vabs %p20, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q21 = pto.vabs %p21, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q22 = pto.vabs %p22, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q23 = pto.vabs %p23, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q24 = pto.vabs %p24, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q25 = pto.vabs %p25, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q26 = pto.vabs %p26, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q27 = pto.vabs %p27, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q28 = pto.vabs %p28, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q29 = pto.vabs %p29, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q30 = pto.vabs %p30, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q31 = pto.vabs %p31, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q32 = pto.vabs %p32, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %q33 = pto.vabs %p33, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+
+      %s01 = pto.vadd %q00, %q01, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s02 = pto.vadd %s01, %q02, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s03 = pto.vadd %s02, %q03, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s04 = pto.vadd %s03, %q04, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s05 = pto.vadd %s04, %q05, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s06 = pto.vadd %s05, %q06, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s07 = pto.vadd %s06, %q07, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s08 = pto.vadd %s07, %q08, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s09 = pto.vadd %s08, %q09, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s10 = pto.vadd %s09, %q10, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s11 = pto.vadd %s10, %q11, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s12 = pto.vadd %s11, %q12, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s13 = pto.vadd %s12, %q13, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s14 = pto.vadd %s13, %q14, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s15 = pto.vadd %s14, %q15, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s16 = pto.vadd %s15, %q16, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s17 = pto.vadd %s16, %q17, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s18 = pto.vadd %s17, %q18, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s19 = pto.vadd %s18, %q19, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s20 = pto.vadd %s19, %q20, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s21 = pto.vadd %s20, %q21, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s22 = pto.vadd %s21, %q22, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s23 = pto.vadd %s22, %q23, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s24 = pto.vadd %s23, %q24, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s25 = pto.vadd %s24, %q25, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s26 = pto.vadd %s25, %q26, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s27 = pto.vadd %s26, %q27, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s28 = pto.vadd %s27, %q28, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s29 = pto.vadd %s28, %q29, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s30 = pto.vadd %s29, %q30, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s31 = pto.vadd %s30, %q31, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s32 = pto.vadd %s31, %q32, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %s33 = pto.vadd %s32, %q33, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      pto.vsts %s33, %out[%c0], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+}
