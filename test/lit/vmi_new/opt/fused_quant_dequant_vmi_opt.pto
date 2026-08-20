@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s | FileCheck %s --check-prefix=VPTO --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi' --implicit-check-not=pto.pge_ --implicit-check-not=pto.pintlv --implicit-check-not=pto.pdintlv --implicit-check-not=pto.vintlv --implicit-check-not=pto.vdintlv --implicit-check-not=pto.mem_bar --implicit-check-not=E2B_B16
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-scheduler=off --emit-vpto %s | FileCheck %s --check-prefix=VPTO --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi' --implicit-check-not=pto.pge_ --implicit-check-not=pto.pintlv --implicit-check-not=pto.pdintlv --implicit-check-not=pto.vintlv --implicit-check-not=pto.vdintlv --implicit-check-not=pto.mem_bar --implicit-check-not=E2B_B16
 
 // Optimization guard for the fused quant-to-FP8 and dequant-to-BF16 VMI demo.
 // This is the dynamic two-slot kernel derived from learning-chip/vmi-demo

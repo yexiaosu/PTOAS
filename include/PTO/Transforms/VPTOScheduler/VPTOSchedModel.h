@@ -89,9 +89,9 @@ public:
   getPressure(Value value) const = 0;
 };
 
-/// Conservative A5 model shared by analyze and on modes. Vector/predicate
-/// operations require an explicit model entry; unrecognized operations in
-/// those families remain unknown so on mode can skip their whole region.
+/// Conservative A5 model shared by analyze and on modes. Operations use the
+/// generic class for their declared execution pipe or micro-op family; the
+/// model does not maintain per-opcode latency entries.
 class VPTOGenericA5SchedModel final : public VPTOSchedModel {
 public:
   VPTOGenericA5SchedModel();
