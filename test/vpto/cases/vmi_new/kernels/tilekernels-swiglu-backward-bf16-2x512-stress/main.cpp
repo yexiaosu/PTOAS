@@ -60,9 +60,12 @@ int main() {
   ACL_CHECK(aclrtMalloc((void **)&xDevice, kXBytes, ACL_MEM_MALLOC_HUGE_FIRST));
   ACL_CHECK(aclrtMalloc((void **)&gDevice, kGBytes, ACL_MEM_MALLOC_HUGE_FIRST));
   ACL_CHECK(aclrtMalloc((void **)&outDevice, kXBytes, ACL_MEM_MALLOC_HUGE_FIRST));
-  ReadFile("./v1.bin", kXBytes, xHost, kXBytes);
-  ReadFile("./v2.bin", kGBytes, gHost, kGBytes);
-  ReadFile("./v3.bin", kXBytes, outHost, kXBytes);
+  size_t xFileBytes = kXBytes;
+  size_t gFileBytes = kGBytes;
+  size_t outFileBytes = kXBytes;
+  ReadFile("./v1.bin", xFileBytes, xHost, kXBytes);
+  ReadFile("./v2.bin", gFileBytes, gHost, kGBytes);
+  ReadFile("./v3.bin", outFileBytes, outHost, kXBytes);
   ACL_CHECK(aclrtMemcpy(xDevice, kXBytes, xHost, kXBytes, ACL_MEMCPY_HOST_TO_DEVICE));
   ACL_CHECK(aclrtMemcpy(gDevice, kGBytes, gHost, kGBytes, ACL_MEMCPY_HOST_TO_DEVICE));
   ACL_CHECK(aclrtMemcpy(outDevice, kXBytes, outHost, kXBytes, ACL_MEMCPY_HOST_TO_DEVICE));
