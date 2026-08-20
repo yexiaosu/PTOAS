@@ -1,0 +1,750 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @vmi_tilekernels_per_token_roundtrip_bf16_e4m3_16x256_stress_kernel(
+      %src_gm: !pto.ptr<bf16, gm>, %dst_gm: !pto.ptr<bf16, gm>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c256 = arith.constant 256 : index
+    %c512 = arith.constant 512 : index
+    %c768 = arith.constant 768 : index
+    %c1024 = arith.constant 1024 : index
+    %c1280 = arith.constant 1280 : index
+    %c1536 = arith.constant 1536 : index
+    %c1792 = arith.constant 1792 : index
+    %c2048 = arith.constant 2048 : index
+    %c2304 = arith.constant 2304 : index
+    %c2560 = arith.constant 2560 : index
+    %c2816 = arith.constant 2816 : index
+    %c3072 = arith.constant 3072 : index
+    %c3328 = arith.constant 3328 : index
+    %c3584 = arith.constant 3584 : index
+    %c3840 = arith.constant 3840 : index
+    %c16384 = arith.constant 16384 : index
+    %c16640 = arith.constant 16640 : index
+    %c16896 = arith.constant 16896 : index
+    %c17152 = arith.constant 17152 : index
+    %c17408 = arith.constant 17408 : index
+    %c17664 = arith.constant 17664 : index
+    %c17920 = arith.constant 17920 : index
+    %c18176 = arith.constant 18176 : index
+    %c18432 = arith.constant 18432 : index
+    %c18688 = arith.constant 18688 : index
+    %c18944 = arith.constant 18944 : index
+    %c19200 = arith.constant 19200 : index
+    %c19456 = arith.constant 19456 : index
+    %c19712 = arith.constant 19712 : index
+    %c19968 = arith.constant 19968 : index
+    %c20224 = arith.constant 20224 : index
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c8192_i64 = arith.constant 8192 : i64
+    %c2139095040_i32 = arith.constant 2139095040 : i32
+    %c23_i32 = arith.constant 23 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c254_i32 = arith.constant 254 : i32
+
+    %ub = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_dst_mte = pto.addptr %ub, %c16384
+        : !pto.ptr<bf16, ub> -> !pto.ptr<bf16, ub>
+
+    pto.mte_gm_ub %src_gm, %ub, %c0_i64, %c8192_i64
+      nburst(%c1_i64, %c8192_i64, %c8192_i64)
+      : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    pto.vecscope {
+      %mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
+      %exp_mask = pto.vmi.vbrc %c2139095040_i32 : i32 -> !pto.vmi.vreg<8xi32>
+      %shift = pto.vmi.vbrc %c23_i32 : i32 -> !pto.vmi.vreg<8xi32>
+      %emax = pto.vmi.vbrc %c8_i32 : i32 -> !pto.vmi.vreg<8xi32>
+      %scale_exp_bias = pto.vmi.vbrc %c254_i32 : i32 -> !pto.vmi.vreg<8xi32>
+      %x_bf16_0 = pto.vmi.vload %ub[%c0]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_0 = pto.vmi.vcvt %x_bf16_0
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_0 = pto.vmi.vabs %x_0
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_0 = pto.vmi.vcmax %abs_0, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_0 = pto.vmi.vinterpret_cast %amax_0
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_0 = pto.vmi.vand %amax_bits_0, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_0 = pto.vmi.vshr %exp_bits_0, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_0 = pto.vmi.vsub %exp_0, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_0 = pto.vmi.vshl %e8m0_0, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_0 = pto.vmi.vinterpret_cast %deq_bits_0
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_0 = pto.vmi.vbrc %deq_scale_0 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_0 = pto.vmi.vsub %scale_exp_bias, %e8m0_0
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_0 = pto.vmi.vshl %recip_exp_0, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_0 = pto.vmi.vinterpret_cast %recip_bits_0
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_0 = pto.vmi.vbrc %recip_0 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_0 = pto.vmi.vmul %x_0, %recip_vec_0
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_0 = pto.vmi.vcvt %scaled_0 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_1 = pto.vmi.vload %ub[%c256]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_1 = pto.vmi.vcvt %x_bf16_1
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_1 = pto.vmi.vabs %x_1
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_1 = pto.vmi.vcmax %abs_1, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_1 = pto.vmi.vinterpret_cast %amax_1
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_1 = pto.vmi.vand %amax_bits_1, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_1 = pto.vmi.vshr %exp_bits_1, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_1 = pto.vmi.vsub %exp_1, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_1 = pto.vmi.vshl %e8m0_1, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_1 = pto.vmi.vinterpret_cast %deq_bits_1
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_1 = pto.vmi.vbrc %deq_scale_1 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_1 = pto.vmi.vsub %scale_exp_bias, %e8m0_1
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_1 = pto.vmi.vshl %recip_exp_1, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_1 = pto.vmi.vinterpret_cast %recip_bits_1
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_1 = pto.vmi.vbrc %recip_1 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_1 = pto.vmi.vmul %x_1, %recip_vec_1
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_1 = pto.vmi.vcvt %scaled_1 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_2 = pto.vmi.vload %ub[%c512]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_2 = pto.vmi.vcvt %x_bf16_2
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_2 = pto.vmi.vabs %x_2
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_2 = pto.vmi.vcmax %abs_2, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_2 = pto.vmi.vinterpret_cast %amax_2
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_2 = pto.vmi.vand %amax_bits_2, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_2 = pto.vmi.vshr %exp_bits_2, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_2 = pto.vmi.vsub %exp_2, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_2 = pto.vmi.vshl %e8m0_2, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_2 = pto.vmi.vinterpret_cast %deq_bits_2
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_2 = pto.vmi.vbrc %deq_scale_2 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_2 = pto.vmi.vsub %scale_exp_bias, %e8m0_2
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_2 = pto.vmi.vshl %recip_exp_2, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_2 = pto.vmi.vinterpret_cast %recip_bits_2
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_2 = pto.vmi.vbrc %recip_2 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_2 = pto.vmi.vmul %x_2, %recip_vec_2
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_2 = pto.vmi.vcvt %scaled_2 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_3 = pto.vmi.vload %ub[%c768]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_3 = pto.vmi.vcvt %x_bf16_3
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_3 = pto.vmi.vabs %x_3
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_3 = pto.vmi.vcmax %abs_3, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_3 = pto.vmi.vinterpret_cast %amax_3
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_3 = pto.vmi.vand %amax_bits_3, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_3 = pto.vmi.vshr %exp_bits_3, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_3 = pto.vmi.vsub %exp_3, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_3 = pto.vmi.vshl %e8m0_3, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_3 = pto.vmi.vinterpret_cast %deq_bits_3
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_3 = pto.vmi.vbrc %deq_scale_3 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_3 = pto.vmi.vsub %scale_exp_bias, %e8m0_3
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_3 = pto.vmi.vshl %recip_exp_3, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_3 = pto.vmi.vinterpret_cast %recip_bits_3
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_3 = pto.vmi.vbrc %recip_3 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_3 = pto.vmi.vmul %x_3, %recip_vec_3
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_3 = pto.vmi.vcvt %scaled_3 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_4 = pto.vmi.vload %ub[%c1024]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_4 = pto.vmi.vcvt %x_bf16_4
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_4 = pto.vmi.vabs %x_4
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_4 = pto.vmi.vcmax %abs_4, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_4 = pto.vmi.vinterpret_cast %amax_4
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_4 = pto.vmi.vand %amax_bits_4, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_4 = pto.vmi.vshr %exp_bits_4, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_4 = pto.vmi.vsub %exp_4, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_4 = pto.vmi.vshl %e8m0_4, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_4 = pto.vmi.vinterpret_cast %deq_bits_4
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_4 = pto.vmi.vbrc %deq_scale_4 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_4 = pto.vmi.vsub %scale_exp_bias, %e8m0_4
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_4 = pto.vmi.vshl %recip_exp_4, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_4 = pto.vmi.vinterpret_cast %recip_bits_4
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_4 = pto.vmi.vbrc %recip_4 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_4 = pto.vmi.vmul %x_4, %recip_vec_4
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_4 = pto.vmi.vcvt %scaled_4 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_5 = pto.vmi.vload %ub[%c1280]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_5 = pto.vmi.vcvt %x_bf16_5
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_5 = pto.vmi.vabs %x_5
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_5 = pto.vmi.vcmax %abs_5, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_5 = pto.vmi.vinterpret_cast %amax_5
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_5 = pto.vmi.vand %amax_bits_5, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_5 = pto.vmi.vshr %exp_bits_5, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_5 = pto.vmi.vsub %exp_5, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_5 = pto.vmi.vshl %e8m0_5, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_5 = pto.vmi.vinterpret_cast %deq_bits_5
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_5 = pto.vmi.vbrc %deq_scale_5 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_5 = pto.vmi.vsub %scale_exp_bias, %e8m0_5
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_5 = pto.vmi.vshl %recip_exp_5, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_5 = pto.vmi.vinterpret_cast %recip_bits_5
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_5 = pto.vmi.vbrc %recip_5 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_5 = pto.vmi.vmul %x_5, %recip_vec_5
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_5 = pto.vmi.vcvt %scaled_5 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_6 = pto.vmi.vload %ub[%c1536]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_6 = pto.vmi.vcvt %x_bf16_6
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_6 = pto.vmi.vabs %x_6
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_6 = pto.vmi.vcmax %abs_6, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_6 = pto.vmi.vinterpret_cast %amax_6
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_6 = pto.vmi.vand %amax_bits_6, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_6 = pto.vmi.vshr %exp_bits_6, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_6 = pto.vmi.vsub %exp_6, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_6 = pto.vmi.vshl %e8m0_6, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_6 = pto.vmi.vinterpret_cast %deq_bits_6
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_6 = pto.vmi.vbrc %deq_scale_6 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_6 = pto.vmi.vsub %scale_exp_bias, %e8m0_6
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_6 = pto.vmi.vshl %recip_exp_6, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_6 = pto.vmi.vinterpret_cast %recip_bits_6
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_6 = pto.vmi.vbrc %recip_6 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_6 = pto.vmi.vmul %x_6, %recip_vec_6
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_6 = pto.vmi.vcvt %scaled_6 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_7 = pto.vmi.vload %ub[%c1792]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_7 = pto.vmi.vcvt %x_bf16_7
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_7 = pto.vmi.vabs %x_7
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_7 = pto.vmi.vcmax %abs_7, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_7 = pto.vmi.vinterpret_cast %amax_7
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_7 = pto.vmi.vand %amax_bits_7, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_7 = pto.vmi.vshr %exp_bits_7, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_7 = pto.vmi.vsub %exp_7, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_7 = pto.vmi.vshl %e8m0_7, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_7 = pto.vmi.vinterpret_cast %deq_bits_7
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_7 = pto.vmi.vbrc %deq_scale_7 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_7 = pto.vmi.vsub %scale_exp_bias, %e8m0_7
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_7 = pto.vmi.vshl %recip_exp_7, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_7 = pto.vmi.vinterpret_cast %recip_bits_7
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_7 = pto.vmi.vbrc %recip_7 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_7 = pto.vmi.vmul %x_7, %recip_vec_7
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_7 = pto.vmi.vcvt %scaled_7 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_8 = pto.vmi.vload %ub[%c2048]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_8 = pto.vmi.vcvt %x_bf16_8
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_8 = pto.vmi.vabs %x_8
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_8 = pto.vmi.vcmax %abs_8, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_8 = pto.vmi.vinterpret_cast %amax_8
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_8 = pto.vmi.vand %amax_bits_8, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_8 = pto.vmi.vshr %exp_bits_8, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_8 = pto.vmi.vsub %exp_8, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_8 = pto.vmi.vshl %e8m0_8, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_8 = pto.vmi.vinterpret_cast %deq_bits_8
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_8 = pto.vmi.vbrc %deq_scale_8 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_8 = pto.vmi.vsub %scale_exp_bias, %e8m0_8
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_8 = pto.vmi.vshl %recip_exp_8, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_8 = pto.vmi.vinterpret_cast %recip_bits_8
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_8 = pto.vmi.vbrc %recip_8 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_8 = pto.vmi.vmul %x_8, %recip_vec_8
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_8 = pto.vmi.vcvt %scaled_8 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_9 = pto.vmi.vload %ub[%c2304]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_9 = pto.vmi.vcvt %x_bf16_9
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_9 = pto.vmi.vabs %x_9
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_9 = pto.vmi.vcmax %abs_9, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_9 = pto.vmi.vinterpret_cast %amax_9
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_9 = pto.vmi.vand %amax_bits_9, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_9 = pto.vmi.vshr %exp_bits_9, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_9 = pto.vmi.vsub %exp_9, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_9 = pto.vmi.vshl %e8m0_9, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_9 = pto.vmi.vinterpret_cast %deq_bits_9
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_9 = pto.vmi.vbrc %deq_scale_9 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_9 = pto.vmi.vsub %scale_exp_bias, %e8m0_9
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_9 = pto.vmi.vshl %recip_exp_9, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_9 = pto.vmi.vinterpret_cast %recip_bits_9
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_9 = pto.vmi.vbrc %recip_9 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_9 = pto.vmi.vmul %x_9, %recip_vec_9
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_9 = pto.vmi.vcvt %scaled_9 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_10 = pto.vmi.vload %ub[%c2560]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_10 = pto.vmi.vcvt %x_bf16_10
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_10 = pto.vmi.vabs %x_10
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_10 = pto.vmi.vcmax %abs_10, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_10 = pto.vmi.vinterpret_cast %amax_10
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_10 = pto.vmi.vand %amax_bits_10, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_10 = pto.vmi.vshr %exp_bits_10, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_10 = pto.vmi.vsub %exp_10, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_10 = pto.vmi.vshl %e8m0_10, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_10 = pto.vmi.vinterpret_cast %deq_bits_10
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_10 = pto.vmi.vbrc %deq_scale_10 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_10 = pto.vmi.vsub %scale_exp_bias, %e8m0_10
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_10 = pto.vmi.vshl %recip_exp_10, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_10 = pto.vmi.vinterpret_cast %recip_bits_10
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_10 = pto.vmi.vbrc %recip_10 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_10 = pto.vmi.vmul %x_10, %recip_vec_10
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_10 = pto.vmi.vcvt %scaled_10 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_11 = pto.vmi.vload %ub[%c2816]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_11 = pto.vmi.vcvt %x_bf16_11
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_11 = pto.vmi.vabs %x_11
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_11 = pto.vmi.vcmax %abs_11, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_11 = pto.vmi.vinterpret_cast %amax_11
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_11 = pto.vmi.vand %amax_bits_11, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_11 = pto.vmi.vshr %exp_bits_11, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_11 = pto.vmi.vsub %exp_11, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_11 = pto.vmi.vshl %e8m0_11, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_11 = pto.vmi.vinterpret_cast %deq_bits_11
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_11 = pto.vmi.vbrc %deq_scale_11 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_11 = pto.vmi.vsub %scale_exp_bias, %e8m0_11
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_11 = pto.vmi.vshl %recip_exp_11, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_11 = pto.vmi.vinterpret_cast %recip_bits_11
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_11 = pto.vmi.vbrc %recip_11 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_11 = pto.vmi.vmul %x_11, %recip_vec_11
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_11 = pto.vmi.vcvt %scaled_11 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_12 = pto.vmi.vload %ub[%c3072]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_12 = pto.vmi.vcvt %x_bf16_12
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_12 = pto.vmi.vabs %x_12
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_12 = pto.vmi.vcmax %abs_12, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_12 = pto.vmi.vinterpret_cast %amax_12
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_12 = pto.vmi.vand %amax_bits_12, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_12 = pto.vmi.vshr %exp_bits_12, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_12 = pto.vmi.vsub %exp_12, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_12 = pto.vmi.vshl %e8m0_12, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_12 = pto.vmi.vinterpret_cast %deq_bits_12
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_12 = pto.vmi.vbrc %deq_scale_12 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_12 = pto.vmi.vsub %scale_exp_bias, %e8m0_12
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_12 = pto.vmi.vshl %recip_exp_12, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_12 = pto.vmi.vinterpret_cast %recip_bits_12
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_12 = pto.vmi.vbrc %recip_12 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_12 = pto.vmi.vmul %x_12, %recip_vec_12
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_12 = pto.vmi.vcvt %scaled_12 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_13 = pto.vmi.vload %ub[%c3328]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_13 = pto.vmi.vcvt %x_bf16_13
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_13 = pto.vmi.vabs %x_13
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_13 = pto.vmi.vcmax %abs_13, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_13 = pto.vmi.vinterpret_cast %amax_13
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_13 = pto.vmi.vand %amax_bits_13, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_13 = pto.vmi.vshr %exp_bits_13, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_13 = pto.vmi.vsub %exp_13, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_13 = pto.vmi.vshl %e8m0_13, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_13 = pto.vmi.vinterpret_cast %deq_bits_13
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_13 = pto.vmi.vbrc %deq_scale_13 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_13 = pto.vmi.vsub %scale_exp_bias, %e8m0_13
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_13 = pto.vmi.vshl %recip_exp_13, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_13 = pto.vmi.vinterpret_cast %recip_bits_13
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_13 = pto.vmi.vbrc %recip_13 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_13 = pto.vmi.vmul %x_13, %recip_vec_13
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_13 = pto.vmi.vcvt %scaled_13 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_14 = pto.vmi.vload %ub[%c3584]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_14 = pto.vmi.vcvt %x_bf16_14
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_14 = pto.vmi.vabs %x_14
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_14 = pto.vmi.vcmax %abs_14, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_14 = pto.vmi.vinterpret_cast %amax_14
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_14 = pto.vmi.vand %amax_bits_14, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_14 = pto.vmi.vshr %exp_bits_14, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_14 = pto.vmi.vsub %exp_14, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_14 = pto.vmi.vshl %e8m0_14, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_14 = pto.vmi.vinterpret_cast %deq_bits_14
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_14 = pto.vmi.vbrc %deq_scale_14 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_14 = pto.vmi.vsub %scale_exp_bias, %e8m0_14
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_14 = pto.vmi.vshl %recip_exp_14, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_14 = pto.vmi.vinterpret_cast %recip_bits_14
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_14 = pto.vmi.vbrc %recip_14 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_14 = pto.vmi.vmul %x_14, %recip_vec_14
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_14 = pto.vmi.vcvt %scaled_14 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %x_bf16_15 = pto.vmi.vload %ub[%c3840]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      %x_15 = pto.vmi.vcvt %x_bf16_15
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256xf32>
+      %abs_15 = pto.vmi.vabs %x_15
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %amax_15 = pto.vmi.vcmax %abs_15, %mask {group = 8}
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<8xf32>
+      %amax_bits_15 = pto.vmi.vinterpret_cast %amax_15
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
+      %exp_bits_15 = pto.vmi.vand %amax_bits_15, %exp_mask
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %exp_15 = pto.vmi.vshr %exp_bits_15, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %e8m0_15 = pto.vmi.vsub %exp_15, %emax
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_bits_15 = pto.vmi.vshl %e8m0_15, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %deq_scale_15 = pto.vmi.vinterpret_cast %deq_bits_15
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %deq_scale_vec_15 = pto.vmi.vbrc %deq_scale_15 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %recip_exp_15 = pto.vmi.vsub %scale_exp_bias, %e8m0_15
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_bits_15 = pto.vmi.vshl %recip_exp_15, %shift
+          : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xi32>
+      %recip_15 = pto.vmi.vinterpret_cast %recip_bits_15
+          : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
+      %recip_vec_15 = pto.vmi.vbrc %recip_15 {group = 8}
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
+      %scaled_15 = pto.vmi.vmul %x_15, %recip_vec_15
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %q_15 = pto.vmi.vcvt %scaled_15 {rounding = "R", saturate = "SAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %q_f32_0 = pto.vmi.vcvt %q_0
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_0 = pto.vmi.vmul %q_f32_0, %deq_scale_vec_0
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_0 = pto.vmi.vcvt %roundtrip_0 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_0, %ub[%c16384]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_1 = pto.vmi.vcvt %q_1
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_1 = pto.vmi.vmul %q_f32_1, %deq_scale_vec_1
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_1 = pto.vmi.vcvt %roundtrip_1 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_1, %ub[%c16640]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_2 = pto.vmi.vcvt %q_2
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_2 = pto.vmi.vmul %q_f32_2, %deq_scale_vec_2
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_2 = pto.vmi.vcvt %roundtrip_2 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_2, %ub[%c16896]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_3 = pto.vmi.vcvt %q_3
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_3 = pto.vmi.vmul %q_f32_3, %deq_scale_vec_3
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_3 = pto.vmi.vcvt %roundtrip_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_3, %ub[%c17152]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_4 = pto.vmi.vcvt %q_4
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_4 = pto.vmi.vmul %q_f32_4, %deq_scale_vec_4
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_4 = pto.vmi.vcvt %roundtrip_4 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_4, %ub[%c17408]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_5 = pto.vmi.vcvt %q_5
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_5 = pto.vmi.vmul %q_f32_5, %deq_scale_vec_5
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_5 = pto.vmi.vcvt %roundtrip_5 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_5, %ub[%c17664]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_6 = pto.vmi.vcvt %q_6
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_6 = pto.vmi.vmul %q_f32_6, %deq_scale_vec_6
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_6 = pto.vmi.vcvt %roundtrip_6 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_6, %ub[%c17920]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_7 = pto.vmi.vcvt %q_7
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_7 = pto.vmi.vmul %q_f32_7, %deq_scale_vec_7
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_7 = pto.vmi.vcvt %roundtrip_7 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_7, %ub[%c18176]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_8 = pto.vmi.vcvt %q_8
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_8 = pto.vmi.vmul %q_f32_8, %deq_scale_vec_8
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_8 = pto.vmi.vcvt %roundtrip_8 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_8, %ub[%c18432]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_9 = pto.vmi.vcvt %q_9
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_9 = pto.vmi.vmul %q_f32_9, %deq_scale_vec_9
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_9 = pto.vmi.vcvt %roundtrip_9 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_9, %ub[%c18688]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_10 = pto.vmi.vcvt %q_10
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_10 = pto.vmi.vmul %q_f32_10, %deq_scale_vec_10
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_10 = pto.vmi.vcvt %roundtrip_10 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_10, %ub[%c18944]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_11 = pto.vmi.vcvt %q_11
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_11 = pto.vmi.vmul %q_f32_11, %deq_scale_vec_11
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_11 = pto.vmi.vcvt %roundtrip_11 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_11, %ub[%c19200]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_12 = pto.vmi.vcvt %q_12
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_12 = pto.vmi.vmul %q_f32_12, %deq_scale_vec_12
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_12 = pto.vmi.vcvt %roundtrip_12 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_12, %ub[%c19456]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_13 = pto.vmi.vcvt %q_13
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_13 = pto.vmi.vmul %q_f32_13, %deq_scale_vec_13
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_13 = pto.vmi.vcvt %roundtrip_13 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_13, %ub[%c19712]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_14 = pto.vmi.vcvt %q_14
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_14 = pto.vmi.vmul %q_f32_14, %deq_scale_vec_14
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_14 = pto.vmi.vcvt %roundtrip_14 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_14, %ub[%c19968]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+      %q_f32_15 = pto.vmi.vcvt %q_15
+          : !pto.vmi.vreg<256xf8E4M3FN> -> !pto.vmi.vreg<256xf32>
+      %roundtrip_15 = pto.vmi.vmul %q_f32_15, %deq_scale_vec_15
+          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+      %out_15 = pto.vmi.vcvt %roundtrip_15 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xbf16>
+      pto.vmi.vstore %out_15, %ub[%c20224]
+          : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.mte_ub_gm %ub_dst_mte, %dst_gm, %c8192_i64
+      nburst(%c1_i64, %c8192_i64, %c8192_i64)
+      : !pto.ptr<bf16, ub>, !pto.ptr<bf16, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}
