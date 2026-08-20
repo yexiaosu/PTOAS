@@ -312,6 +312,14 @@ LogicalResult VPTOSchedDAGBuilder::buildImplicitAndSyncEdges(
 
 LogicalResult VPTOSchedDAGBuilder::buildSSAEdges(
     VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
+  for (Value value : dag.getRegion().liveThroughs) {
+    if (failed(consumeWork(failure))) {
+      return mlir::failure();
+    }
+    dag.addLiveIn(value);
+    dag.addLiveOut(value);
+  }
+
   DenseSet<Value> checkedLiveIns;
   Operation *lastRegionOperation = dag.getRegion().operations.back();
   for (const std::unique_ptr<VPTOSUnit> &unitOwner : dag.getUnits()) {

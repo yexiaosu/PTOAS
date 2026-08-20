@@ -13,6 +13,7 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOScheduler.h"
 
+#include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -290,11 +291,12 @@ static void runFunction(func::FuncOp func, llvm::raw_ostream &os,
   }
 
   VPTOSchedulingCoverage coverage;
+  Liveness liveness(func);
   unsigned blockIndex = 0;
   std::function<void(Region &)> processRegion = [&](Region &parentRegion) {
     for (Block &block : parentRegion) {
       unsigned currentBlockIndex = blockIndex++;
-      VPTOSchedRegionBuilder regionBuilder(&coverage);
+      VPTOSchedRegionBuilder regionBuilder(&coverage, &liveness);
       SmallVector<VPTOSchedRegion> regions = regionBuilder.build(block);
       if (mode == "analyze" || trace) {
         os << "vpto-scheduler: block=" << currentBlockIndex
