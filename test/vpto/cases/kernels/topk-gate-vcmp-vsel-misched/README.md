@@ -67,5 +67,7 @@ Use `test/vpto/scripts/run_host_vpto_validation.sh` with a separate
 Never describe B or C as "VPTOScheduler on": the enabled scheduler in those
 groups is Bisheng's downstream machine-instruction scheduler.
 
-See `RESULTS.md` for the exact commands, provenance, instruction order, spill
-counts, and CA-model measurements from the validated toolchain.
+See `RESULTS.md` for the pre-fix A/B/C/D baseline on `04c8956fb`, including
+the exact commands, provenance, instruction order, spill counts, and CA-model
+measurements. See `RESULTS_LIVE_THROUGH_FIX.md` for the follow-up validation of
+the live-through pressure fix from `bf7a85ca0`.
