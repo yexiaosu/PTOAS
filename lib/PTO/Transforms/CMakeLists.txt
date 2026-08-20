@@ -162,6 +162,7 @@ add_mlir_dialect_library(PTOTransforms
   LINK_LIBS
   PUBLIC
   PTOIR
+  MLIRAnalysis
   MLIRIR
   MLIRPass
   MLIRFuncDialect
