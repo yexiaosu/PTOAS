@@ -1,0 +1,1045 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @vmi_tilekernels_swiglu_backward_bf16_2x512_natural_kernel(
+      %x_gm: !pto.ptr<bf16, gm>, %g_gm: !pto.ptr<bf16, gm>,
+      %out_gm: !pto.ptr<bf16, gm>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c64 = arith.constant 64 : index
+    %c128 = arith.constant 128 : index
+    %c192 = arith.constant 192 : index
+    %c256 = arith.constant 256 : index
+    %c320 = arith.constant 320 : index
+    %c384 = arith.constant 384 : index
+    %c448 = arith.constant 448 : index
+    %c512 = arith.constant 512 : index
+    %c576 = arith.constant 576 : index
+    %c640 = arith.constant 640 : index
+    %c704 = arith.constant 704 : index
+    %c768 = arith.constant 768 : index
+    %c832 = arith.constant 832 : index
+    %c896 = arith.constant 896 : index
+    %c960 = arith.constant 960 : index
+    %c1024 = arith.constant 1024 : index
+    %c1088 = arith.constant 1088 : index
+    %c1152 = arith.constant 1152 : index
+    %c1216 = arith.constant 1216 : index
+    %c1280 = arith.constant 1280 : index
+    %c1344 = arith.constant 1344 : index
+    %c1408 = arith.constant 1408 : index
+    %c1472 = arith.constant 1472 : index
+    %c1536 = arith.constant 1536 : index
+    %c1600 = arith.constant 1600 : index
+    %c1664 = arith.constant 1664 : index
+    %c1728 = arith.constant 1728 : index
+    %c1792 = arith.constant 1792 : index
+    %c1856 = arith.constant 1856 : index
+    %c1920 = arith.constant 1920 : index
+    %c1984 = arith.constant 1984 : index
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c2048_i64 = arith.constant 2048 : i64
+    %c4096_i64 = arith.constant 4096 : i64
+    %c16384_i64 = arith.constant 16384 : i64
+    %c32768_i64 = arith.constant 32768 : i64
+    %c0_f32 = arith.constant 0.0 : f32
+    %c1_f32 = arith.constant 1.0 : f32
+    %c3_f32 = arith.constant 3.0 : f32
+    %cneg3_f32 = arith.constant -3.0 : f32
+
+    %ub_x = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_g = pto.castptr %c16384_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_out = pto.castptr %c32768_i64 : i64 -> !pto.ptr<bf16, ub>
+
+    pto.mte_gm_ub %x_gm, %ub_x, %c0_i64, %c4096_i64
+      nburst(%c1_i64, %c4096_i64, %c4096_i64)
+      : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %g_gm, %ub_g, %c0_i64, %c2048_i64
+      nburst(%c1_i64, %c2048_i64, %c2048_i64)
+      : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    pto.vecscope {
+      %mask = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<64xpred>
+      %zeros = pto.vmi.vbrc %c0_f32 : f32 -> !pto.vmi.vreg<64xf32>
+      %ones = pto.vmi.vbrc %c1_f32 : f32 -> !pto.vmi.vreg<64xf32>
+      %clamp = pto.vmi.vbrc %c3_f32 : f32 -> !pto.vmi.vreg<64xf32>
+      %neg_clamp = pto.vmi.vbrc %cneg3_f32 : f32 -> !pto.vmi.vreg<64xf32>
+      %x_bf16_0 = pto.vmi.vload %ub_x[%c0]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_0 = pto.vmi.vload %ub_x[%c512]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_0 = pto.vmi.vload %ub_g[%c0]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_0 = pto.vmi.vcvt %x_bf16_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_0 = pto.vmi.vcvt %y_bf16_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_0 = pto.vmi.vcvt %g_bf16_0
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_0 = pto.vmi.vcmps %x_0, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_0 = pto.vmi.vabs %y_0
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_0 = pto.vmi.vcmps %abs_y_0, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_0 = pto.vmi.vmin %x_0, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_0 = pto.vmi.vmax %y_0, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_0 = pto.vmi.vmin %ylo_0, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_0 = pto.vmi.vsub %zeros, %xc_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_0 = pto.vmi.vexp %neg_x_0
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_0 = pto.vmi.vadd %ones, %exp_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_0 = pto.vmi.vdiv %ones, %den_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_0 = pto.vmi.vmul %g_0, %s_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_0 = pto.vmi.vsub %ones, %s_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_0 = pto.vmi.vmul %xc_0, %one_minus_s_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_0 = pto.vmi.vadd %ones, %x_term_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_0 = pto.vmi.vmul %gws_0, %yc_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_0 = pto.vmi.vmul %g_y_0, %inner_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_0 = pto.vmi.vmul %gws_0, %xc_0
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_0 = pto.vmi.vsel %x_clamped_0, %zeros, %x_grad_raw_0
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_0 = pto.vmi.vsel %y_clamped_0, %zeros, %y_grad_raw_0
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_0 = pto.vmi.vcvt %x_grad_0 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_0 = pto.vmi.vcvt %y_grad_0 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_0, %ub_out[%c0]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_0, %ub_out[%c512]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_1 = pto.vmi.vload %ub_x[%c64]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_1 = pto.vmi.vload %ub_x[%c576]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_1 = pto.vmi.vload %ub_g[%c64]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_1 = pto.vmi.vcvt %x_bf16_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_1 = pto.vmi.vcvt %y_bf16_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_1 = pto.vmi.vcvt %g_bf16_1
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_1 = pto.vmi.vcmps %x_1, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_1 = pto.vmi.vabs %y_1
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_1 = pto.vmi.vcmps %abs_y_1, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_1 = pto.vmi.vmin %x_1, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_1 = pto.vmi.vmax %y_1, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_1 = pto.vmi.vmin %ylo_1, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_1 = pto.vmi.vsub %zeros, %xc_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_1 = pto.vmi.vexp %neg_x_1
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_1 = pto.vmi.vadd %ones, %exp_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_1 = pto.vmi.vdiv %ones, %den_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_1 = pto.vmi.vmul %g_1, %s_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_1 = pto.vmi.vsub %ones, %s_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_1 = pto.vmi.vmul %xc_1, %one_minus_s_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_1 = pto.vmi.vadd %ones, %x_term_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_1 = pto.vmi.vmul %gws_1, %yc_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_1 = pto.vmi.vmul %g_y_1, %inner_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_1 = pto.vmi.vmul %gws_1, %xc_1
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_1 = pto.vmi.vsel %x_clamped_1, %zeros, %x_grad_raw_1
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_1 = pto.vmi.vsel %y_clamped_1, %zeros, %y_grad_raw_1
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_1 = pto.vmi.vcvt %x_grad_1 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_1 = pto.vmi.vcvt %y_grad_1 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_1, %ub_out[%c64]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_1, %ub_out[%c576]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_2 = pto.vmi.vload %ub_x[%c128]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_2 = pto.vmi.vload %ub_x[%c640]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_2 = pto.vmi.vload %ub_g[%c128]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_2 = pto.vmi.vcvt %x_bf16_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_2 = pto.vmi.vcvt %y_bf16_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_2 = pto.vmi.vcvt %g_bf16_2
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_2 = pto.vmi.vcmps %x_2, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_2 = pto.vmi.vabs %y_2
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_2 = pto.vmi.vcmps %abs_y_2, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_2 = pto.vmi.vmin %x_2, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_2 = pto.vmi.vmax %y_2, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_2 = pto.vmi.vmin %ylo_2, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_2 = pto.vmi.vsub %zeros, %xc_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_2 = pto.vmi.vexp %neg_x_2
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_2 = pto.vmi.vadd %ones, %exp_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_2 = pto.vmi.vdiv %ones, %den_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_2 = pto.vmi.vmul %g_2, %s_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_2 = pto.vmi.vsub %ones, %s_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_2 = pto.vmi.vmul %xc_2, %one_minus_s_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_2 = pto.vmi.vadd %ones, %x_term_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_2 = pto.vmi.vmul %gws_2, %yc_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_2 = pto.vmi.vmul %g_y_2, %inner_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_2 = pto.vmi.vmul %gws_2, %xc_2
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_2 = pto.vmi.vsel %x_clamped_2, %zeros, %x_grad_raw_2
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_2 = pto.vmi.vsel %y_clamped_2, %zeros, %y_grad_raw_2
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_2 = pto.vmi.vcvt %x_grad_2 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_2 = pto.vmi.vcvt %y_grad_2 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_2, %ub_out[%c128]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_2, %ub_out[%c640]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_3 = pto.vmi.vload %ub_x[%c192]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_3 = pto.vmi.vload %ub_x[%c704]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_3 = pto.vmi.vload %ub_g[%c192]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_3 = pto.vmi.vcvt %x_bf16_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_3 = pto.vmi.vcvt %y_bf16_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_3 = pto.vmi.vcvt %g_bf16_3
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_3 = pto.vmi.vcmps %x_3, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_3 = pto.vmi.vabs %y_3
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_3 = pto.vmi.vcmps %abs_y_3, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_3 = pto.vmi.vmin %x_3, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_3 = pto.vmi.vmax %y_3, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_3 = pto.vmi.vmin %ylo_3, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_3 = pto.vmi.vsub %zeros, %xc_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_3 = pto.vmi.vexp %neg_x_3
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_3 = pto.vmi.vadd %ones, %exp_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_3 = pto.vmi.vdiv %ones, %den_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_3 = pto.vmi.vmul %g_3, %s_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_3 = pto.vmi.vsub %ones, %s_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_3 = pto.vmi.vmul %xc_3, %one_minus_s_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_3 = pto.vmi.vadd %ones, %x_term_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_3 = pto.vmi.vmul %gws_3, %yc_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_3 = pto.vmi.vmul %g_y_3, %inner_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_3 = pto.vmi.vmul %gws_3, %xc_3
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_3 = pto.vmi.vsel %x_clamped_3, %zeros, %x_grad_raw_3
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_3 = pto.vmi.vsel %y_clamped_3, %zeros, %y_grad_raw_3
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_3 = pto.vmi.vcvt %x_grad_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_3 = pto.vmi.vcvt %y_grad_3 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_3, %ub_out[%c192]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_3, %ub_out[%c704]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_4 = pto.vmi.vload %ub_x[%c256]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_4 = pto.vmi.vload %ub_x[%c768]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_4 = pto.vmi.vload %ub_g[%c256]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_4 = pto.vmi.vcvt %x_bf16_4
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_4 = pto.vmi.vcvt %y_bf16_4
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_4 = pto.vmi.vcvt %g_bf16_4
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_4 = pto.vmi.vcmps %x_4, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_4 = pto.vmi.vabs %y_4
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_4 = pto.vmi.vcmps %abs_y_4, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_4 = pto.vmi.vmin %x_4, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_4 = pto.vmi.vmax %y_4, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_4 = pto.vmi.vmin %ylo_4, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_4 = pto.vmi.vsub %zeros, %xc_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_4 = pto.vmi.vexp %neg_x_4
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_4 = pto.vmi.vadd %ones, %exp_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_4 = pto.vmi.vdiv %ones, %den_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_4 = pto.vmi.vmul %g_4, %s_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_4 = pto.vmi.vsub %ones, %s_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_4 = pto.vmi.vmul %xc_4, %one_minus_s_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_4 = pto.vmi.vadd %ones, %x_term_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_4 = pto.vmi.vmul %gws_4, %yc_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_4 = pto.vmi.vmul %g_y_4, %inner_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_4 = pto.vmi.vmul %gws_4, %xc_4
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_4 = pto.vmi.vsel %x_clamped_4, %zeros, %x_grad_raw_4
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_4 = pto.vmi.vsel %y_clamped_4, %zeros, %y_grad_raw_4
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_4 = pto.vmi.vcvt %x_grad_4 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_4 = pto.vmi.vcvt %y_grad_4 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_4, %ub_out[%c256]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_4, %ub_out[%c768]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_5 = pto.vmi.vload %ub_x[%c320]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_5 = pto.vmi.vload %ub_x[%c832]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_5 = pto.vmi.vload %ub_g[%c320]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_5 = pto.vmi.vcvt %x_bf16_5
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_5 = pto.vmi.vcvt %y_bf16_5
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_5 = pto.vmi.vcvt %g_bf16_5
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_5 = pto.vmi.vcmps %x_5, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_5 = pto.vmi.vabs %y_5
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_5 = pto.vmi.vcmps %abs_y_5, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_5 = pto.vmi.vmin %x_5, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_5 = pto.vmi.vmax %y_5, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_5 = pto.vmi.vmin %ylo_5, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_5 = pto.vmi.vsub %zeros, %xc_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_5 = pto.vmi.vexp %neg_x_5
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_5 = pto.vmi.vadd %ones, %exp_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_5 = pto.vmi.vdiv %ones, %den_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_5 = pto.vmi.vmul %g_5, %s_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_5 = pto.vmi.vsub %ones, %s_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_5 = pto.vmi.vmul %xc_5, %one_minus_s_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_5 = pto.vmi.vadd %ones, %x_term_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_5 = pto.vmi.vmul %gws_5, %yc_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_5 = pto.vmi.vmul %g_y_5, %inner_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_5 = pto.vmi.vmul %gws_5, %xc_5
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_5 = pto.vmi.vsel %x_clamped_5, %zeros, %x_grad_raw_5
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_5 = pto.vmi.vsel %y_clamped_5, %zeros, %y_grad_raw_5
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_5 = pto.vmi.vcvt %x_grad_5 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_5 = pto.vmi.vcvt %y_grad_5 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_5, %ub_out[%c320]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_5, %ub_out[%c832]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_6 = pto.vmi.vload %ub_x[%c384]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_6 = pto.vmi.vload %ub_x[%c896]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_6 = pto.vmi.vload %ub_g[%c384]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_6 = pto.vmi.vcvt %x_bf16_6
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_6 = pto.vmi.vcvt %y_bf16_6
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_6 = pto.vmi.vcvt %g_bf16_6
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_6 = pto.vmi.vcmps %x_6, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_6 = pto.vmi.vabs %y_6
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_6 = pto.vmi.vcmps %abs_y_6, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_6 = pto.vmi.vmin %x_6, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_6 = pto.vmi.vmax %y_6, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_6 = pto.vmi.vmin %ylo_6, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_6 = pto.vmi.vsub %zeros, %xc_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_6 = pto.vmi.vexp %neg_x_6
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_6 = pto.vmi.vadd %ones, %exp_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_6 = pto.vmi.vdiv %ones, %den_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_6 = pto.vmi.vmul %g_6, %s_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_6 = pto.vmi.vsub %ones, %s_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_6 = pto.vmi.vmul %xc_6, %one_minus_s_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_6 = pto.vmi.vadd %ones, %x_term_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_6 = pto.vmi.vmul %gws_6, %yc_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_6 = pto.vmi.vmul %g_y_6, %inner_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_6 = pto.vmi.vmul %gws_6, %xc_6
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_6 = pto.vmi.vsel %x_clamped_6, %zeros, %x_grad_raw_6
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_6 = pto.vmi.vsel %y_clamped_6, %zeros, %y_grad_raw_6
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_6 = pto.vmi.vcvt %x_grad_6 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_6 = pto.vmi.vcvt %y_grad_6 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_6, %ub_out[%c384]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_6, %ub_out[%c896]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_7 = pto.vmi.vload %ub_x[%c448]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_7 = pto.vmi.vload %ub_x[%c960]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_7 = pto.vmi.vload %ub_g[%c448]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_7 = pto.vmi.vcvt %x_bf16_7
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_7 = pto.vmi.vcvt %y_bf16_7
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_7 = pto.vmi.vcvt %g_bf16_7
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_7 = pto.vmi.vcmps %x_7, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_7 = pto.vmi.vabs %y_7
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_7 = pto.vmi.vcmps %abs_y_7, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_7 = pto.vmi.vmin %x_7, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_7 = pto.vmi.vmax %y_7, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_7 = pto.vmi.vmin %ylo_7, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_7 = pto.vmi.vsub %zeros, %xc_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_7 = pto.vmi.vexp %neg_x_7
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_7 = pto.vmi.vadd %ones, %exp_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_7 = pto.vmi.vdiv %ones, %den_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_7 = pto.vmi.vmul %g_7, %s_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_7 = pto.vmi.vsub %ones, %s_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_7 = pto.vmi.vmul %xc_7, %one_minus_s_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_7 = pto.vmi.vadd %ones, %x_term_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_7 = pto.vmi.vmul %gws_7, %yc_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_7 = pto.vmi.vmul %g_y_7, %inner_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_7 = pto.vmi.vmul %gws_7, %xc_7
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_7 = pto.vmi.vsel %x_clamped_7, %zeros, %x_grad_raw_7
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_7 = pto.vmi.vsel %y_clamped_7, %zeros, %y_grad_raw_7
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_7 = pto.vmi.vcvt %x_grad_7 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_7 = pto.vmi.vcvt %y_grad_7 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_7, %ub_out[%c448]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_7, %ub_out[%c960]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_8 = pto.vmi.vload %ub_x[%c1024]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_8 = pto.vmi.vload %ub_x[%c1536]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_8 = pto.vmi.vload %ub_g[%c512]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_8 = pto.vmi.vcvt %x_bf16_8
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_8 = pto.vmi.vcvt %y_bf16_8
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_8 = pto.vmi.vcvt %g_bf16_8
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_8 = pto.vmi.vcmps %x_8, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_8 = pto.vmi.vabs %y_8
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_8 = pto.vmi.vcmps %abs_y_8, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_8 = pto.vmi.vmin %x_8, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_8 = pto.vmi.vmax %y_8, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_8 = pto.vmi.vmin %ylo_8, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_8 = pto.vmi.vsub %zeros, %xc_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_8 = pto.vmi.vexp %neg_x_8
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_8 = pto.vmi.vadd %ones, %exp_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_8 = pto.vmi.vdiv %ones, %den_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_8 = pto.vmi.vmul %g_8, %s_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_8 = pto.vmi.vsub %ones, %s_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_8 = pto.vmi.vmul %xc_8, %one_minus_s_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_8 = pto.vmi.vadd %ones, %x_term_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_8 = pto.vmi.vmul %gws_8, %yc_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_8 = pto.vmi.vmul %g_y_8, %inner_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_8 = pto.vmi.vmul %gws_8, %xc_8
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_8 = pto.vmi.vsel %x_clamped_8, %zeros, %x_grad_raw_8
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_8 = pto.vmi.vsel %y_clamped_8, %zeros, %y_grad_raw_8
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_8 = pto.vmi.vcvt %x_grad_8 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_8 = pto.vmi.vcvt %y_grad_8 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_8, %ub_out[%c1024]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_8, %ub_out[%c1536]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_9 = pto.vmi.vload %ub_x[%c1088]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_9 = pto.vmi.vload %ub_x[%c1600]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_9 = pto.vmi.vload %ub_g[%c576]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_9 = pto.vmi.vcvt %x_bf16_9
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_9 = pto.vmi.vcvt %y_bf16_9
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_9 = pto.vmi.vcvt %g_bf16_9
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_9 = pto.vmi.vcmps %x_9, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_9 = pto.vmi.vabs %y_9
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_9 = pto.vmi.vcmps %abs_y_9, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_9 = pto.vmi.vmin %x_9, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_9 = pto.vmi.vmax %y_9, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_9 = pto.vmi.vmin %ylo_9, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_9 = pto.vmi.vsub %zeros, %xc_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_9 = pto.vmi.vexp %neg_x_9
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_9 = pto.vmi.vadd %ones, %exp_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_9 = pto.vmi.vdiv %ones, %den_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_9 = pto.vmi.vmul %g_9, %s_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_9 = pto.vmi.vsub %ones, %s_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_9 = pto.vmi.vmul %xc_9, %one_minus_s_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_9 = pto.vmi.vadd %ones, %x_term_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_9 = pto.vmi.vmul %gws_9, %yc_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_9 = pto.vmi.vmul %g_y_9, %inner_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_9 = pto.vmi.vmul %gws_9, %xc_9
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_9 = pto.vmi.vsel %x_clamped_9, %zeros, %x_grad_raw_9
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_9 = pto.vmi.vsel %y_clamped_9, %zeros, %y_grad_raw_9
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_9 = pto.vmi.vcvt %x_grad_9 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_9 = pto.vmi.vcvt %y_grad_9 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_9, %ub_out[%c1088]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_9, %ub_out[%c1600]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_10 = pto.vmi.vload %ub_x[%c1152]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_10 = pto.vmi.vload %ub_x[%c1664]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_10 = pto.vmi.vload %ub_g[%c640]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_10 = pto.vmi.vcvt %x_bf16_10
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_10 = pto.vmi.vcvt %y_bf16_10
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_10 = pto.vmi.vcvt %g_bf16_10
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_10 = pto.vmi.vcmps %x_10, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_10 = pto.vmi.vabs %y_10
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_10 = pto.vmi.vcmps %abs_y_10, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_10 = pto.vmi.vmin %x_10, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_10 = pto.vmi.vmax %y_10, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_10 = pto.vmi.vmin %ylo_10, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_10 = pto.vmi.vsub %zeros, %xc_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_10 = pto.vmi.vexp %neg_x_10
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_10 = pto.vmi.vadd %ones, %exp_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_10 = pto.vmi.vdiv %ones, %den_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_10 = pto.vmi.vmul %g_10, %s_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_10 = pto.vmi.vsub %ones, %s_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_10 = pto.vmi.vmul %xc_10, %one_minus_s_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_10 = pto.vmi.vadd %ones, %x_term_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_10 = pto.vmi.vmul %gws_10, %yc_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_10 = pto.vmi.vmul %g_y_10, %inner_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_10 = pto.vmi.vmul %gws_10, %xc_10
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_10 = pto.vmi.vsel %x_clamped_10, %zeros, %x_grad_raw_10
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_10 = pto.vmi.vsel %y_clamped_10, %zeros, %y_grad_raw_10
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_10 = pto.vmi.vcvt %x_grad_10 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_10 = pto.vmi.vcvt %y_grad_10 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_10, %ub_out[%c1152]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_10, %ub_out[%c1664]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_11 = pto.vmi.vload %ub_x[%c1216]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_11 = pto.vmi.vload %ub_x[%c1728]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_11 = pto.vmi.vload %ub_g[%c704]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_11 = pto.vmi.vcvt %x_bf16_11
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_11 = pto.vmi.vcvt %y_bf16_11
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_11 = pto.vmi.vcvt %g_bf16_11
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_11 = pto.vmi.vcmps %x_11, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_11 = pto.vmi.vabs %y_11
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_11 = pto.vmi.vcmps %abs_y_11, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_11 = pto.vmi.vmin %x_11, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_11 = pto.vmi.vmax %y_11, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_11 = pto.vmi.vmin %ylo_11, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_11 = pto.vmi.vsub %zeros, %xc_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_11 = pto.vmi.vexp %neg_x_11
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_11 = pto.vmi.vadd %ones, %exp_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_11 = pto.vmi.vdiv %ones, %den_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_11 = pto.vmi.vmul %g_11, %s_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_11 = pto.vmi.vsub %ones, %s_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_11 = pto.vmi.vmul %xc_11, %one_minus_s_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_11 = pto.vmi.vadd %ones, %x_term_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_11 = pto.vmi.vmul %gws_11, %yc_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_11 = pto.vmi.vmul %g_y_11, %inner_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_11 = pto.vmi.vmul %gws_11, %xc_11
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_11 = pto.vmi.vsel %x_clamped_11, %zeros, %x_grad_raw_11
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_11 = pto.vmi.vsel %y_clamped_11, %zeros, %y_grad_raw_11
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_11 = pto.vmi.vcvt %x_grad_11 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_11 = pto.vmi.vcvt %y_grad_11 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_11, %ub_out[%c1216]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_11, %ub_out[%c1728]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_12 = pto.vmi.vload %ub_x[%c1280]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_12 = pto.vmi.vload %ub_x[%c1792]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_12 = pto.vmi.vload %ub_g[%c768]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_12 = pto.vmi.vcvt %x_bf16_12
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_12 = pto.vmi.vcvt %y_bf16_12
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_12 = pto.vmi.vcvt %g_bf16_12
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_12 = pto.vmi.vcmps %x_12, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_12 = pto.vmi.vabs %y_12
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_12 = pto.vmi.vcmps %abs_y_12, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_12 = pto.vmi.vmin %x_12, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_12 = pto.vmi.vmax %y_12, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_12 = pto.vmi.vmin %ylo_12, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_12 = pto.vmi.vsub %zeros, %xc_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_12 = pto.vmi.vexp %neg_x_12
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_12 = pto.vmi.vadd %ones, %exp_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_12 = pto.vmi.vdiv %ones, %den_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_12 = pto.vmi.vmul %g_12, %s_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_12 = pto.vmi.vsub %ones, %s_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_12 = pto.vmi.vmul %xc_12, %one_minus_s_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_12 = pto.vmi.vadd %ones, %x_term_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_12 = pto.vmi.vmul %gws_12, %yc_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_12 = pto.vmi.vmul %g_y_12, %inner_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_12 = pto.vmi.vmul %gws_12, %xc_12
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_12 = pto.vmi.vsel %x_clamped_12, %zeros, %x_grad_raw_12
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_12 = pto.vmi.vsel %y_clamped_12, %zeros, %y_grad_raw_12
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_12 = pto.vmi.vcvt %x_grad_12 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_12 = pto.vmi.vcvt %y_grad_12 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_12, %ub_out[%c1280]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_12, %ub_out[%c1792]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_13 = pto.vmi.vload %ub_x[%c1344]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_13 = pto.vmi.vload %ub_x[%c1856]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_13 = pto.vmi.vload %ub_g[%c832]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_13 = pto.vmi.vcvt %x_bf16_13
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_13 = pto.vmi.vcvt %y_bf16_13
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_13 = pto.vmi.vcvt %g_bf16_13
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_13 = pto.vmi.vcmps %x_13, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_13 = pto.vmi.vabs %y_13
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_13 = pto.vmi.vcmps %abs_y_13, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_13 = pto.vmi.vmin %x_13, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_13 = pto.vmi.vmax %y_13, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_13 = pto.vmi.vmin %ylo_13, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_13 = pto.vmi.vsub %zeros, %xc_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_13 = pto.vmi.vexp %neg_x_13
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_13 = pto.vmi.vadd %ones, %exp_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_13 = pto.vmi.vdiv %ones, %den_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_13 = pto.vmi.vmul %g_13, %s_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_13 = pto.vmi.vsub %ones, %s_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_13 = pto.vmi.vmul %xc_13, %one_minus_s_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_13 = pto.vmi.vadd %ones, %x_term_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_13 = pto.vmi.vmul %gws_13, %yc_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_13 = pto.vmi.vmul %g_y_13, %inner_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_13 = pto.vmi.vmul %gws_13, %xc_13
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_13 = pto.vmi.vsel %x_clamped_13, %zeros, %x_grad_raw_13
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_13 = pto.vmi.vsel %y_clamped_13, %zeros, %y_grad_raw_13
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_13 = pto.vmi.vcvt %x_grad_13 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_13 = pto.vmi.vcvt %y_grad_13 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_13, %ub_out[%c1344]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_13, %ub_out[%c1856]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_14 = pto.vmi.vload %ub_x[%c1408]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_14 = pto.vmi.vload %ub_x[%c1920]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_14 = pto.vmi.vload %ub_g[%c896]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_14 = pto.vmi.vcvt %x_bf16_14
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_14 = pto.vmi.vcvt %y_bf16_14
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_14 = pto.vmi.vcvt %g_bf16_14
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_14 = pto.vmi.vcmps %x_14, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_14 = pto.vmi.vabs %y_14
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_14 = pto.vmi.vcmps %abs_y_14, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_14 = pto.vmi.vmin %x_14, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_14 = pto.vmi.vmax %y_14, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_14 = pto.vmi.vmin %ylo_14, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_14 = pto.vmi.vsub %zeros, %xc_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_14 = pto.vmi.vexp %neg_x_14
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_14 = pto.vmi.vadd %ones, %exp_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_14 = pto.vmi.vdiv %ones, %den_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_14 = pto.vmi.vmul %g_14, %s_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_14 = pto.vmi.vsub %ones, %s_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_14 = pto.vmi.vmul %xc_14, %one_minus_s_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_14 = pto.vmi.vadd %ones, %x_term_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_14 = pto.vmi.vmul %gws_14, %yc_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_14 = pto.vmi.vmul %g_y_14, %inner_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_14 = pto.vmi.vmul %gws_14, %xc_14
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_14 = pto.vmi.vsel %x_clamped_14, %zeros, %x_grad_raw_14
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_14 = pto.vmi.vsel %y_clamped_14, %zeros, %y_grad_raw_14
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_14 = pto.vmi.vcvt %x_grad_14 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_14 = pto.vmi.vcvt %y_grad_14 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_14, %ub_out[%c1408]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_14, %ub_out[%c1920]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      %x_bf16_15 = pto.vmi.vload %ub_x[%c1472]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %y_bf16_15 = pto.vmi.vload %ub_x[%c1984]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %g_bf16_15 = pto.vmi.vload %ub_g[%c960]
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+      %x_15 = pto.vmi.vcvt %x_bf16_15
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %y_15 = pto.vmi.vcvt %y_bf16_15
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %g_15 = pto.vmi.vcvt %g_bf16_15
+          : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+      %x_clamped_15 = pto.vmi.vcmps %x_15, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %abs_y_15 = pto.vmi.vabs %y_15
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_clamped_15 = pto.vmi.vcmps %abs_y_15, %c3_f32, %mask {cmp = "gt"}
+          : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred> -> !pto.vmi.mask<64xpred>
+      %xc_15 = pto.vmi.vmin %x_15, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %ylo_15 = pto.vmi.vmax %y_15, %neg_clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %yc_15 = pto.vmi.vmin %ylo_15, %clamp
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %neg_x_15 = pto.vmi.vsub %zeros, %xc_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %exp_15 = pto.vmi.vexp %neg_x_15
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %den_15 = pto.vmi.vadd %ones, %exp_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %s_15 = pto.vmi.vdiv %ones, %den_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %gws_15 = pto.vmi.vmul %g_15, %s_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %one_minus_s_15 = pto.vmi.vsub %ones, %s_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_term_15 = pto.vmi.vmul %xc_15, %one_minus_s_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %inner_15 = pto.vmi.vadd %ones, %x_term_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %g_y_15 = pto.vmi.vmul %gws_15, %yc_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_raw_15 = pto.vmi.vmul %g_y_15, %inner_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %y_grad_raw_15 = pto.vmi.vmul %gws_15, %xc_15
+          : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+      %x_grad_15 = pto.vmi.vsel %x_clamped_15, %zeros, %x_grad_raw_15
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %y_grad_15 = pto.vmi.vsel %y_clamped_15, %zeros, %y_grad_raw_15
+          : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+          -> !pto.vmi.vreg<64xf32>
+      %x_grad_bf16_15 = pto.vmi.vcvt %x_grad_15 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      %y_grad_bf16_15 = pto.vmi.vcvt %y_grad_15 {saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %x_grad_bf16_15, %ub_out[%c1472]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+      pto.vmi.vstore %y_grad_bf16_15, %ub_out[%c1984]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.mte_ub_gm %ub_out, %out_gm, %c4096_i64
+      nburst(%c1_i64, %c4096_i64, %c4096_i64)
+      : !pto.ptr<bf16, ub>, !pto.ptr<bf16, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}
