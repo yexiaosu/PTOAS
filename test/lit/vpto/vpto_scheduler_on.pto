@@ -35,7 +35,7 @@
 // ORDER-COUNT-6: pto.vcmp
 // ORDER-NEXT: pto.vsel
 
-// TRACE: vpto-scheduler: function=aabbcc mode=on target=a5 model=generic-a5-v1
+// TRACE: vpto-scheduler: function=aabbcc mode=on target=a5 model=generic-a5-v2
 // TRACE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
 // TRACE: vpto-scheduler: pressure node=0
 // TRACE: vpto-scheduler: schedule-result block=0 region=0 nodes=6 work-units=207
@@ -52,7 +52,7 @@
 // TRACE: vpto-scheduler: schedule-result block=0 region=0 nodes=18 work-units={{[0-9]+}} pressure-idles=1 peak={vector:2,predicate:7}
 // TRACE: vpto-scheduler: result-position=6 node=9 original-index=9 cycle=10 direction=top reason={{[^ ]+}} op=pto.vsel pressure-idle=true
 
-// ANALYZE: vpto-scheduler: function=aabbcc mode=analyze target=a5 model=generic-a5-v1
+// ANALYZE: vpto-scheduler: function=aabbcc mode=analyze target=a5 model=generic-a5-v2
 // ANALYZE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
 // ANALYZE: vpto-scheduler: pressure node=0
 // ANALYZE-NOT: schedule-result

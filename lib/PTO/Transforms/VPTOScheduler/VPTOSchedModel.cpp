@@ -38,8 +38,10 @@ enum SchedClassID : unsigned {
   StructuralClass,
   ScalarClass,
   VectorPredicateClass,
+  CubeClass,
   MTEClass,
   ControlClass,
+  GenericClass,
   UnknownClass,
 };
 
@@ -51,7 +53,7 @@ static std::optional<SchedClassID> getSchedClassForPipe(PIPE pipe) {
   case PIPE::PIPE_V2:
     return VectorPredicateClass;
   case PIPE::PIPE_M:
-    return UnknownClass;
+    return CubeClass;
   case PIPE::PIPE_MTE1:
   case PIPE::PIPE_MTE2:
   case PIPE::PIPE_MTE3:
@@ -70,21 +72,6 @@ static std::optional<SchedClassID> getSchedClassForPipe(PIPE pipe) {
   return std::nullopt;
 }
 
-static bool hasExplicitVectorPredicateModel(Operation *op) {
-  static constexpr StringLiteral modeledOperations[] = {
-      "pto.pset_b8", "pto.pset_b16", "pto.pset_b32", "pto.pge_b8",
-      "pto.pge_b16", "pto.pge_b32",  "pto.vcmp",     "pto.vcmps",
-      "pto.pand",    "pto.por",      "pto.pxor",     "pto.pnot",
-      "pto.vsel",    "pto.vscatter", "pto.vmax",     "pto.vmin",
-      "pto.vcmax",   "pto.vcmin",    "pto.vadd",     "pto.vabs",
-      "pto.vdup",    "pto.vci",      "pto.vlds",     "pto.vsts",
-  };
-  if (!op) {
-    return false;
-  }
-  return llvm::is_contained(modeledOperations, op->getName().getStringRef());
-}
-
 static bool
 hasControlSchedulingEffect(const VPTOSchedulingSemantics &semantics) {
   return llvm::any_of(
@@ -98,7 +85,7 @@ hasControlSchedulingEffect(const VPTOSchedulingSemantics &semantics) {
 
 VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
   machine.target = "a5";
-  machine.version = "generic-a5-v1";
+  machine.version = "generic-a5-v2";
   machine.issueWidth = 1;
   machine.microOpBufferSize = 0;
 
@@ -124,8 +111,10 @@ VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
        10,
        {{VectorResource, 0, 1, 1}},
        {}},
+      {CubeClass, "cube-zero", true, 0, 0, {}, {}},
       {MTEClass, "mte-zero", true, 0, 0, {}, {}},
       {ControlClass, "control-zero", true, 0, 0, {}, {}},
+      {GenericClass, "generic-zero", true, 0, 0, {}, {}},
       {UnknownClass, "unknown", false, 0, 0, {}, {}},
   };
 }
@@ -136,35 +125,32 @@ VPTOGenericA5SchedModel::getSchedClass(Operation *op) const {
   if (!op || semantics.schedulingClass == VPTOSchedulingClass::Structural) {
     return schedClasses[StructuralClass];
   }
-  if (hasExplicitVectorPredicateModel(op)) {
-    return schedClasses[VectorPredicateClass];
-  }
   if (hasControlSchedulingEffect(semantics)) {
     return schedClasses[ControlClass];
   }
   if (auto pipeOp = dyn_cast<OpPipeInterface>(op)) {
     if (std::optional<SchedClassID> schedClass =
             getSchedClassForPipe(pipeOp.getPipe())) {
-      if (*schedClass == VectorPredicateClass) {
-        return schedClasses[UnknownClass];
-      }
       return schedClasses[*schedClass];
     }
   }
   if (isa<VectorMicroOpInterface>(op)) {
-    return schedClasses[UnknownClass];
+    return schedClasses[VectorPredicateClass];
   }
   if (isa<MteOpInterface>(op)) {
     return schedClasses[MTEClass];
   }
   if (isa<CubeMicroOpInterface>(op)) {
-    return schedClasses[UnknownClass];
+    return schedClasses[CubeClass];
   }
   if (isa<SimtOpInterface>(op)) {
     return schedClasses[ScalarClass];
   }
   if (!semantics.effects.empty()) {
     return schedClasses[ControlClass];
+  }
+  if (semantics.schedulingClass == VPTOSchedulingClass::Schedulable) {
+    return schedClasses[GenericClass];
   }
   return schedClasses[UnknownClass];
 }
