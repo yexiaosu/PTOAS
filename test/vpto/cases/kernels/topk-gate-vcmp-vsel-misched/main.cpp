@@ -9,9 +9,12 @@
 #include "acl/acl.h"
 #include "test_common.h"
 
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
+#include <system_error>
 
 using namespace PtoTestCommon;
 
@@ -38,8 +41,7 @@ constexpr size_t kWinnerTransferBytes = 32;
       if (recent != nullptr && recent[0] != '\0') {                            \
         std::fprintf(stderr, "[ERROR] RecentErrMsg: %s\n", recent);           \
       }                                                                        \
-      rc = 1;                                                                  \
-      goto cleanup;                                                            \
+      return false;                                                            \
     }                                                                          \
   } while (0)
 
@@ -48,8 +50,7 @@ constexpr size_t kWinnerTransferBytes = 32;
     if (!(expr)) {                                                             \
       std::fprintf(stderr, "[ERROR] file operation failed: %s (%s:%d)\n",    \
                    path, __FILE__, __LINE__);                                  \
-      rc = 1;                                                                  \
-      goto cleanup;                                                            \
+      return false;                                                            \
     }                                                                          \
   } while (0)
 
@@ -62,6 +63,14 @@ int main() {
   int32_t *indicesDevice = nullptr;
   int32_t *winnersDevice = nullptr;
   float *maskedScoresDevice = nullptr;
+  void *scoresHostAllocation = nullptr;
+  void *indicesHostAllocation = nullptr;
+  void *winnersHostAllocation = nullptr;
+  void *maskedScoresHostAllocation = nullptr;
+  void *scoresDeviceAllocation = nullptr;
+  void *indicesDeviceAllocation = nullptr;
+  void *winnersDeviceAllocation = nullptr;
+  void *maskedScoresDeviceAllocation = nullptr;
   aclrtStream stream = nullptr;
   int rc = 0;
   bool aclInited = false;
@@ -69,83 +78,98 @@ int main() {
   int deviceId = 0;
   size_t fileSize = 0;
 
-  ACL_CHECK(aclInit(nullptr));
-  aclInited = true;
-  if (const char *envDevice = std::getenv("ACL_DEVICE_ID")) {
-    deviceId = std::atoi(envDevice);
-  }
-  ACL_CHECK(aclrtSetDevice(deviceId));
-  deviceSet = true;
-  ACL_CHECK(aclrtCreateStream(&stream));
+  const auto execute = [&]() -> bool {
+    ACL_CHECK(aclInit(nullptr));
+    aclInited = true;
+    if (const char *envDevice = std::getenv("ACL_DEVICE_ID")) {
+      const std::string_view deviceText(envDevice);
+      const auto parseResult = std::from_chars(
+          deviceText.data(), deviceText.data() + deviceText.size(), deviceId);
+      if (parseResult.ec != std::errc{} ||
+          parseResult.ptr != deviceText.data() + deviceText.size() ||
+          deviceId < 0) {
+        std::fprintf(stderr, "[ERROR] invalid ACL_DEVICE_ID: %s\n", envDevice);
+        return false;
+      }
+    }
+    ACL_CHECK(aclrtSetDevice(deviceId));
+    deviceSet = true;
+    ACL_CHECK(aclrtCreateStream(&stream));
 
-  ACL_CHECK(aclrtMallocHost(reinterpret_cast<void **>(&scoresHost),
-                           kScoresBytes));
-  ACL_CHECK(aclrtMallocHost(reinterpret_cast<void **>(&indicesHost),
-                           kIndicesBytes));
-  ACL_CHECK(aclrtMallocHost(reinterpret_cast<void **>(&winnersHost),
-                           kWinnerTransferBytes));
-  ACL_CHECK(aclrtMallocHost(reinterpret_cast<void **>(&maskedScoresHost),
-                           kScoresBytes));
+    ACL_CHECK(aclrtMallocHost(&scoresHostAllocation, kScoresBytes));
+    ACL_CHECK(aclrtMallocHost(&indicesHostAllocation, kIndicesBytes));
+    ACL_CHECK(aclrtMallocHost(&winnersHostAllocation, kWinnerTransferBytes));
+    ACL_CHECK(aclrtMallocHost(&maskedScoresHostAllocation, kScoresBytes));
+    ACL_CHECK(aclrtMalloc(&scoresDeviceAllocation, kScoresBytes,
+                          ACL_MEM_MALLOC_HUGE_FIRST));
+    ACL_CHECK(aclrtMalloc(&indicesDeviceAllocation, kIndicesBytes,
+                          ACL_MEM_MALLOC_HUGE_FIRST));
+    ACL_CHECK(aclrtMalloc(&winnersDeviceAllocation, kWinnerTransferBytes,
+                          ACL_MEM_MALLOC_HUGE_FIRST));
+    ACL_CHECK(aclrtMalloc(&maskedScoresDeviceAllocation, kScoresBytes,
+                          ACL_MEM_MALLOC_HUGE_FIRST));
 
-  ACL_CHECK(aclrtMalloc(reinterpret_cast<void **>(&scoresDevice), kScoresBytes,
-                        ACL_MEM_MALLOC_HUGE_FIRST));
-  ACL_CHECK(aclrtMalloc(reinterpret_cast<void **>(&indicesDevice),
-                        kIndicesBytes, ACL_MEM_MALLOC_HUGE_FIRST));
-  ACL_CHECK(aclrtMalloc(reinterpret_cast<void **>(&winnersDevice),
-                        kWinnerTransferBytes, ACL_MEM_MALLOC_HUGE_FIRST));
-  ACL_CHECK(aclrtMalloc(reinterpret_cast<void **>(&maskedScoresDevice),
-                        kScoresBytes, ACL_MEM_MALLOC_HUGE_FIRST));
+    scoresHost = static_cast<float *>(scoresHostAllocation);
+    indicesHost = static_cast<int32_t *>(indicesHostAllocation);
+    winnersHost = static_cast<int32_t *>(winnersHostAllocation);
+    maskedScoresHost = static_cast<float *>(maskedScoresHostAllocation);
+    scoresDevice = static_cast<float *>(scoresDeviceAllocation);
+    indicesDevice = static_cast<int32_t *>(indicesDeviceAllocation);
+    winnersDevice = static_cast<int32_t *>(winnersDeviceAllocation);
+    maskedScoresDevice = static_cast<float *>(maskedScoresDeviceAllocation);
 
-  fileSize = kScoresBytes;
-  FILE_CHECK(ReadFile("./scores.bin", fileSize, scoresHost, kScoresBytes) &&
-                 fileSize == kScoresBytes,
-             "./scores.bin");
-  fileSize = kIndicesBytes;
-  FILE_CHECK(ReadFile("./indices.bin", fileSize, indicesHost, kIndicesBytes) &&
-                 fileSize == kIndicesBytes,
-             "./indices.bin");
-  fileSize = kWinnerBytes;
-  FILE_CHECK(ReadFile("./winner_indices.bin", fileSize, winnersHost,
-                      kWinnerTransferBytes) &&
-                 fileSize == kWinnerBytes,
-             "./winner_indices.bin");
-  fileSize = kScoresBytes;
-  FILE_CHECK(ReadFile("./masked_scores.bin", fileSize, maskedScoresHost,
-                      kScoresBytes) &&
-                 fileSize == kScoresBytes,
-             "./masked_scores.bin");
+    fileSize = kScoresBytes;
+    FILE_CHECK(ReadFile("./scores.bin", fileSize, scoresHost, kScoresBytes) &&
+                   fileSize == kScoresBytes,
+               "./scores.bin");
+    fileSize = kIndicesBytes;
+    FILE_CHECK(ReadFile("./indices.bin", fileSize, indicesHost, kIndicesBytes) &&
+                   fileSize == kIndicesBytes,
+               "./indices.bin");
+    fileSize = kWinnerBytes;
+    FILE_CHECK(ReadFile("./winner_indices.bin", fileSize, winnersHost,
+                        kWinnerTransferBytes) &&
+                   fileSize == kWinnerBytes,
+               "./winner_indices.bin");
+    fileSize = kScoresBytes;
+    FILE_CHECK(ReadFile("./masked_scores.bin", fileSize, maskedScoresHost,
+                        kScoresBytes) &&
+                   fileSize == kScoresBytes,
+               "./masked_scores.bin");
 
-  ACL_CHECK(aclrtMemcpy(scoresDevice, kScoresBytes, scoresHost, kScoresBytes,
-                        ACL_MEMCPY_HOST_TO_DEVICE));
-  ACL_CHECK(aclrtMemcpy(indicesDevice, kIndicesBytes, indicesHost,
-                        kIndicesBytes, ACL_MEMCPY_HOST_TO_DEVICE));
-  ACL_CHECK(aclrtMemcpy(winnersDevice, kWinnerTransferBytes, winnersHost,
-                        kWinnerBytes, ACL_MEMCPY_HOST_TO_DEVICE));
-  ACL_CHECK(aclrtMemcpy(maskedScoresDevice, kScoresBytes, maskedScoresHost,
-                        kScoresBytes, ACL_MEMCPY_HOST_TO_DEVICE));
+    ACL_CHECK(aclrtMemcpy(scoresDevice, kScoresBytes, scoresHost, kScoresBytes,
+                          ACL_MEMCPY_HOST_TO_DEVICE));
+    ACL_CHECK(aclrtMemcpy(indicesDevice, kIndicesBytes, indicesHost,
+                          kIndicesBytes, ACL_MEMCPY_HOST_TO_DEVICE));
+    ACL_CHECK(aclrtMemcpy(winnersDevice, kWinnerTransferBytes, winnersHost,
+                          kWinnerBytes, ACL_MEMCPY_HOST_TO_DEVICE));
+    ACL_CHECK(aclrtMemcpy(maskedScoresDevice, kScoresBytes, maskedScoresHost,
+                          kScoresBytes, ACL_MEMCPY_HOST_TO_DEVICE));
 
-  LaunchTopkGateVcmpVselMisched(scoresDevice, indicesDevice, winnersDevice,
-                                maskedScoresDevice, stream);
-  ACL_CHECK(aclrtSynchronizeStream(stream));
-  ACL_CHECK(aclrtMemcpy(winnersHost, kWinnerBytes, winnersDevice, kWinnerBytes,
-                        ACL_MEMCPY_DEVICE_TO_HOST));
-  ACL_CHECK(aclrtMemcpy(maskedScoresHost, kScoresBytes, maskedScoresDevice,
-                        kScoresBytes, ACL_MEMCPY_DEVICE_TO_HOST));
+    LaunchTopkGateVcmpVselMisched(scoresDevice, indicesDevice, winnersDevice,
+                                  maskedScoresDevice, stream);
+    ACL_CHECK(aclrtSynchronizeStream(stream));
+    ACL_CHECK(aclrtMemcpy(winnersHost, kWinnerBytes, winnersDevice, kWinnerBytes,
+                          ACL_MEMCPY_DEVICE_TO_HOST));
+    ACL_CHECK(aclrtMemcpy(maskedScoresHost, kScoresBytes, maskedScoresDevice,
+                          kScoresBytes, ACL_MEMCPY_DEVICE_TO_HOST));
 
-  FILE_CHECK(WriteFile("./winner_indices.bin", winnersHost, kWinnerBytes),
-             "./winner_indices.bin");
-  FILE_CHECK(WriteFile("./masked_scores.bin", maskedScoresHost, kScoresBytes),
-             "./masked_scores.bin");
+    FILE_CHECK(WriteFile("./winner_indices.bin", winnersHost, kWinnerBytes),
+               "./winner_indices.bin");
+    FILE_CHECK(WriteFile("./masked_scores.bin", maskedScoresHost, kScoresBytes),
+               "./masked_scores.bin");
+    return true;
+  };
 
-cleanup:
-  aclrtFree(scoresDevice);
-  aclrtFree(indicesDevice);
-  aclrtFree(winnersDevice);
-  aclrtFree(maskedScoresDevice);
-  aclrtFreeHost(scoresHost);
-  aclrtFreeHost(indicesHost);
-  aclrtFreeHost(winnersHost);
-  aclrtFreeHost(maskedScoresHost);
+  rc = execute() ? 0 : 1;
+  aclrtFree(scoresDeviceAllocation);
+  aclrtFree(indicesDeviceAllocation);
+  aclrtFree(winnersDeviceAllocation);
+  aclrtFree(maskedScoresDeviceAllocation);
+  aclrtFreeHost(scoresHostAllocation);
+  aclrtFreeHost(indicesHostAllocation);
+  aclrtFreeHost(winnersHostAllocation);
+  aclrtFreeHost(maskedScoresHostAllocation);
   if (stream != nullptr) {
     const aclError ret = aclrtDestroyStream(stream);
     if (ret != ACL_SUCCESS) {

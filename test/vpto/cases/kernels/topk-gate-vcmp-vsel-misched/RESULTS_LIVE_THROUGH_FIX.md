@@ -47,6 +47,14 @@ initialization and shutdown, generated host/golden artifacts, kernel
 instruction activity, and strict comparison. No SIM run was performed from
 the later integration branch that stores this report.
 
+After evidence collection, the integration branch received a compliance-only
+cleanup of `main.cpp`: ACL allocations use intermediate `void *` handles, the
+device ID is range-checked, and error handling uses structured control flow.
+It does not change `kernel.pto`, `launch.cpp`, the generated data, comparison,
+buffer sizes, or scheduler flags. The measurements below remain explicitly
+tied to the blob-identical `cfdec0342` collection fixture; no post-cleanup SIM
+run is claimed.
+
 ## Pre-fix reference
 
 The authoritative pre-fix root is:

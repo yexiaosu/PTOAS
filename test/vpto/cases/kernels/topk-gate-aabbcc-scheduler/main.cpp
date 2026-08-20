@@ -42,6 +42,10 @@ int main()
     int32_t *outputHost = nullptr;
     float *scoresDevice = nullptr;
     int32_t *outputDevice = nullptr;
+    void *scoresHostAllocation = nullptr;
+    void *outputHostAllocation = nullptr;
+    void *scoresDeviceAllocation = nullptr;
+    void *outputDeviceAllocation = nullptr;
     size_t scoresFileSize = kScoresBytes;
     size_t outputFileSize = kOutputBytes;
 
@@ -57,21 +61,23 @@ int main()
 
         const bool resourcesReady =
             CheckAcl(aclrtCreateStream(&stream), "aclrtCreateStream") &&
-            CheckAcl(aclrtMallocHost(reinterpret_cast<void **>(&scoresHost),
-                                     kScoresBytes),
+            CheckAcl(aclrtMallocHost(&scoresHostAllocation, kScoresBytes),
                      "aclrtMallocHost(scores)") &&
-            CheckAcl(aclrtMallocHost(reinterpret_cast<void **>(&outputHost),
-                                     kOutputBytes),
+            CheckAcl(aclrtMallocHost(&outputHostAllocation, kOutputBytes),
                      "aclrtMallocHost(output)") &&
-            CheckAcl(aclrtMalloc(reinterpret_cast<void **>(&scoresDevice),
-                                 kScoresBytes, ACL_MEM_MALLOC_HUGE_FIRST),
+            CheckAcl(aclrtMalloc(&scoresDeviceAllocation, kScoresBytes,
+                                 ACL_MEM_MALLOC_HUGE_FIRST),
                      "aclrtMalloc(scores)") &&
-            CheckAcl(aclrtMalloc(reinterpret_cast<void **>(&outputDevice),
-                                 kOutputBytes, ACL_MEM_MALLOC_HUGE_FIRST),
+            CheckAcl(aclrtMalloc(&outputDeviceAllocation, kOutputBytes,
+                                 ACL_MEM_MALLOC_HUGE_FIRST),
                      "aclrtMalloc(output)");
         if (!resourcesReady) {
             break;
         }
+        scoresHost = static_cast<float *>(scoresHostAllocation);
+        outputHost = static_cast<int32_t *>(outputHostAllocation);
+        scoresDevice = static_cast<float *>(scoresDeviceAllocation);
+        outputDevice = static_cast<int32_t *>(outputDeviceAllocation);
 
         const bool inputsReady =
             ReadFile("./scores.bin", scoresFileSize, scoresHost, kScoresBytes) &&
@@ -109,20 +115,20 @@ int main()
         result = 0;
     } while (false);
 
-    if (outputDevice != nullptr &&
-        !CheckAcl(aclrtFree(outputDevice), "aclrtFree(output)")) {
+    if (outputDeviceAllocation != nullptr &&
+        !CheckAcl(aclrtFree(outputDeviceAllocation), "aclrtFree(output)")) {
         result = 1;
     }
-    if (scoresDevice != nullptr &&
-        !CheckAcl(aclrtFree(scoresDevice), "aclrtFree(scores)")) {
+    if (scoresDeviceAllocation != nullptr &&
+        !CheckAcl(aclrtFree(scoresDeviceAllocation), "aclrtFree(scores)")) {
         result = 1;
     }
-    if (outputHost != nullptr &&
-        !CheckAcl(aclrtFreeHost(outputHost), "aclrtFreeHost(output)")) {
+    if (outputHostAllocation != nullptr &&
+        !CheckAcl(aclrtFreeHost(outputHostAllocation), "aclrtFreeHost(output)")) {
         result = 1;
     }
-    if (scoresHost != nullptr &&
-        !CheckAcl(aclrtFreeHost(scoresHost), "aclrtFreeHost(scores)")) {
+    if (scoresHostAllocation != nullptr &&
+        !CheckAcl(aclrtFreeHost(scoresHostAllocation), "aclrtFreeHost(scores)")) {
         result = 1;
     }
     if (stream != nullptr &&
