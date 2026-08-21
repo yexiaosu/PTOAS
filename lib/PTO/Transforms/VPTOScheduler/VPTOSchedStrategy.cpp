@@ -286,14 +286,14 @@ static bool isBetterCandidate(const RankedCandidate &lhs,
     return lhs.projectedExcessCost < rhs.projectedExcessCost;
   }
   if (hasPressureClosure) {
+    if (lhs.advancesPressureClosure != rhs.advancesPressureClosure) {
+      return lhs.advancesPressureClosure;
+    }
     if (lhs.closureProjected != rhs.closureProjected) {
       return lhs.closureProjected < rhs.closureProjected;
     }
     if (lhs.closureReleaseCredit != rhs.closureReleaseCredit) {
       return lhs.closureReleaseCredit > rhs.closureReleaseCredit;
-    }
-    if (lhs.advancesPressureClosure != rhs.advancesPressureClosure) {
-      return lhs.advancesPressureClosure;
     }
   }
   if (hasHighPressure) {
@@ -351,15 +351,15 @@ static StringRef getDecisionReason(const RankedCandidate &selected,
     return "lower-projected-excess";
   }
   if (hasPressureClosure) {
+    if (selected.advancesPressureClosure !=
+        runnerUp.advancesPressureClosure) {
+      return "advance-pressure-closure";
+    }
     if (selected.closureProjected != runnerUp.closureProjected) {
       return "closure-pressure-preserving";
     }
     if (selected.closureReleaseCredit != runnerUp.closureReleaseCredit) {
       return "closure-live-range-closing";
-    }
-    if (selected.advancesPressureClosure !=
-        runnerUp.advancesPressureClosure) {
-      return "advance-pressure-closure";
     }
   }
   if (hasHighPressure) {
