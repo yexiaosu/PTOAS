@@ -21,13 +21,21 @@ CA model 前因 vector stack 超过 6144 bytes 而编译失败。因此，这两
 natural case 均能在 Scheduler OFF/ON 下完成 CA-model SIM 和 strict compare。
 ticks 仅作观测，不作为 schedule acceptance gate。
 
+后续新增的 SwiGLU predicate-stress case 给出了独立的正向结果：原始顺序的
+Vector/Predicate peak 为 14/11，Scheduler ON 后为 28/7。OFF 的最终指令包含
+19/19 次真实 predicate spill/reload 和 38 次 `SMEM_BAR`，ON 全部归零；两种
+模式各三次 CA-model SIM 均 strict compare 通过，median ticks 从 3337 降至
+2845（-14.7438%）。该 case 没有 `Sn[95]` vector spill，因此可以隔离验证
+predicate pressure 调度。
+
 ## Revision 与执行环境
 
 | 项目 | 值 |
 | --- | --- |
 | TileKernels-vmi 来源 | `learning-chip/TileKernels-vmi@ab0b018b60f7c9057909acd1c75f2adf5f40aeb5` |
 | PTOAS 集成 base | `d9d460bcf357110c476617f11fb821b266b04cef` |
-| 实际验证 revision | `8be6592e6669736c85a7af60ce0b1f30159b137b` |
+| 原始矩阵实际验证 revision | `8be6592e6669736c85a7af60ce0b1f30159b137b` |
+| Predicate-stress 实际验证 revision | `81f6f94005fee276bd3d5e6b2dd273844c554bdf` |
 | 分支 | `codex/tilekernels-vmi-scheduler-pressure-v3` |
 | 服务器 | `wanglan@115.175.35.144`，host `ecs-1030-cba0` |
 | CANN / CA model | `/usr/local/CANN/cann-9.1.0`，A5 `dav_3510` SIM |
@@ -60,12 +68,17 @@ start/stop、host executable 执行和真实 kernel instruction activity。
 | --- | --- | --- | --- |
 | `quant/per_block_cast_vmi.py` | 复用 `block-quant-bf16-fp8-4x128` smoke | BF16 -> E4M3，4x128 | 现有 case 已覆盖等价 cast/scale 语义，未复制新 fixture |
 | `quant/per_token_cast_and_cast_back_vmi.py` | `tilekernels-per-token-roundtrip-bf16-e4m3-16x256-{natural,stress}` | BF16 -> E4M3 -> BF16 | natural 逐 tile 完成 quant/scale/cast-back；stress 仅把独立 tile producer 集中、延迟真实 cast-back consumer/store |
-| `quant/swiglu_backward_vmi.py` | `tilekernels-swiglu-backward-bf16-2x512-{natural,stress}` | BF16，N=2，hidden=512，`with_weights=false` | natural 逐 chunk 完成梯度链；stress 集中独立 chunk 的 activation/gradient producer，再执行参与最终输出的 consumer/store |
+| `quant/swiglu_backward_vmi.py` | `tilekernels-swiglu-backward-bf16-2x512-{natural,stress,predicate-stress}` | BF16，N=2，hidden=512，`with_weights=false` | natural 逐 chunk 完成梯度链；stress 延迟 gradient convert/store；predicate-stress 每四个 chunk 集中产生八个真实 clamp mask 和 raw gradient，再执行参与最终输出的 `vsel`/convert/store |
 | `mhc/post_vmi.py::mhc_post_bwd_vmi` | `tilekernels-mhc-post-backward-bf16-n1-mhc4-h256-natural` | BF16，N=1，mhc=4，hidden=256 | 保留 reduction 与 load/store 依赖下的自然数据流；本 revision 未增加合成 stress 依赖 |
 
 8x256 是 per-token 的初始筛选规模；最终 runtime 压力矩阵使用最小幅度扩大后的
-16x256。natural/stress 使用相同输入、golden 与有效计算，所有中间结果均参与最终
-store；没有 dummy value、volatile、伪依赖、额外 barrier 或依赖 DCE 的构造。
+16x256。每个 fixture 的 OFF/ON 使用相同输入、golden 与有效计算，所有中间
+结果均参与最终 store；没有 dummy value、volatile、伪依赖、额外 barrier 或
+依赖 DCE 的构造。
+
+Predicate-stress 的 golden 还将 205 个 lanes 设为 `x=4,y=±4`。两个 clamp mask
+在这些 lanes 都应选择精确零；任一 predicate spill/reload 恢复错误都会暴露
+非零 raw gradient，因而 strict compare 不会因输入恰好为零而漏检。
 
 没有选择 `topk_gate_vmi.py`（与 #508/#574 场景重复）、
 `swiglu_forward_vmi.py` 和 `cast_back_vmi.py`（数据流线性）、
@@ -83,6 +96,7 @@ unknown class 为 0。
 | per-token stress 16x256 | 1 | 891 / 2399 | 39 / 2 | 891 / 0 | 44 / 4 | 97 / 4 |
 | SwiGLU natural | 1 | 471 / 3140 | 39 / 3 | 471 / 0 | 8 / 5 | 9 / 5 |
 | SwiGLU stress | 1 | 471 / 3140 | 39 / 3 | 471 / 0 | 38 / 4 | 68 / 19 |
+| SwiGLU predicate-stress | 1 | 471 / 3140 | 39 / 3 | 471 / 0 | 14 / 11 | 28 / 7 |
 | MHC natural | 1 | 597 / 41023 | 43 / 9 | 597 / 0 | 29 / 3 | 29 / 4 |
 
 per-token stress 的 ON trace 记录 468 个 pressure idle；SwiGLU stress 记录 269
@@ -119,6 +133,21 @@ opcode 使用每组 run1 的代表性 instruction log 统计。
 32，但最终指令仍有 45/45 stack store/load；ON 没有减少该数量，median ticks
 由 4742 增至 4800。本任务只记录这个观测，不据此修改 pressure model 或 scheduler。
 
+### Predicate-stress 扩展矩阵
+
+Predicate spill/reload 同样只统计 stack base `Sn[95]=0x40000`。最终固定矩阵显式
+设置 `PTO_ISA_PATH=/home/wanglan/pto-isa`，每项均确认 CA model start/stop、
+instruction activity 和 strict compare。
+
+| Scheduler | Compile | Original -> scheduled V/P | Stack PSTI/PLDI | Stack VSTI/VLDI | SMEM_BAR | ticks（3 次；median） | Strict compare |
+| --- | --- | --- | ---: | ---: | ---: | --- | --- |
+| OFF | pass | 14/11 -> - | 19/19 | 0/0 | 38 | 3338, 3337, 3335; **3337** | 3/3 pass |
+| ON | pass | 14/11 -> 28/7 | 0/0 | 0/0 | 0 | 2843, 2848, 2845; **2845** | 3/3 pass |
+
+ON trace 记录 32 个 pressure idle，并把 predicate peak 压到硬件限制 7。median
+减少 492 ticks（14.7438%）；更关键的 acceptance evidence 是 19/19
+`PSTI/PLDI` 和 38 个 barrier 被完全消除，同时 vector stack spill 始终为零。
+
 ## 仓库回归验证
 
 | 检查 | 结果 |
@@ -127,6 +156,7 @@ opcode 使用每组 run1 的代表性 instruction log 统计。
 | focused scheduler lit | vector pressure、tracker、live-through 共 3/3 pass |
 | 完整 `check-pto` | 1810 discovered，1809 pass，1 unsupported，0 fail |
 | changed-code compliance | base `d9d460bcf357110c476617f11fb821b266b04cef`；20 files，0 error，0 warning |
+| Predicate fixture changed-code compliance | base `82b7a4c37f0df25938371a32e379ad4ced51a420`；4 files，0 error，0 warning |
 | `git diff --check` | pass |
 
 ## Smoke
@@ -139,6 +169,9 @@ kernel instruction activity 和 strict compare：
 | `micro-op/binary-vector/vadd` | 12966 | pass；`RV_VADD` |
 | `micro-op/vector-load-store/vlds-post-update` | 2421 | pass |
 | `vmi_new/kernels/block-quant-bf16-fp8-4x128` | 2519 | pass |
+
+Predicate-stress revision 在固定矩阵前另行复跑 `micro-op/binary-vector/vadd`，
+得到 12973 ticks，并确认真实 CA activity 与 strict compare。
 
 ## Raw evidence
 
@@ -153,10 +186,23 @@ Artifact 根目录：
 - SHA-256 manifest：`SHA256SUMS`
 - Manifest 自身 SHA-256：`075ae65bf2aff82d358466e913a763eadefce182e664c2a43645df7632c84cfd`
 
+Predicate-stress 扩展 artifact：
+
+`/home/wanglan/PTOAS/.worktrees/ca-sim-results/tilekernels-vmi-scheduler-pressure-v3-sim/predicate-stress-81f6f9400`
+
+- 最终固定矩阵：`runtime-matrix-fixed/predicate-stress/<off|on>/run{1,2,3}/`
+- Compiler/scheduler trace：`scheduler-analysis/*.trace`
+- Smoke：`smoke-vadd/`
+- Native provenance 与结果摘要：`provenance.txt`、`summary.txt`
+- SHA-256 manifest：`SHA256SUMS`
+- Manifest 自身 SHA-256：`3831d1f8e11d36661454ff2218f0d622f65bd509046d72c3d5cc648cdfd965c8`
+
 ## 已知限制与后续候选
 
 - 当前两个 stress case 都证明 OFF 有真实 spill，但没有证明 scheduler ON 能降压；
   它们应保留为负向诊断输入，而不是正向性能回归基准。
+- SwiGLU predicate-stress 是独立的正向 predicate-pressure 基准；它不替代上述
+  vector stress 的负向结论。
 - MHC 仅有 natural fixture；没有为追求压力数字而增加伪依赖或额外 barrier。
 - 本轮未增加 `round_sf=true`、SwiGLU `with_weights=true` 或 MHC hidden=512，
   应先解决当前 ON 顺序使压力恶化的问题，再扩展矩阵。
