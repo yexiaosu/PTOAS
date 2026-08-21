@@ -16,16 +16,25 @@ def bf16_bits(values: np.ndarray) -> np.ndarray:
     bias = np.uint32(0x7FFF) + ((bits >> np.uint32(16)) & np.uint32(1))
     return ((bits + bias) >> np.uint32(16)).astype(np.uint16)
 def main() -> None:
-    lane = np.arange(N * HIDDEN, dtype=np.int32)
-    x = np.zeros((N, HIDDEN), dtype=np.float32)
-    y_values = np.array([-4.0, -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0,
-                         2.0, 3.0, 4.0], dtype=np.float32)
+    lane = np.arange(N * HIDDEN, dtype=np.int32).reshape(N, HIDDEN)
+    clamped = lane % 5 == 0
+    x = np.where(clamped, np.float32(4.0), np.float32(0.0))
+    y_values = np.array([-3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0],
+                        dtype=np.float32)
     g_values = np.array([0.5, 1.0, 1.5, 2.0], dtype=np.float32)
-    y = y_values[lane % y_values.size].reshape(N, HIDDEN)
-    g = g_values[lane % g_values.size].reshape(N, HIDDEN)
+    y = y_values[lane % y_values.size]
+    y = np.where(clamped & ((lane // 5) % 2 == 0), np.float32(4.0), y)
+    y = np.where(clamped & ((lane // 5) % 2 == 1), np.float32(-4.0), y)
+    g = g_values[lane % g_values.size]
     packed_x = np.concatenate([x, y], axis=1)
-    x_grad = g * np.float32(0.5) * np.clip(y, -3.0, 3.0)
-    y_grad = np.zeros_like(x_grad)
+    xc = np.minimum(x, np.float32(3.0))
+    yc = np.clip(y, np.float32(-3.0), np.float32(3.0))
+    sigmoid = np.float32(1.0) / (np.float32(1.0) + np.exp(-xc))
+    gws = g * sigmoid
+    x_grad_raw = gws * yc * (np.float32(1.0) + xc * (np.float32(1.0) - sigmoid))
+    y_grad_raw = gws * xc
+    x_grad = np.where(x > np.float32(3.0), np.float32(0.0), x_grad_raw)
+    y_grad = np.where(np.abs(y) > np.float32(3.0), np.float32(0.0), y_grad_raw)
     expected = np.concatenate([x_grad, y_grad], axis=1)
     output_dir = Path(".")
     bf16_bits(packed_x).tofile(output_dir / "v1.bin")
