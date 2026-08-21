@@ -48,6 +48,7 @@ public:
   VPTOSchedDirection getDirection() const { return direction; }
   ArrayRef<int64_t> getCurrent() const { return current; }
   ArrayRef<int64_t> getPeak() const { return peak; }
+  const DenseSet<Value> &getLiveValues() const { return liveValues; }
   bool isLive(Value value) const { return liveValues.contains(value); }
 
 private:

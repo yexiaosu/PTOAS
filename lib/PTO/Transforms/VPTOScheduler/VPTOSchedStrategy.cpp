@@ -33,8 +33,11 @@ struct RankedCandidate {
   int64_t nearLimitProjectedCost = 0;
   int64_t nearLimitReleaseCredit = 0;
   int64_t pressureDeltaCost = 0;
+  int64_t closureProjected = 0;
+  int64_t closureReleaseCredit = 0;
   bool urgentCriticalPath = false;
   bool opensPressureFrontier = false;
+  bool advancesPressureClosure = false;
 };
 
 struct RankingContext {
@@ -81,6 +84,11 @@ buildRankingContext(const VPTOScheduleContext &context,
       context.currentPressure.size() == pressureSets.size();
   if (!pressureCountMatches) {
     detail = "current pressure does not match target pressure sets";
+    return failure();
+  }
+  if (context.closurePressureSet &&
+      *context.closurePressureSet >= pressureSets.size()) {
+    detail = "closure pressure set does not match the target model";
     return failure();
   }
 
@@ -152,6 +160,7 @@ rankCandidate(const VPTOScheduleContext &context,
   RankedCandidate rank;
   rank.candidate = &candidate;
   rank.opensPressureFrontier = candidate.opensPressureFrontier;
+  rank.advancesPressureClosure = candidate.advancesPressureClosure;
   for (auto [index, pressureSet] : llvm::enumerate(pressureSets)) {
     if (pressureSet.weight < 0 || pressureSet.spillCost < 0 ||
         context.currentPressure[index] < 0 ||
@@ -254,13 +263,19 @@ rankCandidate(const VPTOScheduleContext &context,
   unsigned criticalPathSlack =
       rankingContext.longestCriticalPath - candidate.criticalPath;
   rank.urgentCriticalPath = criticalPathSlack <= rankingContext.urgentSlack;
+  if (context.closurePressureSet) {
+    unsigned index = *context.closurePressureSet;
+    rank.closureProjected = candidate.pressure.projected[index];
+    rank.closureReleaseCredit = candidate.pressure.released[index];
+  }
   return rank;
 }
 
 static bool isBetterCandidate(const RankedCandidate &lhs,
                               const RankedCandidate &rhs,
                               bool hasNearLimitPressure,
-                              bool hasHighPressure) {
+                              bool hasHighPressure,
+                              bool hasPressureClosure) {
   if (lhs.exceedsLimit != rhs.exceedsLimit) {
     return !lhs.exceedsLimit;
   }
@@ -269,6 +284,17 @@ static bool isBetterCandidate(const RankedCandidate &lhs,
   }
   if (lhs.projectedExcessCost != rhs.projectedExcessCost) {
     return lhs.projectedExcessCost < rhs.projectedExcessCost;
+  }
+  if (hasPressureClosure) {
+    if (lhs.closureProjected != rhs.closureProjected) {
+      return lhs.closureProjected < rhs.closureProjected;
+    }
+    if (lhs.closureReleaseCredit != rhs.closureReleaseCredit) {
+      return lhs.closureReleaseCredit > rhs.closureReleaseCredit;
+    }
+    if (lhs.advancesPressureClosure != rhs.advancesPressureClosure) {
+      return lhs.advancesPressureClosure;
+    }
   }
   if (hasHighPressure) {
     if (lhs.highPressureProjectedCost != rhs.highPressureProjectedCost) {
@@ -313,7 +339,8 @@ static bool isBetterCandidate(const RankedCandidate &lhs,
 static StringRef getDecisionReason(const RankedCandidate &selected,
                                    const RankedCandidate &runnerUp,
                                    bool hasNearLimitPressure,
-                                   bool hasHighPressure) {
+                                   bool hasHighPressure,
+                                   bool hasPressureClosure) {
   if (selected.exceedsLimit != runnerUp.exceedsLimit) {
     return "pressure-safe-candidate";
   }
@@ -322,6 +349,18 @@ static StringRef getDecisionReason(const RankedCandidate &selected,
   }
   if (selected.projectedExcessCost != runnerUp.projectedExcessCost) {
     return "lower-projected-excess";
+  }
+  if (hasPressureClosure) {
+    if (selected.closureProjected != runnerUp.closureProjected) {
+      return "closure-pressure-preserving";
+    }
+    if (selected.closureReleaseCredit != runnerUp.closureReleaseCredit) {
+      return "closure-live-range-closing";
+    }
+    if (selected.advancesPressureClosure !=
+        runnerUp.advancesPressureClosure) {
+      return "advance-pressure-closure";
+    }
   }
   if (hasHighPressure) {
     if (selected.highPressureProjectedCost !=
@@ -404,7 +443,8 @@ VPTODefaultSchedStrategy::pickCandidate(const VPTOScheduleContext &context,
   for (const RankedCandidate &rank : llvm::drop_begin(ranks)) {
     if (isBetterCandidate(rank, *selected,
                           rankingContext->hasNearLimitPressure,
-                          rankingContext->hasHighPressure)) {
+                          rankingContext->hasHighPressure,
+                          context.closurePressureSet.has_value())) {
       selected = &rank;
     }
   }
@@ -416,7 +456,8 @@ VPTODefaultSchedStrategy::pickCandidate(const VPTOScheduleContext &context,
     }
     if (!runnerUp || isBetterCandidate(rank, *runnerUp,
                                        rankingContext->hasNearLimitPressure,
-                                       rankingContext->hasHighPressure)) {
+                                       rankingContext->hasHighPressure,
+                                       context.closurePressureSet.has_value())) {
       runnerUp = &rank;
     }
   }
@@ -424,7 +465,8 @@ VPTODefaultSchedStrategy::pickCandidate(const VPTOScheduleContext &context,
   StringRef reason = runnerUp ? getDecisionReason(
                                     *selected, *runnerUp,
                                     rankingContext->hasNearLimitPressure,
-                                    rankingContext->hasHighPressure)
+                                    rankingContext->hasHighPressure,
+                                    context.closurePressureSet.has_value())
                               : StringRef("only-candidate");
   const VPTOSchedCandidate &candidate = *selected->candidate;
   return VPTOSchedDecision{candidate.unit, candidate.direction,

@@ -25,6 +25,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace mlir::pto {
@@ -35,6 +36,9 @@ struct VPTOScheduleContext {
   VPTOSchedDirection direction;
   unsigned issueCycle;
   ArrayRef<int64_t> currentPressure;
+  /// Pressure set whose currently live value the active closure cone is
+  /// trying to release. Empty outside high-pressure closure mode.
+  std::optional<unsigned> closurePressureSet;
 };
 
 struct VPTOSchedCandidate {
@@ -48,6 +52,7 @@ struct VPTOSchedCandidate {
   SmallVector<int64_t, 2> lookaheadEnd;
   unsigned lookaheadSteps = 0;
   bool opensPressureFrontier = false;
+  bool advancesPressureClosure = false;
 };
 
 struct VPTOSchedDecision {
