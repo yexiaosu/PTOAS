@@ -482,6 +482,11 @@ static VPTOSchedCandidate makeStrategyCandidate(
         std::max<int64_t>(0, candidate.pressure.projected[PredicatePressure] -
                                 static_cast<int64_t>(*predicateLimit));
   }
+  candidate.lookaheadPeak = candidate.pressure.projected;
+  candidate.lookaheadEnd = candidate.pressure.projected;
+  candidate.lookaheadSteps = 1;
+  candidate.opensPressureFrontier =
+      predicateIntroduced > 0 && predicateReleased == 0;
   return candidate;
 }
 
@@ -510,7 +515,7 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
   FailureOr<VPTOSchedDecision> decision = strategy.pickCandidate(
       nearLimitContext, {producer, consumer}, detail);
   bool ok = check(succeeded(decision) && decision->unit == consumer.unit &&
-                      decision->reason == "near-limit-live-range-closing",
+                      decision->reason == "high-pressure-preserving",
                   "near-limit strategy must close a live range within the "
                   "critical-path window");
   if (!ok) {
@@ -544,10 +549,10 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
       model, *fixture->dag, VPTOSchedDirection::Top, 0, atLimitPressure};
   decision =
       strategy.pickCandidate(atLimitContext, {producer, consumer}, detail);
-  ok = check(succeeded(decision) && decision->unit == producer.unit &&
-                 decision->reason == "longer-critical-path",
-             "strategy must not enter near-limit mode without a pressure "
-             "producer");
+  ok = check(succeeded(decision) && decision->unit == consumer.unit &&
+                 decision->reason == "high-pressure-preserving",
+             "critical-pressure strategy must prefer a live-range-closing "
+             "candidate at the limit");
   if (!ok) {
     return false;
   }
@@ -559,10 +564,10 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
                                    nearLimitPressure, -1, 1, 0);
   decision = strategy.pickCandidate(nearLimitContext, {producer, consumer},
                                     detail);
-  ok = check(succeeded(decision) && decision->unit == producer.unit &&
-                 decision->reason == "urgent-critical-path",
-             "near-limit strategy must not delay a candidate outside the "
-             "critical-path window");
+  ok = check(succeeded(decision) && decision->unit == consumer.unit &&
+                 decision->reason == "high-pressure-preserving",
+             "critical-pressure strategy must override latency when bounded "
+             "lookahead crosses a pressure-risk band");
   if (!ok) {
     return false;
   }
@@ -683,7 +688,7 @@ static bool testBoundaryBudget(MLIRContext &context,
   ok &= check(succeeded(retryCommit) && boundary.isScheduled(units[0].get()) &&
                   boundary.getPendingCount() == 3 && fanoutNext &&
                   fanoutNext->readyCycle == 1,
-              "fanout retry must build an earliest-cycle pending heap");
+              "fanout retry must build an earliest-cycle pending bucket");
 
   VPTOSchedulingBudget releaseFailureBudget(2);
   FailureOr<bool> failedAdvance =
@@ -691,7 +696,7 @@ static bool testBoundaryBudget(MLIRContext &context,
   ok &= check(failed(failedAdvance) && releaseFailureBudget.hasExceeded() &&
                   boundary.getCurrentCycle() == 0 &&
                   boundary.getPendingCount() == 3,
-              "pending release budget failure must not mutate the heap");
+              "pending release budget failure must not mutate cycle buckets");
 
   VPTOSchedulingBudget releaseBudget(64);
   FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(releaseBudget);
@@ -699,9 +704,9 @@ static bool testBoundaryBudget(MLIRContext &context,
                   boundary.getCurrentCycle() == 1 &&
                   boundary.getPendingCount() == 0 &&
                   boundary.getAvailable().size() == 3,
-              "pending heap must release all earliest-cycle nodes");
+              "pending cycle bucket must release all earliest-cycle nodes");
   if (ok) {
-    llvm::outs() << "boundary fanout-budget-heap: pass\n";
+    llvm::outs() << "boundary fanout-budget-cycle-bucket: pass\n";
   }
   return ok;
 }
@@ -858,6 +863,84 @@ static bool testPressureNoPendingProgress(MLIRContext &context) {
                   "event exists");
   if (ok) {
     llvm::outs() << "scheduler no-pending pressure progress: pass\n";
+  }
+  return ok;
+}
+
+static bool testPressureReliefDoesNotIdle(MLIRContext &context) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @pressure_relief(
+      %lhs: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>,
+      %p0: !pto.mask<b32>, %p1: !pto.mask<b32>, %p2: !pto.mask<b32>) {
+    pto.vecscope {
+      pto.sprclr "AR"
+      %relief = pto.vsel %lhs, %rhs, %p0 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %delayed = pto.vsel %lhs, %rhs, %p1 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  if (!check(static_cast<bool>(module),
+             "cannot parse pressure-relief fixture")) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  func::FuncOp function = module->lookupSymbol<func::FuncOp>("pressure_relief");
+  bool hasExpectedStructure =
+      check(static_cast<bool>(scope) && static_cast<bool>(function),
+            "pressure-relief fixture structure");
+  if (!hasExpectedStructure) {
+    return false;
+  }
+
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAG dag(region);
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
+  bool hasExpectedUnitCount =
+      check(units.size() == 3, "pressure-relief fixture unit count");
+  if (!hasExpectedUnitCount) {
+    return false;
+  }
+  for (unsigned argumentIndex = 2; argumentIndex != 5; ++argumentIndex) {
+    dag.addLiveIn(function.getArgument(argumentIndex));
+  }
+  dag.addEdge(*units[0], *units[1], VPTOSchedEdgeKind::Artificial,
+              VPTOSchedEdgeStrength::Must, 0, "ready pressure relief");
+  dag.addEdge(*units[0], *units[2], VPTOSchedEdgeKind::Artificial,
+              VPTOSchedEdgeStrength::Must, 10, "delayed alternative");
+  if (!check(succeeded(dag.computeCriticalPaths()),
+             "pressure-relief critical paths")) {
+    return false;
+  }
+  dag.resetDependencyCounts();
+
+  TrackerTestModel model(/*trackUnboundedPressure=*/false,
+                         /*predicateLimit=*/1);
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  bool ok = check(succeeded(result) && result->entries.size() == 3,
+                  "pressure-relief scheduler result");
+  ok &= check(result->entries[1].unit == units[1].get() &&
+                  result->entries[1].issueCycle == 0 &&
+                  !result->entries[1].pressureDrivenIdle,
+              "pressure relief must run without waiting while still over "
+              "the limit");
+  if (ok) {
+    llvm::outs() << "scheduler over-limit pressure relief: pass\n";
   }
   return ok;
 }
@@ -1599,6 +1682,7 @@ int main() {
       !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
       !testPressureNoPendingProgress(context) ||
+      !testPressureReliefDoesNotIdle(context) ||
       !testUnboundedPressureScheduling(context) ||
       !testRandomDAGDifferential(context)) {
     return 1;

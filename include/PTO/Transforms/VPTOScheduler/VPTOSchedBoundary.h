@@ -26,6 +26,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -36,6 +37,8 @@ enum class VPTOSchedDirection { Top, Bottom };
 class VPTOSchedModel;
 class VPTOResourceTracker;
 class VPTORegPressureTracker;
+struct VPTORegPressureEvaluation;
+struct VPTOPressureEvaluationCache;
 class VPTOHazardRecognizer;
 class VPTOSchedulingBudget;
 
@@ -56,20 +59,20 @@ public:
   VPTOSchedDirection getDirection() const { return direction; }
   unsigned getCurrentCycle() const { return currentCycle; }
   ArrayRef<VPTOSUnit *> getAvailable() const { return available; }
-  size_t getPendingCount() const { return pending.size(); }
-  /// Return the earliest pending event. The remaining heap layout is private.
-  const VPTOPendingUnit *getNextPending() const {
-    return pending.empty() ? nullptr : &pending.front();
-  }
-  bool empty() const { return available.empty() && pending.empty(); }
+  size_t getPendingCount() const { return pendingCount; }
+  /// Return the earliest pending event. The cycle buckets remain private.
+  const VPTOPendingUnit *getNextPending() const;
+  bool empty() const { return available.empty() && pendingCount == 0; }
   bool isComplete() const { return scheduledCount == states.size(); }
   bool isAvailable(const VPTOSUnit *unit) const;
   bool isScheduled(const VPTOSUnit *unit) const;
+  unsigned getRemainingDependencyCount(const VPTOSUnit &unit) const;
 
   VPTOResourceTracker &getResourceTracker();
   const VPTOResourceTracker &getResourceTracker() const;
   VPTORegPressureTracker &getPressureTracker();
   const VPTORegPressureTracker &getPressureTracker() const;
+  VPTORegPressureEvaluation evaluatePressure(const VPTOSUnit &unit) const;
   VPTOHazardRecognizer &getHazardRecognizer();
   const VPTOHazardRecognizer &getHazardRecognizer() const;
 
@@ -98,17 +101,21 @@ private:
   void insertPending(VPTOSUnit *unit, unsigned readyCycle);
   void releasePending();
 
+  const VPTOSchedDAG &dag;
   VPTOSchedDirection direction;
   unsigned currentCycle = 0;
   size_t scheduledCount = 0;
   SmallVector<VPTOSUnit *> available;
   SmallVector<size_t> availablePositions;
-  SmallVector<VPTOPendingUnit> pending;
+  std::map<unsigned, SmallVector<VPTOSUnit *>> pendingByCycle;
+  size_t pendingCount = 0;
+  mutable VPTOPendingUnit nextPending;
   SmallVector<unsigned> remainingDependencies;
   SmallVector<unsigned> readyCycles;
   SmallVector<UnitState> states;
   std::unique_ptr<VPTOResourceTracker> resourceTracker;
   std::unique_ptr<VPTORegPressureTracker> pressureTracker;
+  std::unique_ptr<VPTOPressureEvaluationCache> pressureEvaluationCache;
   std::unique_ptr<VPTOHazardRecognizer> hazardRecognizer;
 };
 

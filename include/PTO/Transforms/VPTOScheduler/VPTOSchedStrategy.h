@@ -44,6 +44,10 @@ struct VPTOSchedCandidate {
   unsigned criticalPath = 0;
   unsigned originalIndex = 0;
   VPTORegPressureEvaluation pressure;
+  SmallVector<int64_t, 2> lookaheadPeak;
+  SmallVector<int64_t, 2> lookaheadEnd;
+  unsigned lookaheadSteps = 0;
+  bool opensPressureFrontier = false;
 };
 
 struct VPTOSchedDecision {

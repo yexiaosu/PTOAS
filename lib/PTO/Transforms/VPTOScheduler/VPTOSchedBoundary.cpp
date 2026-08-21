@@ -24,22 +24,19 @@
 using namespace mlir;
 using namespace mlir::pto;
 
+struct mlir::pto::VPTOPressureEvaluationCache {
+  SmallVector<VPTORegPressureEvaluation> evaluations;
+  SmallVector<uint8_t> valid;
+};
+
 namespace {
 
-static bool pendingComesAfter(const VPTOPendingUnit &lhs,
-                              const VPTOPendingUnit &rhs) {
-  if (lhs.readyCycle != rhs.readyCycle) {
-    return lhs.readyCycle > rhs.readyCycle;
-  }
-  return lhs.unit->getOriginalIndex() > rhs.unit->getOriginalIndex();
-}
-
-static uint64_t getHeapOperationWork(size_t heapSize) {
+static uint64_t getTreeOperationWork(size_t bucketCount) {
   static_assert(sizeof(size_t) <= sizeof(uint64_t));
-  if (heapSize <= 1) {
+  if (bucketCount <= 1) {
     return 1;
   }
-  uint64_t depth = llvm::Log2_64_Ceil(static_cast<uint64_t>(heapSize));
+  uint64_t depth = llvm::Log2_64_Ceil(static_cast<uint64_t>(bucketCount));
   return 2 * depth + 1;
 }
 
@@ -117,7 +114,8 @@ validateDependencyUpdates(ArrayRef<DependencyUpdate> updates,
 static LogicalResult prepayCommitWork(ArrayRef<DependencyUpdate> updates,
                                       ArrayRef<unsigned> remainingDependencies,
                                       ArrayRef<unsigned> readyCycles,
-                                      unsigned currentCycle, size_t pendingSize,
+                                      unsigned currentCycle,
+                                      size_t pendingBucketCount,
                                       VPTOSchedulingBudget &budget,
                                       std::string &detail) {
   if (!budget.consume()) {
@@ -129,7 +127,14 @@ static LogicalResult prepayCommitWork(ArrayRef<DependencyUpdate> updates,
     return mlir::failure();
   }
 
-  size_t simulatedPendingSize = pendingSize;
+  bool bucketCountWouldOverflow =
+      updates.size() >
+      std::numeric_limits<size_t>::max() - pendingBucketCount;
+  if (bucketCountWouldOverflow) {
+    detail = "pending cycle bucket count overflow";
+    return mlir::failure();
+  }
+  size_t maximumBucketCount = pendingBucketCount + updates.size();
   for (const DependencyUpdate &update : updates) {
     unsigned id = update.unit->getId();
     if (remainingDependencies[id] != update.count) {
@@ -143,12 +148,7 @@ static LogicalResult prepayCommitWork(ArrayRef<DependencyUpdate> updates,
       }
       continue;
     }
-    if (simulatedPendingSize == std::numeric_limits<size_t>::max()) {
-      detail = "pending queue size overflow";
-      return mlir::failure();
-    }
-    ++simulatedPendingSize;
-    if (!budget.consume(getHeapOperationWork(simulatedPendingSize))) {
+    if (!budget.consume(getTreeOperationWork(maximumBucketCount))) {
       detail = "work budget exhausted before adding a pending node";
       return mlir::failure();
     }
@@ -167,21 +167,24 @@ VPTOSchedBoundary::VPTOSchedBoundary(
     const VPTOSchedDAG &dag, const VPTOSchedModel &model,
     VPTOSchedDirection direction,
     std::unique_ptr<VPTOHazardRecognizer> hazardRecognizer)
-    : direction(direction),
+    : dag(dag), direction(direction),
       resourceTracker(std::make_unique<VPTOResourceTracker>(model)),
       pressureTracker(
           std::make_unique<VPTORegPressureTracker>(model, dag, direction)),
+      pressureEvaluationCache(
+          std::make_unique<VPTOPressureEvaluationCache>()),
       hazardRecognizer(std::move(hazardRecognizer)) {
   if (!this->hazardRecognizer) {
     this->hazardRecognizer = std::make_unique<VPTONullHazardRecognizer>();
   }
   size_t nodeCount = dag.getUnits().size();
   available.reserve(nodeCount);
-  pending.reserve(nodeCount);
   availablePositions.assign(nodeCount, 0);
   remainingDependencies.assign(nodeCount, 0);
   readyCycles.assign(nodeCount, 0);
   states.assign(nodeCount, UnitState::Unavailable);
+  pressureEvaluationCache->evaluations.resize(nodeCount);
+  pressureEvaluationCache->valid.assign(nodeCount, 0);
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
     unsigned dependencies = direction == VPTOSchedDirection::Top
                                 ? unit->getRemainingPredecessors()
@@ -194,6 +197,15 @@ VPTOSchedBoundary::VPTOSchedBoundary(
 }
 
 VPTOSchedBoundary::~VPTOSchedBoundary() = default;
+
+const VPTOPendingUnit *VPTOSchedBoundary::getNextPending() const {
+  if (pendingByCycle.empty()) {
+    return nullptr;
+  }
+  const auto &[readyCycle, units] = *pendingByCycle.begin();
+  nextPending = {units.front(), readyCycle};
+  return &nextPending;
+}
 
 VPTOResourceTracker &VPTOSchedBoundary::getResourceTracker() {
   return *resourceTracker;
@@ -209,6 +221,23 @@ VPTORegPressureTracker &VPTOSchedBoundary::getPressureTracker() {
 
 const VPTORegPressureTracker &VPTOSchedBoundary::getPressureTracker() const {
   return *pressureTracker;
+}
+
+VPTORegPressureEvaluation
+VPTOSchedBoundary::evaluatePressure(const VPTOSUnit &unit) const {
+  unsigned id = unit.getId();
+  if (direction != VPTOSchedDirection::Top ||
+      id >= pressureEvaluationCache->valid.size())
+    return pressureTracker->evaluate(unit);
+  if (!pressureEvaluationCache->valid[id]) {
+    pressureEvaluationCache->evaluations[id] =
+        pressureTracker->evaluate(unit);
+    pressureEvaluationCache->valid[id] = 1;
+  }
+  VPTORegPressureEvaluation evaluation =
+      pressureEvaluationCache->evaluations[id];
+  pressureTracker->refreshSummary(evaluation);
+  return evaluation;
 }
 
 VPTOHazardRecognizer &VPTOSchedBoundary::getHazardRecognizer() {
@@ -233,6 +262,12 @@ bool VPTOSchedBoundary::isAvailable(const VPTOSUnit *unit) const {
   size_t position = availablePositions[id];
   return states[id] == UnitState::Available && position < available.size() &&
          available[position] == unit;
+}
+
+unsigned VPTOSchedBoundary::getRemainingDependencyCount(
+    const VPTOSUnit &unit) const {
+  unsigned id = unit.getId();
+  return id < remainingDependencies.size() ? remainingDependencies[id] : 0;
 }
 
 void VPTOSchedBoundary::insertAvailable(VPTOSUnit *unit) {
@@ -263,8 +298,13 @@ void VPTOSchedBoundary::insertPending(VPTOSUnit *unit, unsigned readyCycle) {
   unsigned id = unit->getId();
   states[id] = UnitState::Pending;
   readyCycles[id] = readyCycle;
-  pending.push_back({unit, readyCycle});
-  std::push_heap(pending.begin(), pending.end(), pendingComesAfter);
+  SmallVector<VPTOSUnit *> &bucket = pendingByCycle[readyCycle];
+  auto position = llvm::lower_bound(
+      bucket, unit, [](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+        return lhs->getOriginalIndex() < rhs->getOriginalIndex();
+      });
+  bucket.insert(position, unit);
+  ++pendingCount;
 }
 
 LogicalResult VPTOSchedBoundary::defer(VPTOSUnit &unit, unsigned readyCycle,
@@ -278,11 +318,11 @@ LogicalResult VPTOSchedBoundary::defer(VPTOSUnit &unit, unsigned readyCycle,
     return failure();
   }
   bool pendingSizeOverflow =
-      pending.size() == std::numeric_limits<size_t>::max();
+      pendingCount == std::numeric_limits<size_t>::max();
   if (pendingSizeOverflow) {
     return failure();
   }
-  uint64_t work = getHeapOperationWork(pending.size() + 1);
+  uint64_t work = getTreeOperationWork(pendingByCycle.size() + 1);
   if (!budget.consume()) {
     return failure();
   }
@@ -295,39 +335,28 @@ LogicalResult VPTOSchedBoundary::defer(VPTOSUnit &unit, unsigned readyCycle,
 }
 
 void VPTOSchedBoundary::releasePending() {
-  auto pendingIsReady = [&]() {
-    return !pending.empty() && pending.front().readyCycle <= currentCycle;
-  };
-  while (pendingIsReady()) {
-    std::pop_heap(pending.begin(), pending.end(), pendingComesAfter);
-    VPTOPendingUnit entry = pending.pop_back_val();
-    insertAvailable(entry.unit);
+  bool hasReadyBucket = !pendingByCycle.empty() &&
+                        pendingByCycle.begin()->first <= currentCycle;
+  while (hasReadyBucket) {
+    auto bucket = pendingByCycle.extract(pendingByCycle.begin());
+    for (VPTOSUnit *unit : bucket.mapped()) {
+      insertAvailable(unit);
+      --pendingCount;
+    }
+    hasReadyBucket = !pendingByCycle.empty() &&
+                     pendingByCycle.begin()->first <= currentCycle;
   }
 }
 
 FailureOr<bool>
 VPTOSchedBoundary::advanceToNextPendingCycle(VPTOSchedulingBudget &budget) {
-  if (pending.empty()) {
+  if (pendingByCycle.empty()) {
     return false;
   }
-  unsigned nextCycle = std::max(currentCycle, pending.front().readyCycle);
-  if (!budget.consume(pending.size())) {
+  unsigned nextCycle = std::max(currentCycle, pendingByCycle.begin()->first);
+  size_t releaseCount = pendingByCycle.begin()->second.size();
+  if (!budget.consume(1 + releaseCount)) {
     return mlir::failure();
-  }
-
-  size_t releaseCount = static_cast<size_t>(
-      llvm::count_if(pending, [&](const VPTOPendingUnit &entry) {
-        return entry.readyCycle <= nextCycle;
-      }));
-  size_t simulatedPendingSize = pending.size();
-  for (size_t index = 0; index < releaseCount; ++index) {
-    if (!budget.consume(getHeapOperationWork(simulatedPendingSize))) {
-      return mlir::failure();
-    }
-    if (!budget.consume()) {
-      return mlir::failure();
-    }
-    --simulatedPendingSize;
   }
   currentCycle = nextCycle;
   releasePending();
@@ -355,12 +384,22 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
     return mlir::failure();
   }
   if (failed(prepayCommitWork(updates, remainingDependencies, readyCycles,
-                              currentCycle, pending.size(), budget, detail))) {
+                              currentCycle, pendingByCycle.size(), budget,
+                              detail))) {
     return mlir::failure();
   }
   if (failed(pressureTracker->commit(unit))) {
     detail = "register-pressure tracker rejected selected node";
     return mlir::failure();
+  }
+  if (direction == VPTOSchedDirection::Top) {
+    for (Value operand : unit.getOperation()->getOperands()) {
+      for (Operation *user : operand.getUsers()) {
+        if (VPTOSUnit *affected = dag.lookup(user)) {
+          pressureEvaluationCache->valid[affected->getId()] = 0;
+        }
+      }
+    }
   }
 
   eraseAvailable(&unit);
