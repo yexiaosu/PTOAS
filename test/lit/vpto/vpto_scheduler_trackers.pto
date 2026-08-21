@@ -21,6 +21,7 @@
 // CHECK-NEXT: strategy low-pressure critical path: pass
 // CHECK-NEXT: strategy no-producer critical path: pass
 // CHECK-NEXT: strategy urgent critical path: pass
+// CHECK-NEXT: strategy closure-cone progress: pass
 // CHECK-NEXT: strategy deterministic tie-break: pass
 // CHECK-NEXT: model predicate-limit: 7
 // CHECK-NEXT: boundary independent-latency: pass
