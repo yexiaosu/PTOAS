@@ -400,8 +400,8 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 - 计算关键路径时每处理一个节点或一条边；
 - 每评估一次候选节点；
 - Boundary 提交时每检查一条相邻依赖边，并分别计算依赖更新的验证和应用；
-- available 队列的常数时间插入/删除，以及 pending heap 插入/删除的对数复杂度上界；
-- 每次推进周期时扫描 pending heap、确定本周期释放集合并预付全部 heap 删除工作；
+- available 队列的常数时间插入/删除，以及 pending 周期桶插入的对数复杂度上界；
+- 每次推进周期时确定需要释放的 pending 周期桶，并预付本次 cycle 更新和节点释放工作；
 - 结果检查时每扫描一个区间节点、结果项、DAG 节点、依赖边或 SSA operand；
 - 重放时每处理一个结果节点；
 - 重放调用同一个 Boundary commit/advance 接口，不绕过上述计数；
@@ -422,8 +422,8 @@ available
   无序稠密数组；按 id 位置表做 O(1) 成员检查和 swap-remove
 
 pending
-  SmallVector<VPTOPendingUnit> 二叉最小堆
-  readyCycle 更小的节点优先，originalIndex 用于确定性决胜
+  std::map<unsigned, SmallVector<VPTOSUnit *>> 周期桶
+  key 是 readyCycle；同一周期按 originalIndex 保持确定顺序
 ```
 
 节点状态含义为：
@@ -447,7 +447,7 @@ readyCycle(successor) =
 - 最早可选周期不晚于当前周期：立即成为候选；
 - 否则进入等待状态。
 
-没有候选节点时，当前逻辑周期直接跳到 pending heap 顶部记录的最早可选周期，不逐周期空转。同一最早周期的节点会在预算检查通过后批量出堆并加入 available；每次 heap 插入或删除不再重新排序整个 pending 数组。
+没有候选节点时，当前逻辑周期直接跳到最早 pending 周期，不逐周期空转。同一周期的节点会在预算检查通过后整桶加入 available。
 
 通常只要仍有候选节点，Pass 就在同一个逻辑周期继续选择。唯一例外是所有当前候选都会超过至少一个已知压力上限、并且仍有依赖等待节点时，Pass 会执行 pressure-driven idle，推进到最早的等待周期后重新评价候选。这里的周期只表示依赖层级，同一逻辑周期可以记录多个节点，不能解释为真实硬件同周期发射。
 
@@ -477,7 +477,7 @@ VPTOScheduler
        unit / direction / issueCycle / reason
 ```
 
-`VPTOScheduler` 构造 Context 和 Candidate，但不解释其中的评分信息；`VPTODefaultSchedStrategy` 负责当前 pressure、critical path 和原始位置策略。Scheduler 构造函数接受任意 `VPTOSchedStrategy`，因此增加新策略不需要修改调度主循环。Decision 的方向、逻辑周期和选择原因会随节点一起保存到 `VPTOScheduleResult`，on trace 因而可以说明节点是根据 excess、临界压力下的 live-range 关闭、critical path、pressure delta 还是确定性 tie-break 选中的。Candidate 当前只保存 pressure 和 critical-path 评价，后续可以在不改变 Scheduler/Boundary 职责的情况下增加真实的 resource 或 hazard 评价。
+`VPTOScheduler` 构造 Context 和 Candidate，但不解释其中的评分信息；`VPTODefaultSchedStrategy` 负责当前 pressure、critical path 和原始位置策略。Scheduler 构造函数接受任意 `VPTOSchedStrategy`，因此增加新策略不需要修改调度主循环。Decision 的方向、逻辑周期和选择原因会随节点一起保存到 `VPTOScheduleResult`，on trace 因而可以说明节点是根据 excess、closure cone、有限前瞻、critical path、pressure delta 还是确定性 tie-break 选中的。Candidate 保存即时 pressure、固定深度前瞻、是否打开新的 pressure frontier，以及是否推进当前 closure cone；后续仍可在不改变 Scheduler/Boundary 职责的情况下增加真实的 resource 或 hazard 评价。
 
 ### 计算一个候选节点的压力影响
 
@@ -506,7 +506,7 @@ else:
 - `currentExcess`：当前已经超过模型上限多少；
 - `projectedExcess`：选择后会超过模型上限多少。
 
-默认 Strategy 再汇总出 excess、普通 pressure delta，以及只对接近上限的 pressure set 生效的 projected/released 代价。某个集合具有已知上限，并且任一当前候选新引入的 pressure 已经可以耗尽当前 headroom 时，该集合进入 near-limit 状态：
+默认 Strategy 再汇总出 excess、普通 pressure delta，以及只对接近上限的 pressure set 生效的 projected/released 代价。具有已知上限的集合在当前压力达到上限一半时进入 near-limit 状态，达到上限三分之二时进入 high-pressure 状态：
 
 ```text
 excessGrowthCost =
@@ -528,15 +528,21 @@ nearLimitReleaseCredit =
 
 这些代价分别表示“是否/多少新增超限”“选择后总共超限多少”“临界压力下选择后的存活量和关闭的 live range 数”“普通状态下存活值总量倾向增加还是减少”。乘法和累加都会检查 `int64_t` 溢出。压力上限是可选数据：没有可信上限时，该集合不参与 excess 或 near-limit 代价，但仍以 `weight * pressureDelta` 参与普通 delta 代价，Tracker 也继续记录它的 current 和 peak。Strategy 不为这种集合虚构默认上限。权重和超限代价不能为负，否则当前调度区间按模型无效处理并保持原顺序。
 
+### High-pressure closure cone
+
+进入 high-pressure 后，Scheduler 从 normalized pressure 最高的有界集合开始处理；已经超限的集合优先。它只遍历 pressure tracker 当前的 live values 及其尚未调度的用户，查找能够结束该集合 live range 的 closure，不扫描整个 region。候选 closure 先按未满足的直接依赖数、再按原始位置选择。
+
+选定 closure 后，Scheduler 沿 `Must` 前驱反向收集尚未调度的依赖锥，并缓存到该 closure 完成。Candidate 会标记自己是否位于这个 cone 中；同等即时压力风险下，Strategy 优先推进 cone，而不是打开无关 producer 链。如果另一个压力集合出现更大的 excess 或 normalized pressure，当前 cone 可以被抢占并重新选择。closure 搜索和 cone 边遍历都计入共享 work-unit 预算；搜索使用 tracker 的只读评价，不写只面向 ready candidate 的增量缓存。
+
 ### 多个候选节点之间如何选择
 
 `VPTODefaultSchedStrategy` 按以下顺序逐项比较候选节点；只有上一项相同才比较下一项，不把所有指标混成一个总分：
 
 1. 优先 pressure-safe candidate，再比较 `excessGrowthCost` 和 `projectedExcessCost`；
-2. 如果任一 pressure set 进入 near-limit 状态，先保留位于 critical-path urgency window 内的候选。窗口宽度是最长关键链候选的一次 modeled write latency；窗口外候选不会仅因能够释放 pressure 而延迟真正紧急的链；
-3. 在 urgency window 内，优先更小的 `nearLimitProjectedCost`，再优先更大的 `nearLimitReleaseCredit`，因此 last-use consumer 可以在真正超限前结束 live range；
-4. pressure 充足时，或上述指标相同后，继续优先更大的 `height`；
-5. 再比较更小的 `pressureDeltaCost`；
+2. 有活动 closure cone 时，依次比较目标集合的 projected pressure、release credit 和是否推进 cone；
+3. high-pressure 集合再比较汇总后的 projected pressure 和 release credit；
+4. near-limit 集合依次比较固定深度前瞻的 excess/risk、critical-path urgency window、是否打开新 pressure frontier、前瞻结束压力和即时 projected/released pressure；
+5. 上述指标相同后，继续优先更大的 `height`，再比较更小的 `pressureDeltaCost`；
 6. 最后选择更小的 `originalIndex`，并记录 `deterministic-tie-break`。
 
 最后使用原始位置决胜，保证相同输入和模型总能得到完全相同的顺序。
@@ -589,11 +595,11 @@ VPTOScheduleResult
 
 ### 用全新状态再执行一遍结果
 
-重放阶段重新创建一个完整的 Top `VPTOSchedBoundary`，不复用第一次排序时已经改变的依赖、队列或压力状态。Boundary 只读共享 DAG，因此重放不会受到首次调度的状态污染。它逐个检查结果中的节点：
+重放阶段重新创建一个完整的 Top `VPTOSchedBoundary`，不复用第一次排序时已经改变的依赖、队列或压力状态。Boundary 只读共享 DAG，因此重放不会受到首次调度的状态污染。结果项同时包含普通依赖等待和 pressure-driven idle 时，重放先推进 available 为空所强制要求的 pending 依赖事件，再验证剩余的压力等待。它逐个检查结果中的节点：
 
 - 工作量预算仍可用；
 - 没有候选时，确实可以推进到最早的等待周期；
-- `pressureDrivenIdle=true` 时，当前 available 候选确实全部超限，并且可以沿 pending 事件推进到结果记录的逻辑周期；
+- `pressureDrivenIdle=true` 时，当前 available 候选确实都会增加已超限或临界集合的压力风险，并且可以沿 pending 事件推进到结果记录的逻辑周期；
 - 当前节点通过 Boundary 的 O(1) `isAvailable` 检查，并且结果记录的逻辑周期一致；
 - Boundary 的压力状态和 available 队列都能接受该节点；
 - 重放结束后所有节点都已处理；
@@ -662,7 +668,7 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_dependencies.pto` | SSA、memory range、volatile、unknown memory、post-update、SPR/CTRL、barrier |
 | `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace 双链示例、pressure tie-break、pressure-driven idle、报告开关不改变 IR |
 | `vpto_scheduler_generic_op_coverage.pto` | vcvt/vmul/vdiv/vexp/vmula/vcadd 等通用 Vector micro-op 使用统一 sched class，on 不因 opcode 未登记而跳过 region |
-| `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending heap、verify/replay、随机 DAG differential test |
+| `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/closure-cone/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending cycle buckets、verify/replay、随机 DAG differential test |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |
 
 随机 DAG differential test 使用 8 个固定 seed，覆盖完整 permutation、Must edge、ready cycle、独立 pressure oracle、decision metadata、非法结果拒绝、精确/不足预算以及最终 apply 顺序。
