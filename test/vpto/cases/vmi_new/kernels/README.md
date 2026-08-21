@@ -38,8 +38,10 @@ fixture，不属于上表的 36 个目标 CCE 迁移 case，也不改变
 [CCE_CASE_SCOPE.md](CCE_CASE_SCOPE.md) 定义的支持范围。它们用于在相同输入和
 golden 下比较 natural-order、pressure-stress 以及 Scheduler OFF/ON。
 
-CA-model SIM 的压力、真实 spill/reload、三次 ticks 和 strict compare 结果见
-[TILEKERNELS_SCHEDULER_PRESSURE_RESULTS.md](TILEKERNELS_SCHEDULER_PRESSURE_RESULTS.md)。
+CA-model SIM 的历史压力矩阵和 fixture 构造见
+[TILEKERNELS_SCHEDULER_PRESSURE_RESULTS.md](TILEKERNELS_SCHEDULER_PRESSURE_RESULTS.md)；
+multi-user closure 版本的最新 Scheduler OFF/ON 对比见
+[TILEKERNELS_SCHEDULER_MULTI_USER_CLOSURE_RESULTS.md](TILEKERNELS_SCHEDULER_MULTI_USER_CLOSURE_RESULTS.md)。
 
 ## 设计上暂缓
 
