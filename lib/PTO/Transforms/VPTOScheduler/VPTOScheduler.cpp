@@ -14,8 +14,10 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedBoundary.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <limits>
@@ -26,17 +28,155 @@ using namespace mlir::pto;
 
 namespace {
 
-static VPTOSchedCandidate buildCandidate(VPTOSUnit &unit,
-                                         const VPTOSchedBoundary &boundary) {
+static void saturatingMultiplyAdd(int64_t lhs, int64_t rhs, int64_t &total) {
+  int64_t product = 0;
+  int64_t updated = 0;
+  bool scoreWouldOverflow = llvm::MulOverflow(lhs, rhs, product) ||
+                            llvm::AddOverflow(total, product, updated);
+  if (scoreWouldOverflow) {
+    total = std::numeric_limits<int64_t>::max();
+    return;
+  }
+  total = updated;
+}
+
+static bool isCriticalPressure(const VPTOSchedBoundary &boundary,
+                               const VPTOSchedModel &model) {
+  for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
+    if (pressureSet.limit &&
+        boundary.getPressureTracker().getCurrent()[index] * 2 >=
+            static_cast<int64_t>(*pressureSet.limit)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int64_t getEvaluationExcess(
+    const VPTORegPressureEvaluation &evaluation,
+    ArrayRef<VPTORegPressureSet> pressureSets) {
+  int64_t cost = 0;
+  for (auto [index, pressureSet] : llvm::enumerate(pressureSets)) {
+    saturatingMultiplyAdd(evaluation.projectedExcess[index],
+                          pressureSet.spillCost, cost);
+  }
+  return cost;
+}
+
+static int64_t getEvaluationPressure(
+    const VPTORegPressureEvaluation &evaluation,
+    ArrayRef<VPTORegPressureSet> pressureSets) {
+  int64_t cost = 0;
+  for (auto [index, pressureSet] : llvm::enumerate(pressureSets)) {
+    saturatingMultiplyAdd(evaluation.projected[index], pressureSet.weight,
+                          cost);
+  }
+  return cost;
+}
+
+static FailureOr<VPTOSchedCandidate>
+buildCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
+               const VPTOSchedModel &model, VPTOSchedulingBudget &budget) {
   VPTOSchedDirection direction = boundary.getDirection();
   unsigned criticalPath =
       direction == VPTOSchedDirection::Top ? unit.getHeight() : unit.getDepth();
-  return {&unit,
-          direction,
-          boundary.getCurrentCycle(),
-          criticalPath,
-          unit.getOriginalIndex(),
-          boundary.getPressureTracker().evaluate(unit)};
+  VPTORegPressureEvaluation pressure =
+      boundary.evaluatePressure(unit);
+  VPTOSchedCandidate candidate{&unit,
+                               direction,
+                               boundary.getCurrentCycle(),
+                               criticalPath,
+                               unit.getOriginalIndex(),
+                               pressure,
+                               pressure.projected,
+                               pressure.projected,
+                               0,
+                               false};
+  candidate.opensPressureFrontier =
+      llvm::any_of(pressure.introduced,
+                   [](int64_t value) { return value > 0; }) &&
+      llvm::all_of(pressure.released,
+                   [](int64_t value) { return value == 0; });
+  if (!isCriticalPressure(boundary, model)) {
+    return candidate;
+  }
+
+  // Follow only dependency nodes made ready by this candidate. This bounded
+  // simulation estimates whether the newly opened chain soon reaches a
+  // live-range-closing consumer without copying the full ready queue.
+  constexpr unsigned kLookaheadDepth = 8;
+  VPTORegPressureTracker simulatedTracker = boundary.getPressureTracker();
+  SmallVector<VPTOSUnit *, kLookaheadDepth> ready{&unit};
+  DenseMap<VPTOSUnit *, unsigned> remaining;
+  DenseSet<VPTOSUnit *> queued;
+  queued.insert(&unit);
+  ArrayRef<VPTORegPressureSet> pressureSets = model.getPressureSets();
+  for (unsigned step = 0; step < kLookaheadDepth && !ready.empty(); ++step) {
+    if (!budget.consume(ready.size())) {
+      return failure();
+    }
+    auto best = llvm::min_element(ready, [&](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+      VPTORegPressureEvaluation lhsPressure = simulatedTracker.evaluate(*lhs);
+      VPTORegPressureEvaluation rhsPressure = simulatedTracker.evaluate(*rhs);
+      int64_t lhsExcess = getEvaluationExcess(lhsPressure, pressureSets);
+      int64_t rhsExcess = getEvaluationExcess(rhsPressure, pressureSets);
+      if (lhsExcess != rhsExcess) {
+        return lhsExcess < rhsExcess;
+      }
+      int64_t lhsPressureCost =
+          getEvaluationPressure(lhsPressure, pressureSets);
+      int64_t rhsPressureCost =
+          getEvaluationPressure(rhsPressure, pressureSets);
+      if (lhsPressureCost != rhsPressureCost) {
+        return lhsPressureCost < rhsPressureCost;
+      }
+      return lhs->getOriginalIndex() < rhs->getOriginalIndex();
+    });
+    VPTOSUnit *selected = *best;
+    ready.erase(best);
+    if (failed(simulatedTracker.commit(*selected))) {
+      return failure();
+    }
+    ++candidate.lookaheadSteps;
+    candidate.lookaheadEnd.assign(simulatedTracker.getCurrent().begin(),
+                                  simulatedTracker.getCurrent().end());
+    for (auto [index, value] : llvm::enumerate(candidate.lookaheadEnd)) {
+      candidate.lookaheadPeak[index] =
+          std::max(candidate.lookaheadPeak[index], value);
+    }
+
+    ArrayRef<VPTOSchedEdge *> edges =
+        direction == VPTOSchedDirection::Top ? selected->getSuccessors()
+                                             : selected->getPredecessors();
+    for (VPTOSchedEdge *edge : edges) {
+      if (!budget.consume()) {
+        return failure();
+      }
+      if (!edge->isMust()) {
+        continue;
+      }
+      VPTOSUnit *neighbor = direction == VPTOSchedDirection::Top
+                               ? edge->getSuccessor()
+                               : edge->getPredecessor();
+      bool alreadyHandled =
+          boundary.isScheduled(neighbor) || queued.contains(neighbor);
+      if (alreadyHandled) {
+        continue;
+      }
+      auto [position, inserted] = remaining.try_emplace(
+          neighbor, boundary.getRemainingDependencyCount(*neighbor));
+      (void)inserted;
+      if (position->second == 0) {
+        continue;
+      }
+      --position->second;
+      if (position->second == 0) {
+        ready.push_back(neighbor);
+        queued.insert(neighbor);
+      }
+    }
+  }
+  return candidate;
 }
 
 static bool regionIsStillContiguous(const VPTOSchedRegion &region) {
@@ -76,7 +216,7 @@ static void setWorkBudgetFailure(VPTOScheduleFailure &failure,
 }
 
 static FailureOr<SmallVector<VPTOSchedCandidate>>
-buildCandidates(const VPTOSchedBoundary &boundary,
+buildCandidates(const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
                 VPTOSchedulingBudget &budget,
                 VPTOScheduleFailure &failure) {
   SmallVector<VPTOSchedCandidate> candidates;
@@ -86,27 +226,55 @@ buildCandidates(const VPTOSchedBoundary &boundary,
       setWorkBudgetFailure(failure, budget);
       return mlir::failure();
     }
-    candidates.push_back(buildCandidate(*unit, boundary));
+    FailureOr<VPTOSchedCandidate> candidate =
+        buildCandidate(*unit, boundary, model, budget);
+    if (failed(candidate)) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
+    candidates.push_back(std::move(*candidate));
   }
   return candidates;
 }
 
-static bool exceedsPressureLimit(const VPTOSchedCandidate &candidate) {
-  return llvm::any_of(candidate.pressure.projectedExcess,
-                      [](int64_t excess) { return excess > 0; });
+static bool increasesPressureRisk(
+    const VPTOSchedModel &model, ArrayRef<int64_t> currentPressure,
+    const VPTOSchedCandidate &candidate) {
+  for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
+    if (!pressureSet.limit) {
+      continue;
+    }
+    int64_t currentExcess = std::max<int64_t>(
+        0, currentPressure[index] - static_cast<int64_t>(*pressureSet.limit));
+    if (candidate.pressure.projectedExcess[index] > currentExcess) {
+      return true;
+    }
+    int64_t limit = static_cast<int64_t>(*pressureSet.limit);
+    bool critical = currentPressure[index] * 2 >= limit;
+    if (critical &&
+        candidate.pressure.projected[index] > currentPressure[index])
+      return true;
+  }
+  return false;
 }
 
-static bool allCandidatesExceedPressureLimits(
+static bool allCandidatesIncreasePressureRisk(
+    const VPTOSchedModel &model, ArrayRef<int64_t> currentPressure,
     ArrayRef<VPTOSchedCandidate> candidates) {
-  return !candidates.empty() && llvm::all_of(candidates, exceedsPressureLimit);
+  return !candidates.empty() &&
+         llvm::all_of(candidates, [&](const VPTOSchedCandidate &candidate) {
+           return increasesPressureRisk(model, currentPressure, candidate);
+         });
 }
 
 static FailureOr<bool>
 advanceForPressure(VPTOSchedBoundary &boundary,
                    ArrayRef<VPTOSchedCandidate> candidates,
+                   const VPTOSchedModel &model,
                    VPTOSchedulingBudget &budget,
                    VPTOScheduleFailure &failure) {
-  if (!allCandidatesExceedPressureLimits(candidates)) {
+  if (!allCandidatesIncreasePressureRisk(
+          model, boundary.getPressureTracker().getCurrent(), candidates)) {
     return false;
   }
   if (!boundary.getNextPending()) {
@@ -122,6 +290,7 @@ advanceForPressure(VPTOSchedBoundary &boundary,
 
 static LogicalResult replayPressureDrivenIdle(
     const VPTOScheduleEntry &entry, VPTOSchedBoundary &boundary,
+    const VPTOSchedModel &model,
     VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
   if (!entry.pressureDrivenIdle) {
     return success();
@@ -134,13 +303,14 @@ static LogicalResult replayPressureDrivenIdle(
       break;
     }
     FailureOr<SmallVector<VPTOSchedCandidate>> candidates =
-        buildCandidates(boundary, budget, failure);
+        buildCandidates(boundary, model, budget, failure);
     if (failed(candidates)) {
       return mlir::failure();
     }
-    if (!allCandidatesExceedPressureLimits(*candidates)) {
+    if (!allCandidatesIncreasePressureRisk(
+            model, boundary.getPressureTracker().getCurrent(), *candidates)) {
       setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
-                 "pressure idle occurred while a non-exceeding candidate was "
+                 "pressure idle occurred while a non-growing-risk candidate was "
                  "available");
       return mlir::failure();
     }
@@ -227,13 +397,13 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
       }
 
       FailureOr<SmallVector<VPTOSchedCandidate>> builtCandidates =
-          buildCandidates(boundary, budget, failure);
+          buildCandidates(boundary, model, budget, failure);
       if (failed(builtCandidates)) {
         return mlir::failure();
       }
       candidates = std::move(*builtCandidates);
       FailureOr<bool> advanced =
-          advanceForPressure(boundary, candidates, budget, failure);
+          advanceForPressure(boundary, candidates, model, budget, failure);
       if (failed(advanced)) {
         return mlir::failure();
       }
@@ -379,7 +549,8 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
       return mlir::failure();
     }
     if (failed(
-            replayPressureDrivenIdle(entry, boundary, budget, failure))) {
+            replayPressureDrivenIdle(entry, boundary, model, budget,
+                                     failure))) {
       return mlir::failure();
     }
     if (boundary.getAvailable().empty()) {

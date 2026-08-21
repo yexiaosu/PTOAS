@@ -42,6 +42,7 @@ public:
                          VPTOSchedDirection direction);
 
   VPTORegPressureEvaluation evaluate(const VPTOSUnit &unit) const;
+  void refreshSummary(VPTORegPressureEvaluation &evaluation) const;
   LogicalResult commit(const VPTOSUnit &unit);
 
   VPTOSchedDirection getDirection() const { return direction; }
@@ -58,7 +59,6 @@ private:
   void initializeBottom();
   VPTORegPressureEvaluation evaluateTop(const VPTOSUnit &unit) const;
   VPTORegPressureEvaluation evaluateBottom(const VPTOSUnit &unit) const;
-  void updateSummary(VPTORegPressureEvaluation &evaluation) const;
 
   const VPTOSchedModel &model;
   const VPTOSchedDAG &dag;

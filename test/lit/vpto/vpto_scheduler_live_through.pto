@@ -22,10 +22,10 @@
 // TRACE: vpto-scheduler: function=loop_live_through mode=on
 // TRACE: vpto-scheduler: region=0 before=block-start after=contains-regions nodes=12 edges=6 live-ins=5 live-outs=5
 // TRACE: vpto-scheduler: pressure node=0 delta={vector:0,predicate:1} current={vector:2,predicate:3} peak={vector:2,predicate:3}
-// TRACE: vpto-scheduler: schedule-result block=1 region=0 nodes=12 work-units={{[0-9]+}} pressure-idles=1 peak={vector:2,predicate:7}
+// TRACE: vpto-scheduler: schedule-result block=1 region=0 nodes=12 work-units={{[0-9]+}} pressure-idles=2 peak={vector:2,predicate:4}
 // TRACE: vpto-scheduler: region=1 before=contains-regions after=terminator nodes=12 edges=6 live-ins=5 live-outs=5
 // TRACE: vpto-scheduler: pressure node=0 delta={vector:0,predicate:1} current={vector:2,predicate:3} peak={vector:2,predicate:3}
-// TRACE: vpto-scheduler: schedule-result block=1 region=1 nodes=12 work-units={{[0-9]+}} pressure-idles=1 peak={vector:2,predicate:7}
+// TRACE: vpto-scheduler: schedule-result block=1 region=1 nodes=12 work-units={{[0-9]+}} pressure-idles=2 peak={vector:2,predicate:4}
 
 module attributes {pto.target_arch = "a5"} {
   func.func @loop_live_through(
