@@ -511,7 +511,8 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
   VPTOSchedCandidate consumer = makeStrategyCandidate(
       model, *units[2], 9, 2, nearLimitPressure, -1, 1, 0);
   VPTOScheduleContext nearLimitContext{
-      model, *fixture->dag, VPTOSchedDirection::Top, 0, nearLimitPressure};
+      model, *fixture->dag, VPTOSchedDirection::Top, 0, nearLimitPressure,
+      std::nullopt};
   FailureOr<VPTOSchedDecision> decision = strategy.pickCandidate(
       nearLimitContext, {producer, consumer}, detail);
   bool ok = check(succeeded(decision) && decision->unit == consumer.unit &&
@@ -529,7 +530,8 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
   consumer = makeStrategyCandidate(model, *units[2], 9, 2, lowPressure, -1, 1,
                                    0);
   VPTOScheduleContext lowPressureContext{
-      model, *fixture->dag, VPTOSchedDirection::Top, 0, lowPressure};
+      model, *fixture->dag, VPTOSchedDirection::Top, 0, lowPressure,
+      std::nullopt};
   decision =
       strategy.pickCandidate(lowPressureContext, {producer, consumer}, detail);
   ok = check(succeeded(decision) && decision->unit == producer.unit &&
@@ -546,7 +548,8 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
   consumer = makeStrategyCandidate(model, *units[2], 9, 2, atLimitPressure,
                                    -1, 1, 0);
   VPTOScheduleContext atLimitContext{
-      model, *fixture->dag, VPTOSchedDirection::Top, 0, atLimitPressure};
+      model, *fixture->dag, VPTOSchedDirection::Top, 0, atLimitPressure,
+      std::nullopt};
   decision =
       strategy.pickCandidate(atLimitContext, {producer, consumer}, detail);
   ok = check(succeeded(decision) && decision->unit == consumer.unit &&
@@ -572,6 +575,24 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
     return false;
   }
   llvm::outs() << "strategy urgent critical path: pass\n";
+
+  VPTOSchedCandidate outsideCone = makeStrategyCandidate(
+      model, *units[0], 10, 0, nearLimitPressure, 0, 0, 0);
+  VPTOSchedCandidate insideCone = makeStrategyCandidate(
+      model, *units[1], 10, 1, nearLimitPressure, 0, 0, 0);
+  insideCone.advancesPressureClosure = true;
+  VPTOScheduleContext closureContext = nearLimitContext;
+  closureContext.closurePressureSet = PredicatePressure;
+  decision = strategy.pickCandidate(closureContext,
+                                    {outsideCone, insideCone}, detail);
+  ok = check(succeeded(decision) && decision->unit == insideCone.unit &&
+                 decision->reason == "advance-pressure-closure",
+             "high-pressure strategy must advance the selected closure cone "
+             "when immediate pressure risk is equal");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "strategy closure-cone progress: pass\n";
 
   VPTOSchedCandidate later = makeStrategyCandidate(
       model, *units[0], 10, 7, lowPressure, 1, 0, 1);
