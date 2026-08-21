@@ -106,19 +106,63 @@ static void setStaticIndexedRange(OpTy op, VPTOMemoryAccess &access) {
   access.byteSize = *elementByteSize;
 }
 
+static void setStaticVectorRange(Value pointer, Value offset,
+                                 int64_t conservativeByteSize,
+                                 VPTOMemoryAccess &access) {
+  if (access.address != pointer) {
+    return;
+  }
+  std::optional<int64_t> elementOffset = getConstantOffset(offset);
+  std::optional<int64_t> elementByteSize = getElementByteSize(pointer);
+  if (!elementOffset || !elementByteSize) {
+    return;
+  }
+  int64_t byteOffset;
+  if (llvm::MulOverflow(*elementOffset, *elementByteSize, byteOffset)) {
+    return;
+  }
+  access.byteOffset = byteOffset;
+  // One vector register is 256 bytes. Distribution modes may access fewer
+  // bytes, so the full register width is a safe over-approximation for alias
+  // analysis; the x2 forms conservatively use two register widths.
+  access.byteSize = conservativeByteSize;
+}
+
 static void setStaticAccessRange(Operation *op, VPTOMemoryAccess &access) {
-  if (auto load = dyn_cast<PTOLoadOp>(op))
+  if (auto load = dyn_cast<PTOLoadOp>(op)) {
     return setStaticIndexedRange(load, access);
-  if (auto store = dyn_cast<PTOStoreOp>(op))
+  }
+  if (auto store = dyn_cast<PTOStoreOp>(op)) {
     return setStaticIndexedRange(store, access);
-  if (auto load = dyn_cast<PTOLdgOp>(op))
+  }
+  if (auto load = dyn_cast<PTOLdgOp>(op)) {
     return setStaticIndexedRange(load, access);
-  if (auto store = dyn_cast<PTOStgOp>(op))
+  }
+  if (auto store = dyn_cast<PTOStgOp>(op)) {
     return setStaticIndexedRange(store, access);
-  if (auto load = dyn_cast<PTOLdDevOp>(op))
+  }
+  if (auto load = dyn_cast<PTOLdDevOp>(op)) {
     return setStaticIndexedRange(load, access);
-  if (auto store = dyn_cast<PTOStDevOp>(op))
+  }
+  if (auto store = dyn_cast<PTOStDevOp>(op)) {
     return setStaticIndexedRange(store, access);
+  }
+  if (auto load = dyn_cast<VldsOp>(op)) {
+    return setStaticVectorRange(load.getSource(), load.getOffset(), 256,
+                                access);
+  }
+  if (auto store = dyn_cast<VstsOp>(op)) {
+    return setStaticVectorRange(store.getDestination(), store.getOffset(), 256,
+                                access);
+  }
+  if (auto load = dyn_cast<Vldsx2Op>(op)) {
+    return setStaticVectorRange(load.getSource(), load.getOffset(), 512,
+                                access);
+  }
+  if (auto store = dyn_cast<Vstsx2Op>(op)) {
+    return setStaticVectorRange(store.getDestination(), store.getOffset(), 512,
+                                access);
+  }
 }
 
 /// These operations have complete scheduler-specific state semantics and do

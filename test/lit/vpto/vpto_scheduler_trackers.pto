@@ -24,12 +24,13 @@
 // CHECK-NEXT: strategy deterministic tie-break: pass
 // CHECK-NEXT: model predicate-limit: 7
 // CHECK-NEXT: boundary independent-latency: pass
-// CHECK-NEXT: boundary fanout-budget-heap: pass
+// CHECK-NEXT: boundary fanout-budget-cycle-bucket: pass
 // CHECK-NEXT: scheduler verify-replay: pass
 // CHECK-NEXT: scheduler pressure-idle replay: pass
 // CHECK-NEXT: scheduler illegal pressure-idle rejection: pass
 // CHECK-NEXT: scheduler semantic rejection: pass
 // CHECK-NEXT: scheduler budget: pass
 // CHECK-NEXT: scheduler no-pending pressure progress: pass
+// CHECK-NEXT: scheduler over-limit pressure relief: pass
 // CHECK-NEXT: scheduler unbounded-pressure-delta: pass
 // CHECK-NEXT: scheduler random-dag differential: pass seeds=8 dags=8

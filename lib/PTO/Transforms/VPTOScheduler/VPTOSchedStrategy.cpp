@@ -25,17 +25,25 @@ struct RankedCandidate {
   bool exceedsLimit = false;
   int64_t excessGrowthCost = 0;
   int64_t projectedExcessCost = 0;
+  int64_t lookaheadExcessCost = 0;
+  int64_t lookaheadRiskCost = 0;
+  int64_t lookaheadEndCost = 0;
+  int64_t highPressureProjectedCost = 0;
+  int64_t highPressureReleaseCredit = 0;
   int64_t nearLimitProjectedCost = 0;
   int64_t nearLimitReleaseCredit = 0;
   int64_t pressureDeltaCost = 0;
   bool urgentCriticalPath = false;
+  bool opensPressureFrontier = false;
 };
 
 struct RankingContext {
   SmallVector<bool> nearLimitPressureSets;
+  SmallVector<bool> highPressureSets;
   unsigned longestCriticalPath = 0;
   unsigned urgentSlack = 0;
   bool hasNearLimitPressure = false;
+  bool hasHighPressure = false;
 };
 
 static bool checkedMultiplyAdd(int64_t lhs, int64_t rhs, int64_t &total) {
@@ -59,7 +67,9 @@ static bool hasCompletePressureResult(const VPTOScheduleContext &context,
          candidate.pressure.released.size() == pressureSetCount &&
          candidate.pressure.introduced.size() == pressureSetCount &&
          candidate.pressure.projected.size() == pressureSetCount &&
-         candidate.pressure.projectedExcess.size() == pressureSetCount;
+         candidate.pressure.projectedExcess.size() == pressureSetCount &&
+         candidate.lookaheadPeak.size() == pressureSetCount &&
+         candidate.lookaheadEnd.size() == pressureSetCount;
 }
 
 static FailureOr<RankingContext>
@@ -76,6 +86,7 @@ buildRankingContext(const VPTOScheduleContext &context,
 
   RankingContext rankingContext;
   rankingContext.nearLimitPressureSets.assign(pressureSets.size(), false);
+  rankingContext.highPressureSets.assign(pressureSets.size(), false);
   for (const VPTOSchedCandidate &candidate : candidates) {
     if (!candidate.unit || candidate.direction != context.direction ||
         candidate.issueCycle != context.issueCycle ||
@@ -107,20 +118,16 @@ buildRankingContext(const VPTOScheduleContext &context,
       continue;
     }
     int64_t limit = static_cast<int64_t>(*pressureSet.limit);
-    int64_t maxIntroduced = 0;
-    for (const VPTOSchedCandidate &candidate : candidates) {
-      int64_t introduced = candidate.pressure.introduced[index];
-      if (introduced < 0) {
-        detail = "candidate contains negative introduced pressure";
-        return failure();
-      }
-      maxIntroduced = std::max(maxIntroduced, introduced);
-    }
-    int64_t headroom =
-        std::max<int64_t>(0, limit - context.currentPressure[index]);
-    bool nearLimit = maxIntroduced > 0 && maxIntroduced >= headroom;
+    // Enter the pressure-critical state at half capacity. This is early
+    // enough to redirect a producer-heavy frontier before the next single
+    // instruction would spill, while risk bands still leave room for an
+    // urgent critical-path candidate when alternatives are equally safe.
+    bool nearLimit = context.currentPressure[index] * 2 >= limit;
+    bool highPressure = context.currentPressure[index] * 3 >= limit * 2;
     rankingContext.nearLimitPressureSets[index] = nearLimit;
+    rankingContext.highPressureSets[index] = highPressure;
     rankingContext.hasNearLimitPressure |= nearLimit;
+    rankingContext.hasHighPressure |= highPressure;
   }
   return rankingContext;
 }
@@ -144,6 +151,7 @@ rankCandidate(const VPTOScheduleContext &context,
 
   RankedCandidate rank;
   rank.candidate = &candidate;
+  rank.opensPressureFrontier = candidate.opensPressureFrontier;
   for (auto [index, pressureSet] : llvm::enumerate(pressureSets)) {
     if (pressureSet.weight < 0 || pressureSet.spillCost < 0 ||
         context.currentPressure[index] < 0 ||
@@ -205,6 +213,43 @@ rankCandidate(const VPTOScheduleContext &context,
       detail = "candidate near-limit pressure score overflow";
       return failure();
     }
+    if (rankingContext.highPressureSets[index] &&
+        (!checkedMultiplyAdd(pressureSet.spillCost,
+                             candidate.pressure.projected[index],
+                             rank.highPressureProjectedCost) ||
+         !checkedMultiplyAdd(pressureSet.spillCost,
+                             candidate.pressure.released[index],
+                             rank.highPressureReleaseCredit))) {
+      detail = "candidate high-pressure score overflow";
+      return failure();
+    }
+    if (rankingContext.nearLimitPressureSets[index]) {
+      int64_t limit = static_cast<int64_t>(*pressureSet.limit);
+      int64_t criticalThreshold = (limit + 1) / 2;
+      int64_t bandWidth =
+          std::max<int64_t>(1, (limit - criticalThreshold + 3) / 4);
+      int64_t lookaheadPeak = candidate.lookaheadPeak[index];
+      int64_t lookaheadEnd = candidate.lookaheadEnd[index];
+      if (lookaheadPeak < 0 || lookaheadEnd < 0) {
+        detail = "candidate contains negative lookahead pressure";
+        return failure();
+      }
+      int64_t lookaheadExcess =
+          std::max<int64_t>(0, lookaheadPeak - limit);
+      int64_t lookaheadRisk =
+          std::max<int64_t>(0, candidate.pressure.projected[index] -
+                                   criticalThreshold) /
+          bandWidth;
+      if (!checkedMultiplyAdd(pressureSet.spillCost, lookaheadExcess,
+                              rank.lookaheadExcessCost) ||
+          !checkedMultiplyAdd(pressureSet.weight, lookaheadRisk,
+                              rank.lookaheadRiskCost) ||
+          !checkedMultiplyAdd(pressureSet.weight, lookaheadEnd,
+                              rank.lookaheadEndCost)) {
+        detail = "candidate lookahead pressure score overflow";
+        return failure();
+      }
+    }
   }
   unsigned criticalPathSlack =
       rankingContext.longestCriticalPath - candidate.criticalPath;
@@ -214,7 +259,8 @@ rankCandidate(const VPTOScheduleContext &context,
 
 static bool isBetterCandidate(const RankedCandidate &lhs,
                               const RankedCandidate &rhs,
-                              bool hasNearLimitPressure) {
+                              bool hasNearLimitPressure,
+                              bool hasHighPressure) {
   if (lhs.exceedsLimit != rhs.exceedsLimit) {
     return !lhs.exceedsLimit;
   }
@@ -224,9 +270,29 @@ static bool isBetterCandidate(const RankedCandidate &lhs,
   if (lhs.projectedExcessCost != rhs.projectedExcessCost) {
     return lhs.projectedExcessCost < rhs.projectedExcessCost;
   }
+  if (hasHighPressure) {
+    if (lhs.highPressureProjectedCost != rhs.highPressureProjectedCost) {
+      return lhs.highPressureProjectedCost < rhs.highPressureProjectedCost;
+    }
+    if (lhs.highPressureReleaseCredit != rhs.highPressureReleaseCredit) {
+      return lhs.highPressureReleaseCredit > rhs.highPressureReleaseCredit;
+    }
+  }
   if (hasNearLimitPressure) {
+    if (lhs.lookaheadExcessCost != rhs.lookaheadExcessCost) {
+      return lhs.lookaheadExcessCost < rhs.lookaheadExcessCost;
+    }
+    if (lhs.lookaheadRiskCost != rhs.lookaheadRiskCost) {
+      return lhs.lookaheadRiskCost < rhs.lookaheadRiskCost;
+    }
     if (lhs.urgentCriticalPath != rhs.urgentCriticalPath) {
       return lhs.urgentCriticalPath;
+    }
+    if (lhs.opensPressureFrontier != rhs.opensPressureFrontier) {
+      return !lhs.opensPressureFrontier;
+    }
+    if (lhs.lookaheadEndCost != rhs.lookaheadEndCost) {
+      return lhs.lookaheadEndCost < rhs.lookaheadEndCost;
     }
     if (lhs.nearLimitProjectedCost != rhs.nearLimitProjectedCost) {
       return lhs.nearLimitProjectedCost < rhs.nearLimitProjectedCost;
@@ -246,7 +312,8 @@ static bool isBetterCandidate(const RankedCandidate &lhs,
 
 static StringRef getDecisionReason(const RankedCandidate &selected,
                                    const RankedCandidate &runnerUp,
-                                   bool hasNearLimitPressure) {
+                                   bool hasNearLimitPressure,
+                                   bool hasHighPressure) {
   if (selected.exceedsLimit != runnerUp.exceedsLimit) {
     return "pressure-safe-candidate";
   }
@@ -256,9 +323,31 @@ static StringRef getDecisionReason(const RankedCandidate &selected,
   if (selected.projectedExcessCost != runnerUp.projectedExcessCost) {
     return "lower-projected-excess";
   }
+  if (hasHighPressure) {
+    if (selected.highPressureProjectedCost !=
+        runnerUp.highPressureProjectedCost) {
+      return "high-pressure-preserving";
+    }
+    if (selected.highPressureReleaseCredit !=
+        runnerUp.highPressureReleaseCredit) {
+      return "high-pressure-live-range-closing";
+    }
+  }
   if (hasNearLimitPressure) {
+    if (selected.lookaheadExcessCost != runnerUp.lookaheadExcessCost) {
+      return "bounded-lookahead-avoids-excess";
+    }
+    if (selected.lookaheadRiskCost != runnerUp.lookaheadRiskCost) {
+      return "bounded-lookahead-lower-risk";
+    }
     if (selected.urgentCriticalPath != runnerUp.urgentCriticalPath) {
       return "urgent-critical-path";
+    }
+    if (selected.opensPressureFrontier != runnerUp.opensPressureFrontier) {
+      return "continue-open-pressure-frontier";
+    }
+    if (selected.lookaheadEndCost != runnerUp.lookaheadEndCost) {
+      return "bounded-lookahead-lower-ending-pressure";
     }
     if (selected.nearLimitProjectedCost != runnerUp.nearLimitProjectedCost) {
       if (selected.nearLimitReleaseCredit >
@@ -314,7 +403,8 @@ VPTODefaultSchedStrategy::pickCandidate(const VPTOScheduleContext &context,
   const RankedCandidate *selected = &ranks.front();
   for (const RankedCandidate &rank : llvm::drop_begin(ranks)) {
     if (isBetterCandidate(rank, *selected,
-                          rankingContext->hasNearLimitPressure)) {
+                          rankingContext->hasNearLimitPressure,
+                          rankingContext->hasHighPressure)) {
       selected = &rank;
     }
   }
@@ -325,14 +415,16 @@ VPTODefaultSchedStrategy::pickCandidate(const VPTOScheduleContext &context,
       continue;
     }
     if (!runnerUp || isBetterCandidate(rank, *runnerUp,
-                                       rankingContext->hasNearLimitPressure)) {
+                                       rankingContext->hasNearLimitPressure,
+                                       rankingContext->hasHighPressure)) {
       runnerUp = &rank;
     }
   }
 
   StringRef reason = runnerUp ? getDecisionReason(
                                     *selected, *runnerUp,
-                                    rankingContext->hasNearLimitPressure)
+                                    rankingContext->hasNearLimitPressure,
+                                    rankingContext->hasHighPressure)
                               : StringRef("only-candidate");
   const VPTOSchedCandidate &candidate = *selected->candidate;
   return VPTOSchedDecision{candidate.unit, candidate.direction,

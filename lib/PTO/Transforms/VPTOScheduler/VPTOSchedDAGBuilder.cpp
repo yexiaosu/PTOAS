@@ -12,6 +12,7 @@
 
 #include "PTO/IR/PTO.h"
 
+#include "mlir/IR/Matchers.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -106,7 +107,85 @@ namespace {
 struct ResolvedMemoryAccess {
   VPTOMemoryAccess semantics;
   Value aliasRoot;
+  std::optional<int64_t> absoluteByteOffset;
 };
+
+static std::optional<int64_t> getConstantInteger(Value value) {
+  IntegerAttr constant;
+  bool invalidConstant = !value ||
+                         !matchPattern(value, m_Constant(&constant)) ||
+                         !constant.getValue().isSignedIntN(64);
+  if (invalidConstant) {
+    return std::nullopt;
+  }
+  return constant.getValue().getSExtValue();
+}
+
+/// Resolve the byte address represented by the pointer-producing operations
+/// that are explicit at the VPTO scheduling boundary. Keep all other pointer
+/// transforms conservative: their layout may not be expressible as one
+/// constant byte displacement.
+static std::optional<int64_t> getConstantPointerAddress(Value value) {
+  SmallPtrSet<Operation *, 8> visited;
+  int64_t displacement = 0;
+  while (Operation *definingOp = value.getDefiningOp()) {
+    if (!visited.insert(definingOp).second) {
+      return std::nullopt;
+    }
+    if (auto cast = dyn_cast<CastPtrOp>(definingOp)) {
+      Value input = cast.getInput();
+      if (std::optional<int64_t> address = getConstantInteger(input)) {
+        int64_t absoluteAddress;
+        if (llvm::AddOverflow(*address, displacement, absoluteAddress)) {
+          return std::nullopt;
+        }
+        return absoluteAddress;
+      }
+      if (!isa<PtrType>(input.getType())) {
+        return std::nullopt;
+      }
+      value = input;
+      continue;
+    }
+    if (auto intToPtr = dyn_cast<IntToPtrOp>(definingOp)) {
+      std::optional<int64_t> address = getConstantInteger(intToPtr.getAddr());
+      if (!address) {
+        return std::nullopt;
+      }
+      int64_t absoluteAddress;
+      if (llvm::AddOverflow(*address, displacement, absoluteAddress)) {
+        return std::nullopt;
+      }
+      return absoluteAddress;
+    }
+    if (auto addPtr = dyn_cast<AddPtrOp>(definingOp)) {
+      std::optional<int64_t> elementOffset =
+          getConstantInteger(addPtr.getOffset());
+      auto pointerType = dyn_cast<PtrType>(addPtr.getPtr().getType());
+      if (!elementOffset || !pointerType) {
+        return std::nullopt;
+      }
+      Type elementType = pointerType.getElementType();
+      bool invalidElementType = !elementType.isIntOrFloat() ||
+                                elementType.getIntOrFloatBitWidth() % 8 != 0;
+      if (invalidElementType) {
+        return std::nullopt;
+      }
+      int64_t byteOffset;
+      if (llvm::MulOverflow(
+              *elementOffset,
+              static_cast<int64_t>(elementType.getIntOrFloatBitWidth() / 8),
+              byteOffset) ||
+          llvm::AddOverflow(displacement, byteOffset, displacement)) {
+        return std::nullopt;
+      }
+      value = addPtr.getPtr();
+      continue;
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
 
 static Value getAliasRoot(Value value) {
   SmallPtrSet<Operation *, 8> visited;
@@ -127,12 +206,20 @@ resolveMemoryAccesses(const VPTOSchedulingSemantics &semantics) {
   SmallVector<ResolvedMemoryAccess> accesses;
   accesses.reserve(semantics.memoryAccesses.size());
   for (const VPTOMemoryAccess &memoryAccess : semantics.memoryAccesses) {
-    ResolvedMemoryAccess access{memoryAccess, {}};
+    ResolvedMemoryAccess access{memoryAccess, {}, std::nullopt};
     if (access.semantics.address) {
+      std::optional<int64_t> pointerAddress =
+          getConstantPointerAddress(access.semantics.address);
+      if (pointerAddress && access.semantics.byteOffset) {
+        int64_t absoluteByteOffset;
+        if (!llvm::AddOverflow(*pointerAddress,
+                               *access.semantics.byteOffset,
+                               absoluteByteOffset))
+          access.absoluteByteOffset = absoluteByteOffset;
+      }
       access.aliasRoot = getAliasRoot(access.semantics.address);
       if (access.aliasRoot != access.semantics.address) {
         access.semantics.byteOffset.reset();
-        access.semantics.byteSize.reset();
       }
     }
     accesses.push_back(std::move(access));
@@ -147,6 +234,17 @@ static bool mayAlias(const ResolvedMemoryAccess &lhs,
     return false;
   if (!lhs.semantics.address || !rhs.semantics.address)
     return true;
+  if (lhs.absoluteByteOffset && lhs.semantics.byteSize &&
+      rhs.absoluteByteOffset && rhs.semantics.byteSize) {
+    int64_t lhsEnd;
+    int64_t rhsEnd;
+    if (!llvm::AddOverflow(*lhs.absoluteByteOffset, *lhs.semantics.byteSize,
+                           lhsEnd) &&
+        !llvm::AddOverflow(*rhs.absoluteByteOffset, *rhs.semantics.byteSize,
+                           rhsEnd))
+      return *lhs.absoluteByteOffset < rhsEnd &&
+             *rhs.absoluteByteOffset < lhsEnd;
+  }
   if (lhs.aliasRoot == rhs.aliasRoot && lhs.semantics.byteOffset &&
       lhs.semantics.byteSize && rhs.semantics.byteOffset &&
       rhs.semantics.byteSize) {
@@ -196,43 +294,58 @@ LogicalResult VPTOSchedDAGBuilder::buildMemoryEdges(
     accesses.push_back(resolveMemoryAccesses(unit->getSemantics()));
   }
 
-  for (size_t successorIndex = 0; successorIndex < accesses.size();
-       ++successorIndex) {
-    if (accesses[successorIndex].empty())
+  struct FrontierAccess {
+    VPTOSUnit *unit = nullptr;
+    ResolvedMemoryAccess access;
+  };
+  SmallVector<FrontierAccess> frontier;
+  for (auto indexedAccesses : llvm::enumerate(accesses)) {
+    size_t unitIndex = indexedAccesses.index();
+    ArrayRef<ResolvedMemoryAccess> currentAccesses = indexedAccesses.value();
+    if (currentAccesses.empty()) {
       continue;
-    for (size_t predecessorIndex = 0; predecessorIndex < successorIndex;
-         ++predecessorIndex) {
-      if (failed(consumeWork(failure))) {
-        return mlir::failure();
-      }
-      bool ordered = false;
-      for (const ResolvedMemoryAccess &predecessor :
-           accesses[predecessorIndex]) {
-        for (const ResolvedMemoryAccess &successor :
-             accesses[successorIndex]) {
-          if (failed(consumeWork(failure))) {
-            return mlir::failure();
-          }
-          if (needsMemoryOrder(predecessor, successor)) {
-            ordered = true;
-            break;
-          }
+    }
+    VPTOSUnit *unit = dag.getUnits()[unitIndex].get();
+    SmallPtrSet<VPTOSUnit *, 8> predecessors;
+    for (const FrontierAccess &prior : frontier) {
+      for (const ResolvedMemoryAccess &current : currentAccesses) {
+        if (failed(consumeWork(failure))) {
+          return mlir::failure();
         }
-        if (ordered) {
+        if (needsMemoryOrder(prior.access, current)) {
+          predecessors.insert(prior.unit);
           break;
         }
       }
-      if (!ordered)
-        continue;
-      if (failed(addEdge(dag, *dag.getUnits()[predecessorIndex],
-                         *dag.getUnits()[successorIndex],
+    }
+    for (VPTOSUnit *predecessor : predecessors) {
+      if (failed(addEdge(dag, *predecessor, *unit,
                          VPTOSchedEdgeKind::Memory,
                          VPTOSchedEdgeStrength::Must,
                          /*latency=*/0,
-                         "may-alias memory access in original order",
+                         "may-alias memory frontier in original order",
                          failure))) {
         return mlir::failure();
       }
+    }
+
+    // A write (or ordered/unknown access) subsumes every may-alias frontier
+    // entry because the edges above already preserve those earlier accesses
+    // through this unit. Read-only accesses remain side by side until a later
+    // write joins them, preserving WAR while avoiding transitive edges.
+    llvm::erase_if(frontier, [&](const FrontierAccess &prior) {
+      return llvm::any_of(currentAccesses,
+                          [&](const ResolvedMemoryAccess &current) {
+                            bool closesFrontier =
+                                current.semantics.writes ||
+                                current.semantics.ordered ||
+                                current.semantics.unknown;
+                            return closesFrontier &&
+                                   mayAlias(prior.access, current);
+                          });
+    });
+    for (const ResolvedMemoryAccess &current : currentAccesses) {
+      frontier.push_back({unit, current});
     }
   }
   return success();

@@ -98,7 +98,7 @@ VPTORegPressureTracker::evaluateTop(const VPTOSUnit &unit) const {
       addValuePressure(result, 1, evaluation.introduced);
     }
   }
-  updateSummary(evaluation);
+  refreshSummary(evaluation);
   return evaluation;
 }
 
@@ -121,11 +121,11 @@ VPTORegPressureTracker::evaluateBottom(const VPTOSUnit &unit) const {
       addValuePressure(operand, 1, evaluation.introduced);
     }
   }
-  updateSummary(evaluation);
+  refreshSummary(evaluation);
   return evaluation;
 }
 
-void VPTORegPressureTracker::updateSummary(
+void VPTORegPressureTracker::refreshSummary(
     VPTORegPressureEvaluation &evaluation) const {
   evaluation.projected.resize(current.size());
   evaluation.projectedExcess.assign(current.size(), 0);
