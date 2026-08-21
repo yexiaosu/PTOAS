@@ -28,15 +28,21 @@ using namespace mlir::pto;
 
 namespace {
 
-struct PressureClosureCone {
+struct PressureClosureGroup {
   VPTOSUnit *target = nullptr;
   std::optional<unsigned> pressureSet;
   DenseSet<VPTOSUnit *> units;
+  SmallVector<int64_t, 2> peak;
+  SmallVector<int64_t, 2> end;
+  unsigned steps = 0;
 
   void clear() {
     target = nullptr;
     pressureSet.reset();
     units.clear();
+    peak.clear();
+    end.clear();
+    steps = 0;
   }
 };
 
@@ -89,7 +95,7 @@ static int64_t getEvaluationPressure(
 static FailureOr<VPTOSchedCandidate>
 buildCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
                const VPTOSchedModel &model, VPTOSchedulingBudget &budget,
-               const PressureClosureCone *closureCone = nullptr) {
+               const PressureClosureGroup *closureGroup = nullptr) {
   VPTOSchedDirection direction = boundary.getDirection();
   unsigned criticalPath =
       direction == VPTOSchedDirection::Top ? unit.getHeight() : unit.getDepth();
@@ -111,7 +117,10 @@ buildCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
       llvm::all_of(pressure.released,
                    [](int64_t value) { return value == 0; });
   candidate.advancesPressureClosure =
-      closureCone && closureCone->units.contains(&unit);
+      closureGroup && closureGroup->units.contains(&unit);
+  if (closureGroup && closureGroup->target) {
+    return candidate;
+  }
   if (!isCriticalPressure(boundary, model)) {
     return candidate;
   }
@@ -230,7 +239,7 @@ static void setWorkBudgetFailure(VPTOScheduleFailure &failure,
              {}};
 }
 
-static bool isHighPressureSet(const VPTOSchedBoundary &boundary,
+static bool isNearPressureSet(const VPTOSchedBoundary &boundary,
                               ArrayRef<VPTORegPressureSet> pressureSets,
                               unsigned index) {
   bool invalidIndex = index >= pressureSets.size();
@@ -240,7 +249,7 @@ static bool isHighPressureSet(const VPTOSchedBoundary &boundary,
   }
   int64_t current = boundary.getPressureTracker().getCurrent()[index];
   int64_t limit = static_cast<int64_t>(*pressureSets[index].limit);
-  return current * 3 >= limit * 2;
+  return current * 2 >= limit;
 }
 
 static std::optional<unsigned>
@@ -249,7 +258,7 @@ selectHighestPressureSet(const VPTOSchedBoundary &boundary,
   std::optional<unsigned> selected;
   ArrayRef<int64_t> current = boundary.getPressureTracker().getCurrent();
   for (unsigned index = 0; index < pressureSets.size(); ++index) {
-    if (!isHighPressureSet(boundary, pressureSets, index)) {
+    if (!isNearPressureSet(boundary, pressureSets, index)) {
       continue;
     }
     if (!selected) {
@@ -285,125 +294,394 @@ static bool valueContributesToPressureSet(const VPTOSchedModel &model,
       });
 }
 
-static LogicalResult findPressureClosureTarget(
+static LogicalResult collectPressureClosureBundles(
     const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
     const VPTOSchedDAG &dag, unsigned pressureSet,
-    VPTOSchedulingBudget &budget, VPTOSUnit *&target) {
-  unsigned targetDependencies = std::numeric_limits<unsigned>::max();
-  DenseSet<VPTOSUnit *> checkedUsers;
+    VPTOSchedulingBudget &budget,
+    SmallVectorImpl<SmallVector<Value, 2>> &bundles) {
+  constexpr unsigned kMaxClosureTargetBundles = 1;
+  constexpr unsigned kMaxClosureDirectUsers = 8;
   VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
-  for (Value value : boundary.getPressureTracker().getLiveValues()) {
+  const VPTORegPressureTracker &tracker = boundary.getPressureTracker();
+  SmallVector<Value> liveValues(tracker.getLiveValues().begin(),
+                                tracker.getLiveValues().end());
+  llvm::sort(liveValues, [&](Value lhs, Value rhs) {
+    VPTOSUnit *lhsUnit =
+        lhs.getDefiningOp() ? dag.lookup(lhs.getDefiningOp()) : nullptr;
+    VPTOSUnit *rhsUnit =
+        rhs.getDefiningOp() ? dag.lookup(rhs.getDefiningOp()) : nullptr;
+    unsigned lhsIndex = lhsUnit ? lhsUnit->getOriginalIndex()
+                                : std::numeric_limits<unsigned>::max();
+    unsigned rhsIndex = rhsUnit ? rhsUnit->getOriginalIndex()
+                                : std::numeric_limits<unsigned>::max();
+    if (lhsIndex != rhsIndex) {
+      return lhsIndex < rhsIndex;
+    }
+    auto lhsResult = dyn_cast<OpResult>(lhs);
+    auto rhsResult = dyn_cast<OpResult>(rhs);
+    if (lhsResult && rhsResult) {
+      return lhsResult.getResultNumber() < rhsResult.getResultNumber();
+    }
+    auto lhsLiveIn = llvm::find(dag.getLiveIns(), lhs);
+    auto rhsLiveIn = llvm::find(dag.getLiveIns(), rhs);
+    return lhsLiveIn < rhsLiveIn;
+  });
+
+  DenseSet<Operation *> checkedDefinitions;
+  for (Value value : liveValues) {
     if (!budget.consume()) {
       return failure();
     }
     if (!valueContributesToPressureSet(model, value, pressureSetID)) {
       continue;
     }
-    for (Operation *user : value.getUsers()) {
-      if (!budget.consume()) {
-        return failure();
-      }
-      VPTOSUnit *unit = dag.lookup(user);
-      bool skipUser = !unit || boundary.isScheduled(unit) ||
-                      !checkedUsers.insert(unit).second;
-      if (skipUser) {
+    SmallVector<Value, 2> bundle;
+    Operation *definingOp = value.getDefiningOp();
+    VPTOSUnit *definingUnit = definingOp ? dag.lookup(definingOp) : nullptr;
+    if (definingUnit) {
+      if (!checkedDefinitions.insert(definingOp).second) {
         continue;
       }
-      VPTORegPressureEvaluation evaluation =
-          boundary.getPressureTracker().evaluate(*unit);
-      if (evaluation.released[pressureSet] == 0) {
-        continue;
+      for (Value result : definingOp->getResults()) {
+        bool isLiveInPressureSet =
+            tracker.isLive(result) &&
+            valueContributesToPressureSet(model, result, pressureSetID);
+        if (isLiveInPressureSet) {
+          bundle.push_back(result);
+        }
       }
-      unsigned dependencies = boundary.getRemainingDependencyCount(*unit);
-      bool isCloser = dependencies < targetDependencies;
-      bool isEarlier = dependencies == targetDependencies && target &&
-                       unit->getOriginalIndex() < target->getOriginalIndex();
-      if (!target || isCloser || isEarlier) {
-        target = unit;
-        targetDependencies = dependencies;
+    } else {
+      bundle.push_back(value);
+    }
+
+    DenseSet<VPTOSUnit *> users;
+    bool hasUnscheduledUser = false;
+    for (Value targetValue : bundle) {
+      for (Operation *user : targetValue.getUsers()) {
+        if (!budget.consume()) {
+          return failure();
+        }
+        VPTOSUnit *unit = dag.lookup(user);
+        if (unit) {
+          users.insert(unit);
+          hasUnscheduledUser |= !boundary.isScheduled(unit);
+        }
       }
+    }
+    bool hasTooManyUsers = users.size() > kMaxClosureDirectUsers;
+    if (!hasUnscheduledUser || hasTooManyUsers) {
+      continue;
+    }
+    bundles.push_back(std::move(bundle));
+    bool reachedBundleLimit = bundles.size() == kMaxClosureTargetBundles;
+    if (reachedBundleLimit) {
+      break;
     }
   }
   return success();
 }
 
-static LogicalResult populatePressureClosureCone(
-    VPTOSUnit &target, const VPTOSchedBoundary &boundary,
-    VPTOSchedulingBudget &budget, PressureClosureCone &closureCone) {
-  SmallVector<VPTOSUnit *> worklist{&target};
+static bool isBetterClosureGroup(const PressureClosureGroup &candidate,
+                                 const PressureClosureGroup &selected,
+                                 unsigned pressureSet) {
+  if (candidate.peak[pressureSet] != selected.peak[pressureSet]) {
+    return candidate.peak[pressureSet] < selected.peak[pressureSet];
+  }
+  if (candidate.end[pressureSet] != selected.end[pressureSet]) {
+    return candidate.end[pressureSet] < selected.end[pressureSet];
+  }
+  if (candidate.steps != selected.steps) {
+    return candidate.steps < selected.steps;
+  }
+  return candidate.target->getOriginalIndex() <
+         selected.target->getOriginalIndex();
+}
+
+struct PressureClosureSimulation {
+  SmallVector<VPTOSUnit *, 8> ready;
+  DenseMap<VPTOSUnit *, unsigned> remaining;
+  DenseSet<VPTOSUnit *> discovered;
+  DenseSet<VPTOSUnit *> expanded;
+  DenseSet<VPTOSUnit *> enqueued;
+  DenseSet<VPTOSUnit *> core;
+  DenseSet<VPTOSUnit *> scheduled;
+};
+
+static LogicalResult discoverClosureUnit(
+    VPTOSUnit &root, bool isCore, const VPTOSchedBoundary &boundary,
+    VPTOSchedulingBudget &budget, PressureClosureSimulation &simulation) {
+  SmallVector<std::pair<VPTOSUnit *, bool>, 8> worklist{{&root, isCore}};
   while (!worklist.empty()) {
     if (!budget.consume()) {
       return failure();
     }
-    VPTOSUnit *unit = worklist.pop_back_val();
-    bool skipUnit =
-        boundary.isScheduled(unit) || !closureCone.units.insert(unit).second;
-    if (skipUnit) {
+    auto [unit, coreUnit] = worklist.pop_back_val();
+    if (boundary.isScheduled(unit)) {
       continue;
     }
-    ArrayRef<VPTOSchedEdge *> edges =
-        boundary.getDirection() == VPTOSchedDirection::Top
-            ? unit->getPredecessors()
-            : unit->getSuccessors();
-    for (VPTOSchedEdge *edge : edges) {
+    if (coreUnit) {
+      simulation.core.insert(unit);
+    }
+    simulation.discovered.insert(unit);
+    auto found = simulation.remaining.find(unit);
+    if (found == simulation.remaining.end()) {
+      unsigned dependencies = boundary.getRemainingDependencyCount(*unit);
+      for (VPTOSchedEdge *edge : unit->getPredecessors()) {
+        if (!budget.consume()) {
+          return failure();
+        }
+        bool dependencyAlreadySelected =
+            edge->isMust() &&
+            simulation.scheduled.contains(edge->getPredecessor());
+        if (dependencyAlreadySelected) {
+          if (dependencies == 0) {
+            return failure();
+          }
+          --dependencies;
+        }
+      }
+      found = simulation.remaining.try_emplace(unit, dependencies).first;
+    }
+    auto position = found;
+    if (position->second == 0) {
+      if (simulation.enqueued.insert(unit).second) {
+        simulation.ready.push_back(unit);
+      }
+      continue;
+    }
+    if (!simulation.expanded.insert(unit).second) {
+      continue;
+    }
+    for (VPTOSchedEdge *edge : unit->getPredecessors()) {
       if (!budget.consume()) {
         return failure();
       }
-      if (!edge->isMust()) {
+      bool isDataDependency =
+          edge->isMust() && edge->getKind() == VPTOSchedEdgeKind::Data;
+      if (!isDataDependency) {
         continue;
       }
-      VPTOSUnit *dependency =
-          boundary.getDirection() == VPTOSchedDirection::Top
-              ? edge->getPredecessor()
-              : edge->getSuccessor();
-      if (!boundary.isScheduled(dependency)) {
-        worklist.push_back(dependency);
+      VPTOSUnit *predecessor = edge->getPredecessor();
+      bool needsPredecessor = !boundary.isScheduled(predecessor) &&
+                              !simulation.discovered.contains(predecessor);
+      if (needsPredecessor) {
+        worklist.push_back({predecessor, false});
       }
     }
   }
   return success();
 }
 
+static FailureOr<int64_t> getLiveSupportPressure(
+    const PressureClosureSimulation &simulation,
+    const VPTORegPressureTracker &tracker, const VPTOSchedModel &model,
+    unsigned pressureSet, VPTOSchedulingBudget &budget) {
+  VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
+  int64_t pressure = 0;
+  for (VPTOSUnit *unit : simulation.scheduled) {
+    if (simulation.core.contains(unit)) {
+      continue;
+    }
+    for (Value result : unit->getOperation()->getResults()) {
+      if (!budget.consume()) {
+        return failure();
+      }
+      if (!tracker.isLive(result)) {
+        continue;
+      }
+      for (const VPTORegPressureContribution &contribution :
+           model.getPressure(result)) {
+        if (contribution.pressureSet != pressureSetID) {
+          continue;
+        }
+        int64_t updated = 0;
+        if (llvm::AddOverflow(
+                pressure, static_cast<int64_t>(contribution.units), updated)) {
+          return failure();
+        }
+        pressure = updated;
+      }
+    }
+  }
+  return pressure;
+}
+
+static FailureOr<bool> populatePressureClosureGroup(
+    ArrayRef<Value> targetValues, const VPTOSchedBoundary &boundary,
+    const VPTOSchedModel &model, const VPTOSchedDAG &dag,
+    unsigned pressureSet, VPTOSchedulingBudget &budget,
+    PressureClosureGroup &group) {
+  constexpr unsigned kMaxClosureGroupNodes = 96;
+  VPTORegPressureTracker simulatedTracker = boundary.getPressureTracker();
+  ArrayRef<int64_t> initialPressure = simulatedTracker.getCurrent();
+  ArrayRef<VPTORegPressureSet> pressureSets = model.getPressureSets();
+  int64_t start = initialPressure[pressureSet];
+  int64_t limit = static_cast<int64_t>(*pressureSets[pressureSet].limit);
+
+  PressureClosureSimulation simulation;
+  for (Value targetValue : targetValues) {
+    for (Operation *user : targetValue.getUsers()) {
+      if (!budget.consume()) {
+        return failure();
+      }
+      VPTOSUnit *unit = dag.lookup(user);
+      if (!unit || boundary.isScheduled(unit)) {
+        continue;
+      }
+      if (failed(discoverClosureUnit(*unit, true, boundary, budget,
+                                     simulation))) {
+        return failure();
+      }
+    }
+  }
+
+  group.clear();
+  group.pressureSet = pressureSet;
+  group.peak.assign(initialPressure.begin(), initialPressure.end());
+  group.end.assign(initialPressure.begin(), initialPressure.end());
+  for (unsigned step = 0;
+       step < kMaxClosureGroupNodes && !simulation.ready.empty(); ++step) {
+    if (!budget.consume(simulation.ready.size())) {
+      return failure();
+    }
+    auto best = llvm::min_element(
+        simulation.ready, [&](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+          VPTORegPressureEvaluation lhsEvaluation =
+              simulatedTracker.evaluate(*lhs);
+          VPTORegPressureEvaluation rhsEvaluation =
+              simulatedTracker.evaluate(*rhs);
+          int64_t lhsExcess =
+              getEvaluationExcess(lhsEvaluation, pressureSets);
+          int64_t rhsExcess =
+              getEvaluationExcess(rhsEvaluation, pressureSets);
+          if (lhsExcess != rhsExcess) {
+            return lhsExcess < rhsExcess;
+          }
+          int64_t lhsPressure =
+              getEvaluationPressure(lhsEvaluation, pressureSets);
+          int64_t rhsPressure =
+              getEvaluationPressure(rhsEvaluation, pressureSets);
+          if (lhsPressure != rhsPressure) {
+            return lhsPressure < rhsPressure;
+          }
+          return lhs->getOriginalIndex() < rhs->getOriginalIndex();
+        });
+    VPTOSUnit *selected = *best;
+    simulation.ready.erase(best);
+    if (failed(simulatedTracker.commit(*selected))) {
+      return failure();
+    }
+    simulation.scheduled.insert(selected);
+    group.units.insert(selected);
+    group.target = selected;
+    ++group.steps;
+    group.end.assign(simulatedTracker.getCurrent().begin(),
+                     simulatedTracker.getCurrent().end());
+    for (auto [index, pressure] : llvm::enumerate(group.end)) {
+      group.peak[index] = std::max(group.peak[index], pressure);
+    }
+
+    bool targetsAreDead = llvm::all_of(targetValues, [&](Value value) {
+      return !simulatedTracker.isLive(value);
+    });
+    bool avoidsNewExcess = group.peak[pressureSet] <= std::max(start, limit);
+    if (targetsAreDead && avoidsNewExcess) {
+      FailureOr<int64_t> supportPressure = getLiveSupportPressure(
+          simulation, simulatedTracker, model, pressureSet, budget);
+      if (failed(supportPressure)) {
+        return failure();
+      }
+      if (*supportPressure > group.end[pressureSet]) {
+        return failure();
+      }
+      bool closesWithoutNetGrowth =
+          group.end[pressureSet] - *supportPressure <= start;
+      if (closesWithoutNetGrowth) {
+        return true;
+      }
+    }
+
+    for (VPTOSchedEdge *edge : selected->getSuccessors()) {
+      if (!budget.consume()) {
+        return failure();
+      }
+      bool isDataDependency =
+          edge->isMust() && edge->getKind() == VPTOSchedEdgeKind::Data;
+      if (!isDataDependency) {
+        continue;
+      }
+      VPTOSUnit *successor = edge->getSuccessor();
+      if (boundary.isScheduled(successor)) {
+        continue;
+      }
+      bool followsClosure = simulation.core.contains(selected);
+      bool alreadyDiscovered = simulation.discovered.contains(successor);
+      if (!followsClosure && !alreadyDiscovered) {
+        continue;
+      }
+      if (followsClosure) {
+        simulation.core.insert(successor);
+      }
+      simulation.discovered.insert(successor);
+      auto position = simulation.remaining.find(successor);
+      if (position != simulation.remaining.end()) {
+        if (position->second == 0) {
+          continue;
+        }
+        --position->second;
+      }
+      if (failed(discoverClosureUnit(*successor, followsClosure, boundary,
+                                     budget, simulation))) {
+        return failure();
+      }
+    }
+  }
+  return false;
+}
+
 static LogicalResult
-refreshPressureClosureCone(PressureClosureCone &closureCone,
-                           const VPTOSchedBoundary &boundary,
-                           const VPTOSchedModel &model,
-                           const VPTOSchedDAG &dag,
-                           VPTOSchedulingBudget &budget) {
+refreshPressureClosureGroup(PressureClosureGroup &closureGroup,
+                            const VPTOSchedBoundary &boundary,
+                            const VPTOSchedModel &model,
+                            const VPTOSchedDAG &dag,
+                            VPTOSchedulingBudget &budget) {
   ArrayRef<VPTORegPressureSet> pressureSets = model.getPressureSets();
   std::optional<unsigned> pressureSet =
       selectHighestPressureSet(boundary, pressureSets);
   bool keepsCurrentClosure =
-      closureCone.target && closureCone.pressureSet &&
-      !boundary.isScheduled(closureCone.target) &&
-      pressureSet == closureCone.pressureSet;
+      closureGroup.target && closureGroup.pressureSet &&
+      !boundary.isScheduled(closureGroup.target) &&
+      pressureSet == closureGroup.pressureSet;
   if (keepsCurrentClosure) {
     return success();
   }
-  closureCone.clear();
+  closureGroup.clear();
 
   if (!pressureSet) {
     return success();
   }
 
-  VPTOSUnit *target = nullptr;
-  LogicalResult foundTarget = findPressureClosureTarget(
-      boundary, model, dag, *pressureSet, budget, target);
-  if (failed(foundTarget)) {
+  SmallVector<SmallVector<Value, 2>, 2> bundles;
+  LogicalResult collected = collectPressureClosureBundles(
+      boundary, model, dag, *pressureSet, budget, bundles);
+  if (failed(collected)) {
     return failure();
   }
-  if (!target) {
-    return success();
+  PressureClosureGroup selected;
+  for (ArrayRef<Value> bundle : bundles) {
+    PressureClosureGroup candidate;
+    FailureOr<bool> built = populatePressureClosureGroup(
+        bundle, boundary, model, dag, *pressureSet, budget, candidate);
+    if (failed(built)) {
+      return failure();
+    }
+    if (*built &&
+        (!selected.target ||
+         isBetterClosureGroup(candidate, selected, *pressureSet))) {
+      selected = std::move(candidate);
+    }
   }
-
-  closureCone.target = target;
-  closureCone.pressureSet = pressureSet;
-  LogicalResult populated =
-      populatePressureClosureCone(*target, boundary, budget, closureCone);
-  if (failed(populated)) {
-    closureCone.clear();
-    return failure();
-  }
+  closureGroup = std::move(selected);
   return success();
 }
 
@@ -411,7 +689,7 @@ static FailureOr<SmallVector<VPTOSchedCandidate>>
 buildCandidates(const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
                 VPTOSchedulingBudget &budget,
                 VPTOScheduleFailure &failure,
-                const PressureClosureCone *closureCone = nullptr) {
+                const PressureClosureGroup *closureGroup = nullptr) {
   SmallVector<VPTOSchedCandidate> candidates;
   candidates.reserve(boundary.getAvailable().size());
   for (VPTOSUnit *unit : boundary.getAvailable()) {
@@ -420,7 +698,7 @@ buildCandidates(const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
       return mlir::failure();
     }
     FailureOr<VPTOSchedCandidate> candidate =
-        buildCandidate(*unit, boundary, model, budget, closureCone);
+        buildCandidate(*unit, boundary, model, budget, closureGroup);
     if (failed(candidate)) {
       setWorkBudgetFailure(failure, budget);
       return mlir::failure();
@@ -591,7 +869,7 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
   }
 
   VPTOSchedBoundary boundary(dag, model, VPTOSchedDirection::Top);
-  PressureClosureCone closureCone;
+  PressureClosureGroup closureGroup;
   VPTOScheduleResult result;
   result.entries.reserve(dag.getUnits().size());
 
@@ -613,13 +891,14 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
       }
 
       LogicalResult refreshed =
-          refreshPressureClosureCone(closureCone, boundary, model, dag, budget);
+          refreshPressureClosureGroup(closureGroup, boundary, model, dag,
+                                      budget);
       if (failed(refreshed)) {
         setWorkBudgetFailure(failure, budget);
         return mlir::failure();
       }
       FailureOr<SmallVector<VPTOSchedCandidate>> builtCandidates =
-          buildCandidates(boundary, model, budget, failure, &closureCone);
+          buildCandidates(boundary, model, budget, failure, &closureGroup);
       if (failed(builtCandidates)) {
         return mlir::failure();
       }
@@ -638,7 +917,7 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
     VPTOScheduleContext context{model, dag, boundary.getDirection(),
                                 boundary.getCurrentCycle(),
                                 boundary.getPressureTracker().getCurrent(),
-                                closureCone.pressureSet};
+                                closureGroup.pressureSet};
     std::string detail;
     FailureOr<VPTOSchedDecision> decision =
         strategy.pickCandidate(context, candidates, detail);
