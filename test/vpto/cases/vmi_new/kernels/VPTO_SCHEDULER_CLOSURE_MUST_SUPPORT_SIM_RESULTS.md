@@ -12,9 +12,9 @@ See LICENSE in the root of the software repository for the full text of the Lice
 
 ## 结论
 
-本报告归档 `2ad5c08d4 fix(vpto): include must support in pressure closures` 之后，#508、#574 和六个 TileKernels fixture 在同一隔离环境中的完整 Scheduler OFF/ON 对比。48/48 次目标运行都完成真实 CA model start/stop 和 strict compare。
+本报告归档 `2ad5c08d4 fix(vpto): include must support in pressure closures` 之后，#508、#574 和六个 TileKernels fixture 在同一隔离环境中的完整 Scheduler OFF/ON 对比。#574 同时包含 single-token ABC、explicit AABBCC 和 pair-fused scheduler 三个 sibling fixture。54/54 次目标运行都完成真实 CA model start/stop 和 strict compare。
 
-#574 的算法缺口已修复：Scheduler ON 的模型 peak 从修复前 38/8 降到 23/5，vector/predicate spill 和 36 个 barrier 全部消失，median ticks 从 4220 降到 4001，并略优于本轮 OFF 的 4046。其余七个 fixture 没有压力回归；三个 stress fixture 继续消除全部可消除 spill。MHC natural 仍有 26/26 次物理 vector spill/reload，这与修复前一致，原因是 VPTO 模型 peak 只描述当前 VPTO SSA live range，不等价于后端物理寄存器分配峰值。
+#574 的算法缺口已修复：Scheduler ON 的模型 peak 从修复前 38/8 降到 23/5，vector/predicate spill 和 36 个 barrier 全部消失，median ticks 从 4220 降到 4001。最新版同环境四组 median 为 single-token ABC OFF 5355、pair-fused ABC OFF 4046、explicit AABBCC OFF 4147、pair-fused Scheduler ON 4001，四组都没有 spill。其余 fixture 没有压力回归；三个 stress fixture 继续消除全部可消除 spill。MHC natural 仍有 26/26 次物理 vector spill/reload，这与修复前一致，原因是 VPTO 模型 peak 只描述当前 VPTO SSA live range，不等价于后端物理寄存器分配峰值。
 
 修复前快照见 [VPTO_SCHEDULER_FRONTIER_FIX_SIM_RESULTS.md](VPTO_SCHEDULER_FRONTIER_FIX_SIM_RESULTS.md)。
 
@@ -41,6 +41,8 @@ See LICENSE in the root of the software repository for the full text of the Lice
 
 | Case | Scheduler | 模型 V/P peak | Stack VSTI/VLDI | Stack PSTI/PLDI | `SMEM_BAR` | ticks（3 次；median） | ON 相对 OFF | Strict compare |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
+| #574 `topk-gate-abc-single-token` | OFF | 原始单-token 顺序 | 0/0 | 0/0 | 0 | 5355, 5352, 5359; **5355** | - | 3/3 pass |
+| #574 `topk-gate-aabbcc-explicit` | OFF | 显式 AABBCCDD | 0/0 | 0/0 | 0 | 4151, 4147, 4142; **4147** | - | 3/3 pass |
 | #574 `topk-gate-aabbcc-scheduler` | OFF | 原始顺序 | 0/0 | 0/0 | 0 | 4046, 4049, 4042; **4046** | - | 3/3 pass |
 | #574 `topk-gate-aabbcc-scheduler` | ON | 23/5 | 0/0 | 0/0 | 0 | 4001, 4000, 4004; **4001** | -1.11% | 3/3 pass |
 | #508 `topk-gate-vcmp-vsel-misched` | OFF | 原始顺序 | 0/0 | 0/0 | 0 | 2609, 2604, 2605; **2605** | - | 3/3 pass |
@@ -57,6 +59,19 @@ See LICENSE in the root of the software repository for the full text of the Lice
 | SwiGLU predicate-stress | ON | 24/5 | 0/0 | 0/0 | 0 | 2807, 2800, 2808; **2807** | -15.88% | 3/3 pass |
 | MHC natural | OFF | 原始 29/3 | 45/45 | 0/0 | 106 | 4736, 4740, 4745; **4740** | - | 3/3 pass |
 | MHC natural | ON | 23/4 | 26/26 | 0/0 | 52 | 3496, 3491, 3497; **3496** | -26.24% | 3/3 pass |
+
+## #574 三个 fixture 的完整关系
+
+| 配置 | Vecscope 边界 | VPTO 源顺序 | PSET / VCI | VCMP / VSEL | Median ticks | 相对 single-token ABC |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Single-token ABC OFF | 四个单-token scope | 每 token 独立 ABC | 4 / 24 | 432 / 432 | 5355 | - |
+| Pair-fused ABC OFF | 两个双-token scope | 每 pair 为 ABCD-ABCD | 2 / 12 | 420 / 432 | 4046 | -24.44% |
+| Explicit AABBCC OFF | 两个双-token scope | 手写 AABBCCDD | 2 / 12 | 420 / 432 | 4147 | -22.56% |
+| Pair-fused Scheduler ON | 两个双-token scope | 同 Pair-fused ABC 输入，由 scheduler 重排 | 2 / 12 | 420 / 432 | 4001 | -25.28% |
+
+Single-token ABC 是与原始 #574 `ABCABC MISCHED=0` vecscope 边界一致的公平外部基线；其四个 token 不能跨 scope 进行硬件窗口重叠。Pair-fused ABC OFF 和 explicit AABBCC OFF 都已经把两个独立 token 放入同一 scope，因此二者即使关闭 VPTO scheduler，也能依靠硬件窗口隐藏跨 token 的依赖等待。它们用于区分“改变 vecscope 暴露的并行度”和“VPTO scheduler 在同一个 scope 内重排”的收益，不能把 Pair-fused ABC OFF 称为原始单-token ABC。
+
+最新版 Scheduler ON 相对 Pair-fused ABC OFF 快 1.11%，相对 explicit AABBCC OFF 快 3.52%；三者都无 spill，因此这里的差异来自同一双-token 窗口内的细粒度发射顺序，而不是 spill 开销。Explicit AABBCC 比 Pair-fused ABC OFF 慢 2.50%，也再次说明字面 AABBCC 并不天然更快；当前目标是保持无 spill，并让合法顺序交给调度策略和硬件窗口共同处理。
 
 ## #574 根因与修复证据
 
@@ -108,9 +123,9 @@ MHC 的后续 lowering、指令选择和物理寄存器分配还会引入或延�
 
 - provenance：`provenance.log`
 - smoke：`smoke-vadd/`、`smoke-vlds-post-update/`
-- 48 次目标运行：`runtime-matrix/<case>/<off|on>/run{1,2,3}/`
+- 54 次目标运行：`runtime-matrix/<case>/<off|on>/run{1,2,3}/`
 - 每次运行保留 `driver.log`、case `validation.log`、host/golden/output 和 CA instruction dumps。
-- `SHA256SUMS` 覆盖 21728 个文件；manifest SHA-256 为 `f73bf8fc038adad2a60130489cc5bb4a20790d12308011efff070d1378d5a867`。
-- 归档大小为 63 MiB；raw logs 和生成二进制未加入 Git。
+- `SHA256SUMS` 覆盖 24320 个文件；manifest SHA-256 为 `37d7f0943fba4874be507d8c0f0244f8f4a350ab0d29052dc605cb5db7493bec`。
+- 归档大小为 70 MiB；raw logs 和生成二进制未加入 Git。
 
 验证 worktree 最终只包含 manager 生成且未跟踪的 `.ptoas-workspace.json` 和 `env.sh`，没有源代码修改。
