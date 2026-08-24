@@ -582,7 +582,7 @@ urgency window 以本轮候选的最大 critical path 为基准，宽度取具�
 
 压力达到已知上限的一半后，Scheduler 从 normalized pressure 最高的有界集合开始处理；已经超限的集合优先。它按原始位置遍历 pressure tracker 当前的 live values，并把同一个 operation 产生、属于同一压力集合且仍存活的多个结果视为一个 target bundle。当前实现每轮只评价最早的一个 bundle；直接用户总数超过 8 的高 fan-out 值不进入该启发式，避免把接近全局的 mask 或公共值扩展成大范围调度约束。
 
-对 bundle 的所有尚未调度用户，Scheduler 沿正向 `Data/Must` 边收集 closure core；为使 core 节点变为 ready，再沿反向 `Data/Must` 边收集必要的 support 节点。support 节点的其他无关用户不会继续扩展 group，因此共享的 mask、常量或搬运准备不会把整个 region 纳入 group。group 最多模拟 96 个节点，模拟时仍按合法依赖顺序选择最小 excess、最小加权压力和最早原始位置的节点。
+对 bundle 的所有尚未调度用户，Scheduler 沿正向 `Data/Must` 边收集 closure core；为使 core 节点变为 ready，再沿反向所有类型的 `Must` 边收集必要的 support 节点。例如 store 既消费待关闭的 SSA 值，又受先前内存访问约束时，该内存前置节点也必须进入 group，否则模拟会把 store 永久视为不可调度。正向扩展仍只让 `Data/Must` 后继进入 core；Memory、Control 等非 Data 后继只有已经属于当前 group 时才更新就绪状态，因此 support 节点的其他无关用户不会继续扩展 group。core 与 support 合计最多发现并模拟 96 个节点；超过上限时放弃该 closure group，继续使用普通候选排序。模拟时仍按合法依赖顺序选择最小 excess、最小加权压力和最早原始位置的节点。
 
 只有模拟满足以下条件时，group 才会激活：所有 target value 已结束；中途峰值不超过 `max(起始压力, 压力上限)`；扣除 group 为 closure 准备、但在 target 结束时仍存活的 support-only 结果后，结束压力不高于起始压力。最后一个完成这些条件的节点作为 group target，group 在该节点实际完成前缓存。Strategy 在不增加 excess 的前提下优先选择 group 内节点，允许 group 的第一步即时压力略增，只要完整模拟已经证明不会产生新的 spill 风险并最终关闭目标 live range。group 激活后不再对其候选重复固定深度前瞻。
 

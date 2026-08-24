@@ -28,6 +28,8 @@ using namespace mlir::pto;
 
 namespace {
 
+constexpr unsigned kMaxClosureGroupNodes = 96;
+
 struct PressureClosureGroup {
   VPTOSUnit *target = nullptr;
   std::optional<unsigned> pressureSet;
@@ -407,7 +409,7 @@ struct PressureClosureSimulation {
   DenseSet<VPTOSUnit *> scheduled;
 };
 
-static LogicalResult discoverClosureUnit(
+static FailureOr<bool> discoverClosureUnit(
     VPTOSUnit &root, bool isCore, const VPTOSchedBoundary &boundary,
     VPTOSchedulingBudget &budget, PressureClosureSimulation &simulation) {
   SmallVector<std::pair<VPTOSUnit *, bool>, 8> worklist{{&root, isCore}};
@@ -422,7 +424,11 @@ static LogicalResult discoverClosureUnit(
     if (coreUnit) {
       simulation.core.insert(unit);
     }
-    simulation.discovered.insert(unit);
+    bool newlyDiscovered = simulation.discovered.insert(unit).second;
+    if (newlyDiscovered &&
+        simulation.discovered.size() > kMaxClosureGroupNodes) {
+      return false;
+    }
     auto found = simulation.remaining.find(unit);
     if (found == simulation.remaining.end()) {
       unsigned dependencies = boundary.getRemainingDependencyCount(*unit);
@@ -456,9 +462,7 @@ static LogicalResult discoverClosureUnit(
       if (!budget.consume()) {
         return failure();
       }
-      bool isDataDependency =
-          edge->isMust() && edge->getKind() == VPTOSchedEdgeKind::Data;
-      if (!isDataDependency) {
+      if (!edge->isMust()) {
         continue;
       }
       VPTOSUnit *predecessor = edge->getPredecessor();
@@ -469,7 +473,7 @@ static LogicalResult discoverClosureUnit(
       }
     }
   }
-  return success();
+  return true;
 }
 
 static FailureOr<int64_t> getLiveSupportPressure(
@@ -511,7 +515,6 @@ static FailureOr<bool> populatePressureClosureGroup(
     const VPTOSchedModel &model, const VPTOSchedDAG &dag,
     unsigned pressureSet, VPTOSchedulingBudget &budget,
     PressureClosureGroup &group) {
-  constexpr unsigned kMaxClosureGroupNodes = 96;
   VPTORegPressureTracker simulatedTracker = boundary.getPressureTracker();
   ArrayRef<int64_t> initialPressure = simulatedTracker.getCurrent();
   ArrayRef<VPTORegPressureSet> pressureSets = model.getPressureSets();
@@ -528,9 +531,13 @@ static FailureOr<bool> populatePressureClosureGroup(
       if (!unit || boundary.isScheduled(unit)) {
         continue;
       }
-      if (failed(discoverClosureUnit(*unit, true, boundary, budget,
-                                     simulation))) {
+      FailureOr<bool> discovered = discoverClosureUnit(
+          *unit, true, boundary, budget, simulation);
+      if (failed(discovered)) {
         return failure();
+      }
+      if (!*discovered) {
+        return false;
       }
     }
   }
@@ -605,16 +612,16 @@ static FailureOr<bool> populatePressureClosureGroup(
       if (!budget.consume()) {
         return failure();
       }
-      bool isDataDependency =
-          edge->isMust() && edge->getKind() == VPTOSchedEdgeKind::Data;
-      if (!isDataDependency) {
+      if (!edge->isMust()) {
         continue;
       }
       VPTOSUnit *successor = edge->getSuccessor();
       if (boundary.isScheduled(successor)) {
         continue;
       }
-      bool followsClosure = simulation.core.contains(selected);
+      bool followsClosure =
+          simulation.core.contains(selected) &&
+          edge->getKind() == VPTOSchedEdgeKind::Data;
       bool alreadyDiscovered = simulation.discovered.contains(successor);
       if (!followsClosure && !alreadyDiscovered) {
         continue;
@@ -622,7 +629,6 @@ static FailureOr<bool> populatePressureClosureGroup(
       if (followsClosure) {
         simulation.core.insert(successor);
       }
-      simulation.discovered.insert(successor);
       auto position = simulation.remaining.find(successor);
       if (position != simulation.remaining.end()) {
         if (position->second == 0) {
@@ -630,9 +636,13 @@ static FailureOr<bool> populatePressureClosureGroup(
         }
         --position->second;
       }
-      if (failed(discoverClosureUnit(*successor, followsClosure, boundary,
-                                     budget, simulation))) {
+      FailureOr<bool> discovered = discoverClosureUnit(
+          *successor, followsClosure, boundary, budget, simulation);
+      if (failed(discovered)) {
         return failure();
+      }
+      if (!*discovered) {
+        return false;
       }
     }
   }
