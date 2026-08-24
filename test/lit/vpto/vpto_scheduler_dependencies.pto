@@ -40,6 +40,10 @@
 // CHECK-NOT: edge=0->3 kind=memory
 // CHECK-NOT: edge=1->3 kind=memory
 
+// CHECK-LABEL: vpto-scheduler: function=memory_frontier_partial_overlap
+// CHECK-DAG: edge=2->3 kind=memory
+// CHECK-DAG: edge=2->4 kind=memory
+
 // CHECK-LABEL: vpto-scheduler: function=unknown_memory_fallback
 // CHECK: edge=0->1 kind=memory strength=must latency=0 reason=may-alias memory frontier in original order
 
@@ -150,6 +154,26 @@ module attributes {pto.target_arch = "a5"} {
       %second = pto.ld_dev %ptr[%c0] : !pto.ptr<i32, gm> -> i32
       pto.st_dev %value, %ptr[%c0] : !pto.ptr<i32, gm>, i32
       pto.st_dev %value, %ptr[%c0] : !pto.ptr<i32, gm>, i32
+    }
+    return
+  }
+
+  func.func @memory_frontier_partial_overlap() attributes {pto.aicore} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %base0 = arith.constant 6144 : i64
+    %base1 = arith.constant 6400 : i64
+    %ptr0 = pto.castptr %base0 : i64 -> !pto.ptr<f32, ub>
+    %ptr1 = pto.castptr %base1 : i64 -> !pto.ptr<f32, ub>
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %value = pto.vlds %ptr0[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      pto.vsts %value, %ptr1[%c0], %mask {dist = "NORM_B32"}
+          : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %value, %ptr0[%c1], %mask {dist = "1PT_B32"}
+          : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %value, %ptr1[%c1], %mask {dist = "1PT_B32"}
+          : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
     }
     return
   }
