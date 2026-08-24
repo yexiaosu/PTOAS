@@ -1,0 +1,194 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// case: kernels/topk-gate-vcmp-vsel-misched
+// shape: N=1, E=384, K=6, six 64-lane chunks
+// purpose: semantic-equivalent runtime coverage for mouliangyu/PTOAS#508 and #504
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @topk_gate_vcmp_vsel_misched_kernel(
+      %scores: !pto.ptr<f32, gm>, %indices: !pto.ptr<i32, gm>,
+      %winner_indices: !pto.ptr<i32, gm>, %masked_scores: !pto.ptr<f32, gm>)
+      attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c6 = arith.constant 6 : index
+    %c8 = arith.constant 8 : index
+    %c64 = arith.constant 64 : index
+    %c128 = arith.constant 128 : index
+    %c192 = arith.constant 192 : index
+    %c256 = arith.constant 256 : index
+    %c320 = arith.constant 320 : index
+
+    %c1_i32 = arith.constant 1 : i32
+    %int_max = arith.constant 2147483647 : i32
+    %neg_inf = arith.constant 0xFF800000 : f32
+
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i64 = arith.constant 32 : i64
+    %c1536_i64 = arith.constant 1536 : i64
+    %c2048_i64 = arith.constant 2048 : i64
+    %c4096_i64 = arith.constant 4096 : i64
+    %c4320_i64 = arith.constant 4320 : i64
+    %c4352_i64 = arith.constant 4352 : i64
+
+    %ub_scores = pto.castptr %c0_i64 : i64 -> !pto.ptr<f32, ub>
+    %ub_indices = pto.castptr %c2048_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_winner_scratch = pto.castptr %c4096_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_winners = pto.castptr %c4320_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_masked_scores = pto.castptr %c4352_i64 : i64 -> !pto.ptr<f32, ub>
+
+    pto.mte_gm_ub %scores, %ub_scores, %c0_i64, %c1536_i64
+      nburst(%c1_i64, %c1536_i64, %c1536_i64)
+      : !pto.ptr<f32, gm>, !pto.ptr<f32, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %indices, %ub_indices, %c0_i64, %c1536_i64
+      nburst(%c1_i64, %c1536_i64, %c1536_i64)
+      : !pto.ptr<i32, gm>, !pto.ptr<i32, ub>, i64, i64, i64, i64, i64
+
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    pto.vecscope {
+      %active = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %one_lane, %one_remaining = pto.plt_b32 %c1_i32 : i32 -> !pto.mask<b32>, i32
+      %int_max_vec = pto.vbr %int_max : i32 -> !pto.vreg<64xi32>
+      %neg_inf_vec = pto.vbr %neg_inf : f32 -> !pto.vreg<64xf32>
+
+      %score0 = pto.vlds %ub_scores[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      %score1 = pto.vlds %ub_scores[%c64] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      %score2 = pto.vlds %ub_scores[%c128] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      %score3 = pto.vlds %ub_scores[%c192] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      %score4 = pto.vlds %ub_scores[%c256] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      %score5 = pto.vlds %ub_scores[%c320] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+
+      %index0 = pto.vlds %ub_indices[%c0] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %index1 = pto.vlds %ub_indices[%c64] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %index2 = pto.vlds %ub_indices[%c128] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %index3 = pto.vlds %ub_indices[%c192] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %index4 = pto.vlds %ub_indices[%c256] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %index5 = pto.vlds %ub_indices[%c320] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+
+      %final0, %final1, %final2, %final3, %final4, %final5 =
+          scf.for %k = %c0 to %c6 step %c1
+          iter_args(%current0 = %score0, %current1 = %score1,
+                    %current2 = %score2, %current3 = %score3,
+                    %current4 = %score4, %current5 = %score5)
+          -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+              !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+        %active_round = arith.cmpi ult, %k, %c6 : index
+        %scratch_slot = arith.muli %k, %c8 : index
+
+        // One TopK round: reduce the maximum score over all six chunks.
+        %max01 = pto.vmax %current0, %current1, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %max23 = pto.vmax %current2, %current3, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %max45 = pto.vmax %current4, %current5, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %max0123 = pto.vmax %max01, %max23, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %max_all = pto.vmax %max0123, %max45, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %max_reduced = pto.vcmax %max_all, %active : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        // Preserve a region boundary around vdup so the pure phase-1 region
+        // reaches the scheduler. The loop invariant makes the then arm live.
+        %max_broadcast = scf.if %active_round -> (!pto.vreg<64xf32>) {
+          %broadcast = pto.vdup %max_reduced, %active {position = "LOWEST"}
+            : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+          scf.yield %broadcast : !pto.vreg<64xf32>
+        } else {
+          %broadcast = pto.vdup %max_reduced, %active {position = "LOWEST"}
+            : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+          scf.yield %broadcast : !pto.vreg<64xf32>
+        }
+
+        // Issue #504/#508 phase 1: each score predicate is consumed immediately.
+        %score_eq0 = pto.vcmp %current0, %max_broadcast, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+        %candidate0 = pto.vsel %index0, %int_max_vec, %score_eq0 : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %score_eq1 = pto.vcmp %current1, %max_broadcast, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+        %candidate1 = pto.vsel %index1, %int_max_vec, %score_eq1 : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %score_eq2 = pto.vcmp %current2, %max_broadcast, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+        %candidate2 = pto.vsel %index2, %int_max_vec, %score_eq2 : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %score_eq3 = pto.vcmp %current3, %max_broadcast, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+        %candidate3 = pto.vsel %index3, %int_max_vec, %score_eq3 : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %score_eq4 = pto.vcmp %current4, %max_broadcast, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+        %candidate4 = pto.vsel %index4, %int_max_vec, %score_eq4 : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %score_eq5 = pto.vcmp %current5, %max_broadcast, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+        %candidate5 = pto.vsel %index5, %int_max_vec, %score_eq5 : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+
+        // Reduce candidate indices so equal scores choose the smallest global index.
+        %min01 = pto.vmin %candidate0, %candidate1, %active : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %min23 = pto.vmin %candidate2, %candidate3, %active : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %min45 = pto.vmin %candidate4, %candidate5, %active : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %min0123 = pto.vmin %min01, %min23, %active : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %min_all = pto.vmin %min0123, %min45, %active : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        %winner_reduced = pto.vcmin %min_all, %active : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+        // This boundary isolates the winner broadcast and aligned scratch
+        // round-trip from the phase-1 and phase-2 scheduling regions.
+        %winner_broadcast = scf.if %active_round -> (!pto.vreg<64xi32>) {
+          %reduced = pto.vdup %winner_reduced, %active {position = "LOWEST"}
+            : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+          pto.vsts %reduced, %ub_winner_scratch[%scratch_slot], %one_lane
+            : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+          %stored = pto.vlds %ub_winner_scratch[%scratch_slot]
+            : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+          %broadcast = pto.vdup %stored, %active {position = "LOWEST"}
+            : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+          pto.vsts %broadcast, %ub_winners[%k], %one_lane {dist = "1PT_B32"}
+            : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+          scf.yield %broadcast : !pto.vreg<64xi32>
+        } else {
+          %reduced = pto.vdup %winner_reduced, %active {position = "LOWEST"}
+            : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+          pto.vsts %reduced, %ub_winner_scratch[%scratch_slot], %one_lane
+            : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+          %stored = pto.vlds %ub_winner_scratch[%scratch_slot]
+            : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+          %broadcast = pto.vdup %stored, %active {position = "LOWEST"}
+            : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+          pto.vsts %broadcast, %ub_winners[%k], %one_lane {dist = "1PT_B32"}
+            : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+          scf.yield %broadcast : !pto.vreg<64xi32>
+        }
+
+        // Issue #504/#508 phase 2: mask the selected winner, again interleaved by chunk.
+        %winner_eq0 = pto.vcmp %index0, %winner_broadcast, %active, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %next0 = pto.vsel %neg_inf_vec, %current0, %winner_eq0 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %winner_eq1 = pto.vcmp %index1, %winner_broadcast, %active, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %next1 = pto.vsel %neg_inf_vec, %current1, %winner_eq1 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %winner_eq2 = pto.vcmp %index2, %winner_broadcast, %active, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %next2 = pto.vsel %neg_inf_vec, %current2, %winner_eq2 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %winner_eq3 = pto.vcmp %index3, %winner_broadcast, %active, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %next3 = pto.vsel %neg_inf_vec, %current3, %winner_eq3 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %winner_eq4 = pto.vcmp %index4, %winner_broadcast, %active, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %next4 = pto.vsel %neg_inf_vec, %current4, %winner_eq4 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %winner_eq5 = pto.vcmp %index5, %winner_broadcast, %active, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %next5 = pto.vsel %neg_inf_vec, %current5, %winner_eq5 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+
+        scf.yield %next0, %next1, %next2, %next3, %next4, %next5
+          : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+            !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
+      }
+
+      // Preserve and validate the sixth-round mask feedback; none of the final vsel ops are dead.
+      pto.vsts %final0, %ub_masked_scores[%c0], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %final1, %ub_masked_scores[%c64], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %final2, %ub_masked_scores[%c128], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %final3, %ub_masked_scores[%c192], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %final4, %ub_masked_scores[%c256], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %final5, %ub_masked_scores[%c320], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.mte_ub_gm %ub_winners, %winner_indices, %c32_i64
+      nburst(%c1_i64, %c32_i64, %c32_i64)
+      : !pto.ptr<i32, ub>, !pto.ptr<i32, gm>, i64, i64, i64, i64
+    pto.mte_ub_gm %ub_masked_scores, %masked_scores, %c1536_i64
+      nburst(%c1_i64, %c1536_i64, %c1536_i64)
+      : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}
