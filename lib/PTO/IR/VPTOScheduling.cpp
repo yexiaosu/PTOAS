@@ -128,6 +128,19 @@ static void setStaticVectorRange(Value pointer, Value offset,
   access.byteSize = conservativeByteSize;
 }
 
+static int64_t getVstsByteSize(VstsOp store) {
+  std::optional<StringRef> dist = store.getDist();
+  bool isOnePoint = dist && (*dist == "1PT_B8" || *dist == "1PT_B16" ||
+                             *dist == "1PT_B32");
+  if (isOnePoint) {
+    if (std::optional<int64_t> elementByteSize =
+            getElementByteSize(store.getDestination())) {
+      return *elementByteSize;
+    }
+  }
+  return 256;
+}
+
 static void setStaticAccessRange(Operation *op, VPTOMemoryAccess &access) {
   if (auto load = dyn_cast<PTOLoadOp>(op)) {
     return setStaticIndexedRange(load, access);
@@ -152,8 +165,8 @@ static void setStaticAccessRange(Operation *op, VPTOMemoryAccess &access) {
                                 access);
   }
   if (auto store = dyn_cast<VstsOp>(op)) {
-    return setStaticVectorRange(store.getDestination(), store.getOffset(), 256,
-                                access);
+    return setStaticVectorRange(store.getDestination(), store.getOffset(),
+                                getVstsByteSize(store), access);
   }
   if (auto load = dyn_cast<Vldsx2Op>(op)) {
     return setStaticVectorRange(load.getSource(), load.getOffset(), 512,
