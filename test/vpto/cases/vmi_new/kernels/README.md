@@ -43,6 +43,8 @@ CA-model SIM 的历史压力矩阵和 fixture 构造见
 multi-user closure 版本的最新 Scheduler OFF/ON 对比见
 [TILEKERNELS_SCHEDULER_MULTI_USER_CLOSURE_RESULTS.md](TILEKERNELS_SCHEDULER_MULTI_USER_CLOSURE_RESULTS.md)。
 
+Memory-frontier 修复后、closure-support 修复前的 #508、#574 和六个 TileKernels fixture 完整对比见 [VPTO_SCHEDULER_FRONTIER_FIX_SIM_RESULTS.md](VPTO_SCHEDULER_FRONTIER_FIX_SIM_RESULTS.md)。
+
 ## 设计上暂缓
 
 下列目标 CCE 行是真实存在的，但在对应 VMI 语义设计清楚前，不应通过临时拼凑的
