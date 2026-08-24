@@ -297,7 +297,14 @@ SSA
 
 ### 内存访问依赖
 
-对于原顺序中的每一对“较早操作 -> 较晚操作”，Pass 判断它们的内存访问是否可能冲突：
+建图时，Pass 维护一组称为 memory frontier 的历史内存访问，是“下一条内存访问仍需直接比较的最小历史访问集合”。如果一个较晚的 write、ordered 或 unknown access 已经与某个旧访问建立依赖，它就承接了这个旧访问的顺序约束；旧访问随后可以从 frontier 移除，未来节点只需直接依赖这个较晚的访问，不必再为可由传递路径保证的相同顺序重复建边。
+
+Pass 先把每个节点的内存访问解析为地址空间、alias root，以及能够在编译期确定时使用的字节区间，再和当前 memory frontier 中的访问比较。字节区间有两种形式：
+
+- 如果指针本身和访问偏移都是常量，使用绝对字节区间 `[absoluteAddress + byteOffset, absoluteAddress + byteOffset + byteSize)`；
+- 如果两个访问具有同一个 alias root，并且各自相对该根地址的偏移和长度都是常量，使用相对该 alias root 的静态字节区间 `[byteOffset, byteOffset + byteSize)`。
+
+这里的“能够确定”是可选条件；动态偏移、未知长度或无法追踪的地址不会生成区间，别名分析会对这些情况保守处理。具体解析和比较规则如下：
 
 1. 沿仓库已有的别名关系追踪到根地址；
 2. 如果追踪过程中地址发生变化，原来的静态偏移和长度不再可信；
@@ -305,13 +312,28 @@ SSA
 4. 根地址相同且两侧都有完整静态区间时，按半开区间是否重叠判断；
 5. 其他情况都保守认为可能冲突，包括同一物理空间内的不同 SSA 根地址。
 
-两次访问可能冲突，并且满足下列任一条件时，按原顺序建立 latency 为 0 的 `Memory/Must` 依赖：
+frontier 中的访问与当前访问可能冲突，并且满足下列任一条件时，按原顺序建立 latency 为 0 的 `Memory/Must` 依赖：
 
 - 任一访问明确要求保序；
 - 任一访问的信息不完整；
 - 任一访问会写内存。
 
-因此，只有信息完整、无需保序的纯读组合可以自由交换；其他无法证明安全的组合都保持原顺序。
+因此，只有信息完整、无需保序的纯读组合可以自由交换；其他无法证明安全的组合都保持原顺序。同一个历史节点即使有多个 access 与当前节点冲突，也只建立一条边。
+
+当前访问包含 write、ordered 或 unknown access 时，它会关闭并替换所有可能 alias 的旧 frontier entry：新边已经保证这些旧访问先于当前节点，不必继续让更晚节点直接依赖全部历史。纯读不会关闭 frontier，而是并列保留，直到后续 write 为所有尚未被覆盖的读建立 WAR 边。所有当前 access 最后都加入 frontier。
+
+例如，同一 alias class 中的 `W0 R1 R2 W3 R4` 会形成：
+
+```text
+W0 -> R1
+W0 -> R2
+W0 -> W3
+R1 -> W3
+R2 -> W3
+W3 -> R4
+```
+
+处理 `W3` 后，`W0/R1/R2` 都从 frontier 移除，后续节点不再直接连接它们。这样保持 RAW、WAR 和 WAW 原始顺序，同时避免为每个新访问连接所有可能冲突的完整历史。
 
 ### 隐式状态和同步依赖
 
@@ -395,7 +417,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 工作量计数在以下位置增加：
 
 - 建图时每扫描一个 live-through 值、SSA operand 或 result user；
-- 建图时每解析一个 memory access、遍历一个候选节点对或比较一对 memory access；
+- 建图时每解析一个 memory access、遍历一个 memory frontier entry 或比较一对 memory access；
 - 建图时每扫描一个隐式 effect、模型分类或新增一条依赖边；
 - 计算关键路径时每处理一个节点或一条边；
 - 每评估一次候选节点；
@@ -426,6 +448,8 @@ pending
   key 是 readyCycle；同一周期按 originalIndex 保持确定顺序
 ```
 
+Top boundary 还按 `VPTOSUnit::id` 缓存候选的基础压力评价。一次 commit 只会让“与本次已消费 operand 共享使用计数”的节点评价失效；其他候选复用已缓存的 introduced/released/delta，再根据最新 current pressure 刷新 projected 和 excess。Bottom boundary 保留接口但不使用该缓存。这个缓存减少候选反复扫描 SSA use 的工作，不改变候选集合或比较顺序。
+
 节点状态含义为：
 
 | 状态 | 含义 |
@@ -449,7 +473,17 @@ readyCycle(successor) =
 
 没有候选节点时，当前逻辑周期直接跳到最早 pending 周期，不逐周期空转。同一周期的节点会在预算检查通过后整桶加入 available。
 
-通常只要仍有候选节点，Pass 就在同一个逻辑周期继续选择。唯一例外是所有当前候选都会超过至少一个已知压力上限、并且仍有依赖等待节点时，Pass 会执行 pressure-driven idle，推进到最早的等待周期后重新评价候选。这里的周期只表示依赖层级，同一逻辑周期可以记录多个节点，不能解释为真实硬件同周期发射。
+模型为 vector 和 predicate pressure set 分别提供了已知 limit。对一个当前候选，如果它在任意一个具有已知 limit 的 pressure set 上满足以下条件之一，就认为立即选择它会增加压力风险：
+
+- 当前压力已经超过 limit，并且选择该候选会进一步增加超限量；
+- 当前压力已经达到 limit 的一半，并且选择该候选会使 projected pressure 高于 current pressure。
+
+通常只要 available 队列非空，Pass 就在当前逻辑周期继续选择 available 队列内的节点。只有同时满足以下两个条件时，Pass 才执行 pressure-driven idle：
+
+1. available 队列中的每一个候选都会在至少一个具有已知 limit 的 pressure set 上增加上述风险；
+2. pending 队列非空，即至少还有一个节点的所有前置节点都已调度，但它仍在等待依赖延迟满足，将在更晚的逻辑周期成为候选。
+
+执行 pressure-driven idle 时，Pass 不选择当前候选，而是把逻辑周期推进到最早的 pending ready cycle，让新就绪的节点进入 available 队列后再重新比较。这样可能使即将就绪的 live-range-closing consumer 参与选择，避免当前 producer 继续抬高压力。如果存在不会增加风险的当前候选，或者 pending 队列为空，Pass 就继续选择当前候选以保证进展；limit 始终是软约束。逻辑周期只表示依赖层级，同一逻辑周期可以记录多个节点，不能解释为真实硬件同周期发射。
 
 ### Strategy、Candidate 和 Decision 契约
 
@@ -528,6 +562,20 @@ nearLimitReleaseCredit =
 
 这些代价分别表示“是否/多少新增超限”“选择后总共超限多少”“临界压力下选择后的存活量和关闭的 live range 数”“普通状态下存活值总量倾向增加还是减少”。乘法和累加都会检查 `int64_t` 溢出。压力上限是可选数据：没有可信上限时，该集合不参与 excess 或 near-limit 代价，但仍以 `weight * pressureDelta` 参与普通 delta 代价，Tracker 也继续记录它的 current 和 peak。Strategy 不为这种集合虚构默认上限。权重和超限代价不能为负，否则当前调度区间按模型无效处理并保持原顺序。
 
+near-limit 的固定深度前瞻最多模拟 8 个由当前候选沿 `Must` 依赖新释放的节点，不复制完整 ready queue。模拟内部依次选择 excess 更小、加权 projected pressure 更小、原始位置更早的节点，并记录中途峰值和结束压力。
+
+候选排序分别使用前瞻过程的峰值和选择候选后的即时 projected pressure。前瞻峰值只用于计算是否以及超过 limit 多少；即时 projected pressure 则通过以下公式转换为离散的 risk level：
+
+```text
+criticalThreshold = ceil(limit / 2)
+bandWidth = max(1, ceil((limit - criticalThreshold) / 4))
+riskLevel = max(0, projectedPressure - criticalThreshold) / bandWidth
+```
+
+在更高优先级的 excess、closure group 和 high-pressure 指标都相同时，Strategy 先选择 risk level 较低的候选；risk level 也相同时，才继续比较 critical-path urgency。例如 vector limit 为 32 时，`criticalThreshold=16`、`bandWidth=4`，projected pressure 为 20 和 23 的候选具有相同 risk level，而 20 和 24 的候选处于不同 level。当前`bandWidth` 公式中的常量 4 是为了避免 near-limit 阶段每相差一个 live value 都立即压过 critical-path 判断而设置的启发式参数，当前阶段只是一个有效值而不是最优值。
+
+urgency window 以本轮候选的最大 critical path 为基准，宽度取具有该最大值候选的最大 `writeLatency`。候选与最大 critical path 的差值不超过该宽度时标记为 urgent；它在 near-limit 的前瞻峰值 excess 和即时 risk level 之后、frontier-opening penalty 之前比较。
+
 ### Near-limit 多用户 closure group
 
 压力达到已知上限的一半后，Scheduler 从 normalized pressure 最高的有界集合开始处理；已经超限的集合优先。它按原始位置遍历 pressure tracker 当前的 live values，并把同一个 operation 产生、属于同一压力集合且仍存活的多个结果视为一个 target bundle。当前实现每轮只评价最早的一个 bundle；直接用户总数超过 8 的高 fan-out 值不进入该启发式，避免把接近全局的 mask 或公共值扩展成大范围调度约束。
@@ -545,7 +593,7 @@ nearLimitReleaseCredit =
 1. 优先 pressure-safe candidate，再比较 `excessGrowthCost` 和 `projectedExcessCost`；
 2. 有活动 closure group 时，先比较是否推进 group，再比较目标集合的即时 projected pressure 和 release credit；
 3. high-pressure 集合再比较汇总后的 projected pressure 和 release credit；
-4. near-limit 集合依次比较固定深度前瞻的 excess/risk、critical-path urgency window、是否打开新 pressure frontier、前瞻结束压力和即时 projected/released pressure；
+4. near-limit 集合依次比较前瞻峰值 excess、即时 projected pressure 的 risk level、critical-path urgency window、是否打开新 pressure frontier、前瞻结束压力和即时 projected/released pressure；
 5. 上述指标相同后，继续优先更大的 `height`，再比较更小的 `pressureDeltaCost`；
 6. 最后选择更小的 `originalIndex`，并记录 `deterministic-tie-break`。
 
@@ -570,7 +618,7 @@ A0 A1 B0 B1 C0 C1
 
 即描述性的 AABBCC。但 ABCABC/AABBCC 不是算法目标或输出契约；实际细粒度顺序由 ready 状态、critical-path urgency 和 pressure 决定。
 
-当一个 pressure producer 和 last-use consumer 同时可选、当前 headroom 会被一个候选耗尽、并且 consumer 仍处于 urgency window 时，consumer 会在真正超限前优先。低压力时仍优先关键链；consumer 落在 urgency window 外时，紧急关键链也仍然优先。如果消费者尚在等待依赖延迟，且至少一个当前候选不会超过压力上限，Pass 会继续选择当前候选；如果所有当前候选都会超过至少一个已知压力上限，Pass 会推进到最早的 pending 周期，让压力释放节点参与下一轮候选评价。没有 pending 节点时，上限仍是软约束，Pass 必须继续取得进展。
+当一个 pressure producer 和 last-use consumer 同时可选、当前 headroom 会被一个候选耗尽、并且 consumer 仍处于 urgency window 时，consumer 会在真正超限前优先。低压力时仍优先关键链；consumer 落在 urgency window 外时，紧急关键链也仍然优先。如果消费者尚在等待依赖延迟，且至少一个当前候选不会增加有界集合的压力风险，Pass 会继续选择当前候选；如果所有当前候选都会增加风险，Pass 会推进到最早的 pending 周期，让压力释放节点参与下一轮候选评价。这里的风险从 half-limit 起就包含 projected pressure 增长，不要求候选已经真正越过 limit。没有 pending 节点时，上限仍是软约束，Pass 必须继续取得进展。
 
 ## 如何检查并应用新顺序
 
@@ -655,7 +703,7 @@ SemanticVerification, ModelReplay, Apply
 - A5 的所有 Vector micro-op 和 `PIPE_V`/`PIPE_V2` operation 共用当前 vector/predicate 非零延迟；
 - Scalar、Cube、MTE、Control、Structural 和未细分的 generic 类使用零调度成本；
 - 只统计 vector 和 predicate 两类压力；
-- pressure-driven idle 只在所有当前候选都会超过已知压力上限时触发，仍依赖当前未校准的逻辑 latency，不代表真实硬件空转周期；
+- pressure-driven idle 只在所有当前候选都会增加已知有界集合的压力风险时触发，仍依赖当前未校准的逻辑 latency，不代表真实硬件空转周期；
 - 多用户 closure group 当前每轮只评价最早的一个低 fan-out bundle，并使用 8 个直接用户和 96 个模拟节点的固定上限；
 - 不支持跨基本块调度、双向调度、指令捆绑/配对、bank conflict、NOP、软件流水或 Cube kernel 调度；
 - 修改 IR 时没有独立事务回滚，因为当前移动操作不可失败；
