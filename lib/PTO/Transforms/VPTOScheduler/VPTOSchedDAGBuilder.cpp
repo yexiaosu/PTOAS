@@ -272,6 +272,91 @@ static bool needsMemoryOrder(const ResolvedMemoryAccess &lhs,
   return lhs.semantics.writes || rhs.semantics.writes;
 }
 
+struct MemoryRange {
+  int64_t begin = 0;
+  int64_t end = 0;
+};
+
+static std::optional<MemoryRange>
+getMemoryRange(std::optional<int64_t> byteOffset,
+               std::optional<int64_t> byteSize) {
+  if (!byteOffset || !byteSize) {
+    return std::nullopt;
+  }
+  int64_t end;
+  if (llvm::AddOverflow(*byteOffset, *byteSize, end)) {
+    return std::nullopt;
+  }
+  return MemoryRange{*byteOffset, end};
+}
+
+static bool containsMemoryRange(const MemoryRange &outer,
+                                const MemoryRange &inner) {
+  return outer.begin <= inner.begin && inner.end <= outer.end;
+}
+
+static bool coversAddressSpace(const ResolvedMemoryAccess &prior,
+                               const ResolvedMemoryAccess &current) {
+  if (!current.semantics.addressSpace) {
+    return true;
+  }
+  return prior.semantics.addressSpace &&
+         current.semantics.addressSpace == prior.semantics.addressSpace;
+}
+
+static bool containsMemoryRange(const ResolvedMemoryAccess &prior,
+                                const ResolvedMemoryAccess &current) {
+  std::optional<MemoryRange> currentAbsolute = getMemoryRange(
+      current.absoluteByteOffset, current.semantics.byteSize);
+  std::optional<MemoryRange> priorAbsolute =
+      getMemoryRange(prior.absoluteByteOffset, prior.semantics.byteSize);
+  if (currentAbsolute && priorAbsolute &&
+      containsMemoryRange(*currentAbsolute, *priorAbsolute)) {
+    return true;
+  }
+
+  std::optional<MemoryRange> currentRelative = getMemoryRange(
+      current.semantics.byteOffset, current.semantics.byteSize);
+  std::optional<MemoryRange> priorRelative =
+      getMemoryRange(prior.semantics.byteOffset, prior.semantics.byteSize);
+  return current.aliasRoot && current.aliasRoot == prior.aliasRoot &&
+         currentRelative && priorRelative &&
+         containsMemoryRange(*currentRelative, *priorRelative);
+}
+
+static bool hasMemoryRange(const ResolvedMemoryAccess &access) {
+  return getMemoryRange(access.absoluteByteOffset, access.semantics.byteSize) ||
+         getMemoryRange(access.semantics.byteOffset,
+                        access.semantics.byteSize);
+}
+
+/// Return whether replacing `prior` with `current` preserves every future
+/// ordering edge that `prior` could require. Merely overlapping ranges is not
+/// sufficient: a later access may overlap the part of `prior` that lies
+/// outside `current`, leaving no transitive path through `current`.
+static bool subsumesMemoryFrontierAccess(
+    const ResolvedMemoryAccess &prior,
+    const ResolvedMemoryAccess &current) {
+  bool closesFrontier = current.semantics.writes ||
+                        current.semantics.ordered || current.semantics.unknown;
+  if (!closesFrontier || !mayAlias(prior, current)) {
+    return false;
+  }
+
+  if (!coversAddressSpace(prior, current)) {
+    return false;
+  }
+  if (containsMemoryRange(prior, current)) {
+    return true;
+  }
+
+  // Without any usable interval the alias model treats `current` as covering
+  // its complete compatible address space, so it safely represents every
+  // prior entry in that space. If it has a bounded interval, retain any prior
+  // entry that was not proven to be contained above.
+  return !hasMemoryRange(current);
+}
+
 static bool isPostUpdateAddress(const VPTOSUnit &producer, Value value) {
   return llvm::any_of(
       producer.getSemantics().effects, [&](const VPTOSchedulingEffect &effect) {
@@ -329,19 +414,16 @@ LogicalResult VPTOSchedDAGBuilder::buildMemoryEdges(
       }
     }
 
-    // A write (or ordered/unknown access) subsumes every may-alias frontier
-    // entry because the edges above already preserve those earlier accesses
-    // through this unit. Read-only accesses remain side by side until a later
-    // write joins them, preserving WAR while avoiding transitive edges.
+    // A write (or ordered/unknown access) replaces an earlier entry only when
+    // its may-alias coverage contains that entry. Partial overlap establishes
+    // an edge but cannot remove the old entry: a future access may touch only
+    // the uncovered portion. Read-only accesses remain side by side until a
+    // later closing access safely subsumes them.
     llvm::erase_if(frontier, [&](const FrontierAccess &prior) {
       return llvm::any_of(currentAccesses,
                           [&](const ResolvedMemoryAccess &current) {
-                            bool closesFrontier =
-                                current.semantics.writes ||
-                                current.semantics.ordered ||
-                                current.semantics.unknown;
-                            return closesFrontier &&
-                                   mayAlias(prior.access, current);
+                            return subsumesMemoryFrontierAccess(prior.access,
+                                                               current);
                           });
     });
     for (const ResolvedMemoryAccess &current : currentAccesses) {
