@@ -101,7 +101,6 @@ private:
   void insertPending(VPTOSUnit *unit, unsigned readyCycle);
   void releasePending();
 
-  const VPTOSchedDAG &dag;
   VPTOSchedDirection direction;
   unsigned currentCycle = 0;
   size_t scheduledCount = 0;
