@@ -773,24 +773,6 @@ advanceForPressure(VPTOSchedBoundary &boundary,
   return *advanced;
 }
 
-static FailureOr<bool>
-prepareResourceCandidates(VPTOSchedBoundary &boundary,
-                          VPTOSchedulingBudget &budget,
-                          VPTOScheduleFailure &failure) {
-  std::string detail;
-  FailureOr<bool> prepared =
-      boundary.deferResourceBlockedUnits(budget, detail);
-  if (failed(prepared)) {
-    if (budget.hasExceeded()) {
-      setWorkBudgetFailure(failure, budget);
-    } else {
-      setFailure(failure, VPTOScheduleFailureKind::InvalidModel, detail);
-    }
-    return mlir::failure();
-  }
-  return *prepared;
-}
-
 static LogicalResult replayPressureDrivenIdle(
     const VPTOScheduleEntry &entry, VPTOSchedBoundary &boundary,
     const VPTOSchedModel &model,
@@ -804,25 +786,6 @@ static LogicalResult replayPressureDrivenIdle(
     const uint64_t currentCycle = boundary.getCurrentCycle();
     if (currentCycle >= entry.issueCycle) {
       break;
-    }
-    FailureOr<bool> prepared =
-        prepareResourceCandidates(boundary, budget, failure);
-    if (failed(prepared)) {
-      return mlir::failure();
-    }
-    if (!*prepared) {
-      FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
-      if (failed(advanced)) {
-        setWorkBudgetFailure(failure, budget);
-        return mlir::failure();
-      }
-      if (!*advanced) {
-        setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
-                   "pressure idle has no pending resource event");
-        return mlir::failure();
-      }
-      advancedAtLeastOnce = true;
-      continue;
     }
     FailureOr<SmallVector<VPTOSchedCandidate>> candidates =
         buildCandidates(boundary, model, budget, failure);
@@ -859,15 +822,7 @@ static LogicalResult replayPressureDrivenIdle(
 static LogicalResult replayMandatoryDependencyIdle(
     const VPTOScheduleEntry &entry, VPTOSchedBoundary &boundary,
     VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
-  while (true) {
-    FailureOr<bool> prepared =
-        prepareResourceCandidates(boundary, budget, failure);
-    if (failed(prepared)) {
-      return mlir::failure();
-    }
-    if (*prepared) {
-      return success();
-    }
+  while (boundary.getAvailable().empty()) {
     unsigned currentCycle = boundary.getCurrentCycle();
     if (currentCycle >= entry.issueCycle) {
       break;
@@ -947,15 +902,6 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
                      "no candidate or pending dependency event remains");
           return mlir::failure();
         }
-      }
-
-      FailureOr<bool> prepared =
-          prepareResourceCandidates(boundary, budget, failure);
-      if (failed(prepared)) {
-        return mlir::failure();
-      }
-      if (!*prepared) {
-        continue;
       }
 
       LogicalResult refreshed =

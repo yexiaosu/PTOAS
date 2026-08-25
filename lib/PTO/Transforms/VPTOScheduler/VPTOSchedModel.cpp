@@ -85,13 +85,13 @@ hasControlSchedulingEffect(const VPTOSchedulingSemantics &semantics) {
 
 VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
   machine.target = "a5";
-  machine.version = "generic-a5-v5";
-  machine.issueWidth = 2;
+  machine.version = "generic-a5-v4";
+  machine.issueWidth = 1;
   machine.microOpBufferSize = 0;
 
   resources = {
       {ScalarResource, "scalar", 1, 0, {}},
-      {VectorResource, "vector", 2, 0, {}},
+      {VectorResource, "vector", 1, 0, {}},
       {MTEResource, "mte", 1, 0, {}},
       {CubeResource, "cube", 1, 0, {}},
       {ControlResource, "control", 1, 0, {}},
