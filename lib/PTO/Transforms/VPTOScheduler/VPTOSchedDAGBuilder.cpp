@@ -550,7 +550,8 @@ LogicalResult VPTOSchedDAGBuilder::buildSSAEdges(
         continue;
       }
       unsigned latency =
-          model ? model->getSchedClass(predecessor->getOperation()).writeLatency
+          model ? model->getSchedParameters(predecessor->getOperation())
+                      .writeLatency
                 : 1;
       std::string reason =
           (isPostUpdateAddress(*predecessor, operand)

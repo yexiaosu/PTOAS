@@ -379,13 +379,13 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 | 字段 | 当前值 |
 | --- | --- |
 | target | `a5` |
-| version | `generic-a5-v2` |
+| version | `generic-a5-v3` |
 
-当前 A5 模型中与 resource 和 hazard 有关的字段或实现都是为框架占位的 mock 值。`VPTOSchedBoundary` 仍持有相应 tracker，保留后续扩展契约，但当前调度、重放和 `analyze` 报告都不使用或展示这些数据，不能据此得出实际硬件性能分析结论。
+当前 A5 模型中与 resource 和 hazard 有关的字段或实现都是为框架占位的 mock 值。`VPTOSchedBoundary` 仍持有相应 tracker，保留后续扩展契约；`analyze`/trace 会展示 operation 的 effective micro-op 和 resource-use 数量，但当前调度和重放不据此推进真实机器周期，不能据此得出实际硬件性能分析结论。
 
 ### 逻辑延迟
 
-当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并按非零 `write latency` 处理，当前值为 10。这个延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
+当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并默认按非零 `write latency` 处理，当前值为 10。`pto.vbitcast` 和 `pto.pbitcast` 保留这个基础 class，但使用 operation-specific 参数覆盖：`microOps=0`、`writeLatency=0`，且不占用调度资源；它们只表达同一物理值的类型视图。延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
 
 ### vector/predicate SSA value 的压力参数
 
@@ -400,7 +400,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 
 `analyze` 和 `on` 共用调度区间划分、依赖图构建、分类覆盖率统计和原始顺序压力分析。原始顺序压力报告逐节点输出 `delta/current/peak`，不要求所有 sched class 都是 known，因此防御性的 unknown region 仍然有完整的静态分析结果。
 
-`analyze` 在这个公共前缀结束后直接返回，不调用 Scheduler、结果检查器或 model replay，也不产生 `VPTOScheduleResult`。`on` 才继续执行调度、检查、重放和应用；启用 trace 时，它输出与 `analyze` 相同的调度前报告，并额外输出 `schedule-result`。当前两种报告都不展示占位的 resource/hazard 数据。
+`analyze` 在这个公共前缀结束后直接返回，不调用 Scheduler、结果检查器或 model replay，也不产生 `VPTOScheduleResult`。`on` 才继续执行调度、检查、重放和应用；启用 trace 时，它输出与 `analyze` 相同的调度前报告，并额外输出 `schedule-result`。当前两种报告展示 effective micro-op、write latency 和 resource-use 数量，但不展示占位 resource 的周期占用或 hazard 数据。
 
 ## `on` 模式的调度算法
 

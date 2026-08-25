@@ -64,6 +64,16 @@ struct VPTOSchedClass {
   SmallVector<int> readAdvance;
 };
 
+/// Effective scheduling parameters for one operation. Target models may
+/// inherit these values from the operation's scheduling class and override
+/// individual fields without creating an opcode-specific class.
+struct VPTOSchedParameters {
+  unsigned microOps = 1;
+  unsigned writeLatency = 1;
+  ArrayRef<VPTOSchedResourceUse> resources;
+  ArrayRef<int> readAdvance;
+};
+
 struct VPTORegPressureSet {
   VPTOPressureSetID id = 0;
   std::string name;
@@ -85,13 +95,18 @@ public:
   virtual ArrayRef<VPTOSchedResource> getResources() const = 0;
   virtual ArrayRef<VPTORegPressureSet> getPressureSets() const = 0;
   virtual const VPTOSchedClass &getSchedClass(Operation *op) const = 0;
+  virtual VPTOSchedParameters getSchedParameters(Operation *op) const {
+    const VPTOSchedClass &schedClass = getSchedClass(op);
+    return {schedClass.microOps, schedClass.writeLatency,
+            schedClass.resources, schedClass.readAdvance};
+  }
   virtual SmallVector<VPTORegPressureContribution>
   getPressure(Value value) const = 0;
 };
 
 /// Conservative A5 model shared by analyze and on modes. Operations use the
-/// generic class for their declared execution pipe or micro-op family; the
-/// model does not maintain per-opcode latency entries.
+/// generic class for their declared execution pipe or micro-op family, with
+/// narrow operation-specific overrides for parameters that differ physically.
 class VPTOGenericA5SchedModel final : public VPTOSchedModel {
 public:
   VPTOGenericA5SchedModel();
@@ -106,6 +121,7 @@ public:
     return pressureSets;
   }
   const VPTOSchedClass &getSchedClass(Operation *op) const override;
+  VPTOSchedParameters getSchedParameters(Operation *op) const override;
   SmallVector<VPTORegPressureContribution>
   getPressure(Value value) const override;
 
