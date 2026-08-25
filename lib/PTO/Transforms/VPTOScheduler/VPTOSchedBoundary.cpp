@@ -169,7 +169,7 @@ VPTOSchedBoundary::VPTOSchedBoundary(
     const VPTOSchedDAG &dag, const VPTOSchedModel &model,
     VPTOSchedDirection direction,
     std::unique_ptr<VPTOHazardRecognizer> hazardRecognizer)
-    : dag(dag), direction(direction),
+    : direction(direction),
       resourceTracker(std::make_unique<VPTOResourceTracker>(model)),
       pressureTracker(
           std::make_unique<VPTORegPressureTracker>(model, dag, direction)),
