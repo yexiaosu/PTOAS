@@ -111,15 +111,20 @@ static void printRegionReport(llvm::raw_ostream &os,
      << " unknown-classes=" << unknownClasses << '\n';
 
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    Operation *op = unit->getOperation();
     const VPTOSchedClass &schedClass =
-        model.getSchedClass(unit->getOperation());
+        model.getSchedClass(op);
+    VPTOSchedParameters parameters = model.getSchedParameters(op);
     os << "vpto-scheduler: node=" << unit->getId()
        << " original-index=" << unit->getOriginalIndex()
-       << " op=" << unit->getOperation()->getName().getStringRef()
+       << " op=" << op->getName().getStringRef()
        << " semantic="
        << stringifyVPTOSchedulingClass(unit->getSchedulingClass())
        << " sched-class=" << schedClass.name
        << " known=" << (schedClass.known ? "true" : "false")
+       << " micro-ops=" << parameters.microOps
+       << " write-latency=" << parameters.writeLatency
+       << " resource-uses=" << parameters.resources.size()
        << " depth=" << unit->getDepth() << " height=" << unit->getHeight()
        << '\n';
   }

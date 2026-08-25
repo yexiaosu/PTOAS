@@ -102,18 +102,19 @@ buildRankingContext(const VPTOScheduleContext &context,
       detail = "candidate does not match the current scheduling context";
       return failure();
     }
-    const VPTOSchedClass &schedClass =
-        context.model.getSchedClass(candidate.unit->getOperation());
+    Operation *op = candidate.unit->getOperation();
+    const VPTOSchedClass &schedClass = context.model.getSchedClass(op);
+    VPTOSchedParameters parameters = context.model.getSchedParameters(op);
     if (!schedClass.known) {
       detail = "candidate has an unknown scheduling class";
       return failure();
     }
     if (candidate.criticalPath > rankingContext.longestCriticalPath) {
       rankingContext.longestCriticalPath = candidate.criticalPath;
-      rankingContext.urgentSlack = schedClass.writeLatency;
+      rankingContext.urgentSlack = parameters.writeLatency;
     } else if (candidate.criticalPath == rankingContext.longestCriticalPath) {
       rankingContext.urgentSlack =
-          std::max(rankingContext.urgentSlack, schedClass.writeLatency);
+          std::max(rankingContext.urgentSlack, parameters.writeLatency);
     }
   }
 
