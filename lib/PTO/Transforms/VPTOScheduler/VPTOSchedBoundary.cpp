@@ -14,6 +14,7 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOScheduler.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -27,6 +28,7 @@ using namespace mlir::pto;
 struct mlir::pto::VPTOPressureEvaluationCache {
   SmallVector<VPTORegPressureEvaluation> evaluations;
   SmallVector<uint8_t> valid;
+  DenseMap<Value, SmallVector<unsigned, 2>> usersByRepresentative;
 };
 
 namespace {
@@ -186,6 +188,15 @@ VPTOSchedBoundary::VPTOSchedBoundary(
   pressureEvaluationCache->evaluations.resize(nodeCount);
   pressureEvaluationCache->valid.assign(nodeCount, 0);
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
+    DenseSet<Value> seenRepresentatives;
+    for (Value operand : unit->getOperation()->getOperands()) {
+      Value representative =
+          pressureTracker->getPressureRepresentative(operand);
+      if (seenRepresentatives.insert(representative).second) {
+        pressureEvaluationCache->usersByRepresentative[representative]
+            .push_back(unit->getId());
+      }
+    }
     unsigned dependencies = direction == VPTOSchedDirection::Top
                                 ? unit->getRemainingPredecessors()
                                 : unit->getRemainingSuccessors();
@@ -393,11 +404,20 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
     return mlir::failure();
   }
   if (direction == VPTOSchedDirection::Top) {
+    DenseSet<Value> consumedRepresentatives;
     for (Value operand : unit.getOperation()->getOperands()) {
-      for (Operation *user : operand.getUsers()) {
-        if (VPTOSUnit *affected = dag.lookup(user)) {
-          pressureEvaluationCache->valid[affected->getId()] = 0;
-        }
+      Value representative =
+          pressureTracker->getPressureRepresentative(operand);
+      if (!consumedRepresentatives.insert(representative).second) {
+        continue;
+      }
+      auto found =
+          pressureEvaluationCache->usersByRepresentative.find(representative);
+      if (found == pressureEvaluationCache->usersByRepresentative.end()) {
+        continue;
+      }
+      for (unsigned affected : found->second) {
+        pressureEvaluationCache->valid[affected] = 0;
       }
     }
   }
