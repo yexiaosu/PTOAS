@@ -49,7 +49,8 @@ public:
   ArrayRef<int64_t> getCurrent() const { return current; }
   ArrayRef<int64_t> getPeak() const { return peak; }
   const DenseSet<Value> &getLiveValues() const { return liveValues; }
-  bool isLive(Value value) const { return liveValues.contains(value); }
+  Value getPressureRepresentative(Value value) const;
+  bool isLive(Value value) const;
 
 private:
   bool isLiveOut(Value value) const;
@@ -66,6 +67,7 @@ private:
   VPTOSchedDirection direction;
   DenseMap<VPTOPressureSetID, unsigned> pressureSetIndex;
   DenseMap<Value, unsigned> remainingUses;
+  DenseSet<Value> liveOutValues;
   DenseSet<Value> liveValues;
   SmallVector<int64_t> current;
   SmallVector<int64_t> peak;

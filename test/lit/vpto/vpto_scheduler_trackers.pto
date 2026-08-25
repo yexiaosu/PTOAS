@@ -17,6 +17,8 @@
 // CHECK-NEXT: pressure live-in-out-last-use: pass
 // CHECK-NEXT: pressure compare-select: grouped=3 interleaved=2
 // CHECK-NEXT: pressure bottom: pass
+// CHECK-NEXT: pressure bitcast-alias: pass
+// CHECK-NEXT: pressure bitcast-cache-invalidation: pass
 // CHECK-NEXT: strategy near-limit closing: pass
 // CHECK-NEXT: strategy low-pressure critical path: pass
 // CHECK-NEXT: strategy no-producer critical path: pass
