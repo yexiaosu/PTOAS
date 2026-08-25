@@ -379,13 +379,14 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 | 字段 | 当前值 |
 | --- | --- |
 | target | `a5` |
-| version | `generic-a5-v4` |
+| version | `generic-a5-v5` |
+| issue width | 2 micro-ops/cycle |
 
-当前 A5 模型中与 resource 和 hazard 有关的字段或实现都是为框架占位的 mock 值。`VPTOSchedBoundary` 仍持有相应 tracker，保留后续扩展契约；`analyze`/trace 会展示 operation 的 effective micro-op 和 resource-use 数量，但当前调度和重放不据此推进真实机器周期，不能据此得出实际硬件性能分析结论。
+当前 A5 模型允许每个逻辑周期发射 2 个 micro-op，并提供 2 个通用 Vector resource unit。调度和重放都会查询 resource tracker；当前周期无法预留资源的 dependency-ready 节点会延迟到最早可用周期。该模型只表达两条互相独立的 Vector 工作可以同周期发射，不区分具体 Vector 子流水。Hazard recognizer 仍是占位实现，逻辑周期也只是静态模型结果，不能单独作为实际硬件性能结论。
 
 ### 逻辑延迟
 
-当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并默认按非零 `write latency` 处理，当前值为 10。`pto.vbitcast` 和 `pto.pbitcast` 保留这个基础 class，但使用 operation-specific 参数覆盖：`microOps=0`、`writeLatency=0`，且不占用调度资源；它们只表达同一物理值的类型视图。Pressure tracker 还会把连续 bitcast 的输入和输出归并到同一个代表值，所有后续 use 都延长同一条 live range，不为类型视图增加 vector 或 predicate 寄存器需求。延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
+当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并默认按非零 `write latency` 处理，当前值为 10。每个这类 operation 消耗 1 个 issue slot 和 1 个 Vector resource unit，因此两个独立 operation 可以同周期发射，第三个推迟到下一周期。`pto.vbitcast` 和 `pto.pbitcast` 保留这个基础 class，但使用 operation-specific 参数覆盖：`microOps=0`、`writeLatency=0`，且不占用调度资源；它们只表达同一物理值的类型视图。Pressure tracker 还会把连续 bitcast 的输入和输出归并到同一个代表值，所有后续 use 都延长同一条 live range，不为类型视图增加 vector 或 predicate 寄存器需求。延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
 
 ### vector/predicate SSA value 的压力参数
 
@@ -400,7 +401,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 
 `analyze` 和 `on` 共用调度区间划分、依赖图构建、分类覆盖率统计和原始顺序压力分析。原始顺序压力报告逐节点输出 `delta/current/peak`，不要求所有 sched class 都是 known，因此防御性的 unknown region 仍然有完整的静态分析结果。
 
-`analyze` 在这个公共前缀结束后直接返回，不调用 Scheduler、结果检查器或 model replay，也不产生 `VPTOScheduleResult`。`on` 才继续执行调度、检查、重放和应用；启用 trace 时，它输出与 `analyze` 相同的调度前报告，并额外输出 `schedule-result`。当前两种报告展示 effective micro-op、write latency 和 resource-use 数量，但不展示占位 resource 的周期占用或 hazard 数据。
+`analyze` 在这个公共前缀结束后直接返回，不调用 Scheduler、结果检查器或 model replay，也不产生 `VPTOScheduleResult`。`on` 才继续执行调度、检查、重放和应用；启用 trace 时，它输出与 `analyze` 相同的调度前报告，并额外输出 `schedule-result`。当前两种报告展示 effective micro-op、write latency 和 resource-use 数量，但不展示 resource 的逐周期占用或 hazard 数据。
 
 ## `on` 模式的调度算法
 
@@ -424,6 +425,7 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 - 计算关键路径时每处理一个节点或一条边；
 - 每评估一次候选节点；
 - Boundary 提交时每检查一条相邻依赖边，并分别计算依赖更新的验证和应用；
+- 每次检查 dependency-ready 节点的 resource 最早可用周期；
 - available 队列的常数时间插入/删除，以及 pending 周期桶插入的对数复杂度上界；
 - 每次推进周期时确定需要释放的 pending 周期桶，并预付本次 cycle 更新和节点释放工作；
 - 结果检查时每扫描一个区间节点、结果项、DAG 节点、依赖边或 SSA operand；
@@ -701,13 +703,13 @@ SemanticVerification, ModelReplay, Apply
 
 当前实现限制：
 
-- 逻辑周期只来自 `Must` 依赖延迟，不是硬件发射时间线；
+- 逻辑周期来自 `Must` 依赖延迟和通用 resource 预留，不是完整硬件发射时间线；
 - A5 的所有 Vector micro-op 和 `PIPE_V`/`PIPE_V2` operation 共用当前 vector/predicate 非零延迟；
 - Scalar、Cube、MTE、Control、Structural 和未细分的 generic 类使用零调度成本；
 - 只统计 vector 和 predicate 两类压力；
 - pressure-driven idle 只在所有当前候选都会增加已知有界集合的压力风险时触发，仍依赖当前未校准的逻辑 latency，不代表真实硬件空转周期；
 - 多用户 closure group 当前每轮只评价最早的一个低 fan-out bundle，并使用 8 个直接用户和 96 个模拟节点的固定上限；
-- 不支持跨基本块调度、双向调度、指令捆绑/配对、bank conflict、NOP、软件流水或 Cube kernel 调度；
+- 不支持跨基本块调度、双向调度、显式指令捆绑/配对规则、bank conflict、NOP、软件流水或 Cube kernel 调度；
 - 修改 IR 时没有独立事务回滚，因为当前移动操作不可失败；
 - 不设置额外的收益门槛；新顺序合法且通过重放就会应用，即使新旧顺序相同也允许执行移动流程。
 
@@ -724,7 +726,7 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_on.pto` | analyze 只做静态分析、on trace 双链示例、pressure tie-break、pressure-driven idle、报告开关不改变 IR |
 | `vpto_scheduler_generic_op_coverage.pto` | vcvt/vmul/vdiv/vexp/vmula/vcadd 等通用 Vector micro-op 使用统一 sched class，on 不因 opcode 未登记而跳过 region |
 | `vpto_scheduler_multi_user_closure.pto` | near-limit 多用户 predicate closure group 可接受安全的瞬时压力增加，并在打开无关 producer 前关闭完整 fan-out live range |
-| `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/closure-group/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending cycle buckets、verify/replay、随机 DAG differential test |
+| `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/closure-group/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、A5 双发 resource、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending cycle buckets、verify/replay、随机 DAG differential test |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |
 
 随机 DAG differential test 使用 8 个固定 seed，覆盖完整 permutation、Must edge、ready cycle、独立 pressure oracle、decision metadata、非法结果拒绝、精确/不足预算以及最终 apply 顺序。

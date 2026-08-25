@@ -807,6 +807,104 @@ static bool testGenericA5PredicateLimit() {
   return ok;
 }
 
+static bool testGenericA5DualIssue(MLIRContext &context) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @dual_issue(%lhs: !pto.vreg<64xf32>,
+                        %rhs: !pto.vreg<64xf32>,
+                        %extra: !pto.vreg<64xf32>,
+                        %float_one: f32,
+                        %int_one: i32,
+                        %active0: !pto.mask<b32>,
+                        %active1: !pto.mask<b32>,
+                        %active2: !pto.mask<b32>) {
+    pto.vecscope {
+      %bits = pto.vbitcast %lhs : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %first = pto.vadds %bits, %int_one, %active0
+          : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %second = pto.vadds %rhs, %float_one, %active1
+          : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %third = pto.vadds %extra, %float_one, %active2
+          : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  if (!check(static_cast<bool>(module),
+             "cannot parse generic A5 dual-issue fixture")) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  if (!check(static_cast<bool>(scope),
+             "generic A5 dual-issue fixture has no vecscope")) {
+    return false;
+  }
+
+  VPTOGenericA5SchedModel model;
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (!check(succeeded(dag), "cannot build generic A5 dual-issue DAG")) {
+    return false;
+  }
+
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, **dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  if (!check(succeeded(result), "generic A5 dual-issue schedule")) {
+    return false;
+  }
+
+  SmallVector<unsigned, 2> issuedByCycle(2, 0);
+  bool bitcastIsFree = false;
+  for (const VPTOScheduleEntry &entry : result->entries) {
+    VPTOSchedParameters parameters =
+        model.getSchedParameters(entry.unit->getOperation());
+    if (isa<VbitcastOp>(entry.unit->getOperation())) {
+      bitcastIsFree = parameters.microOps == 0 &&
+                      parameters.writeLatency == 0 &&
+                      parameters.resources.empty();
+      continue;
+    }
+    if (entry.issueCycle < issuedByCycle.size()) {
+      issuedByCycle[entry.issueCycle] += parameters.microOps;
+    }
+  }
+  auto vectorResource = llvm::find_if(
+      model.getResources(), [](const VPTOSchedResource &resource) {
+        return resource.name == "vector";
+      });
+  bool ok = check(model.getMachineModel().issueWidth == 2 &&
+                      vectorResource != model.getResources().end() &&
+                      vectorResource->units == 2,
+                  "generic A5 must expose two issue and vector slots");
+  ok &= check(bitcastIsFree,
+              "generic A5 bitcast must remain resource-free");
+  ok &= check(issuedByCycle[0] == 2 && issuedByCycle[1] == 1,
+              "generic A5 must issue two vector ops then defer the third");
+  VPTOSchedulingBudget replayBudget(limits.maxWorkUnits);
+  VPTOScheduleFailure replayFailure;
+  ok &= check(succeeded(replayVPTOScheduleResult(
+                  model, **dag, *result, replayBudget, replayFailure)),
+              "generic A5 dual-issue schedule replay");
+  if (ok) {
+    llvm::outs() << "model generic-a5 dual-issue: pass\n";
+  }
+  return ok;
+}
+
 static bool testBoundary(MLIRContext &context, const TrackerTestModel &model) {
   FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
   if (!check(succeeded(fixture), "cannot build boundary fixture")) {
@@ -1885,7 +1983,8 @@ int main() {
       !testBitcastPressureAliasing(context, genericModel) ||
       !testBitcastPressureCacheInvalidation(context, genericModel) ||
       !testPressureAwareStrategy(context) ||
-      !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
+      !testGenericA5PredicateLimit() || !testGenericA5DualIssue(context) ||
+      !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
       !testPressureNoPendingProgress(context) ||
       !testPressureReliefDoesNotIdle(context) ||

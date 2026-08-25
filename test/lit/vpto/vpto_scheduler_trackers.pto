@@ -26,6 +26,7 @@
 // CHECK-NEXT: strategy closure-cone progress: pass
 // CHECK-NEXT: strategy deterministic tie-break: pass
 // CHECK-NEXT: model predicate-limit: 7
+// CHECK-NEXT: model generic-a5 dual-issue: pass
 // CHECK-NEXT: boundary independent-latency: pass
 // CHECK-NEXT: boundary fanout-budget-cycle-bucket: pass
 // CHECK-NEXT: scheduler verify-replay: pass

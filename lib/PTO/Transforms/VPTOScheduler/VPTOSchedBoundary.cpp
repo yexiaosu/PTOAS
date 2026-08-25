@@ -374,6 +374,33 @@ VPTOSchedBoundary::advanceToNextPendingCycle(VPTOSchedulingBudget &budget) {
   return true;
 }
 
+FailureOr<bool> VPTOSchedBoundary::deferResourceBlockedUnits(
+    VPTOSchedulingBudget &budget, std::string &detail) {
+  SmallVector<std::pair<VPTOSUnit *, unsigned>, 8> blocked;
+  for (VPTOSUnit *unit : available) {
+    if (!budget.consume()) {
+      detail = "work budget exhausted while evaluating machine resources";
+      return mlir::failure();
+    }
+    VPTOResourceEvaluation evaluation =
+        resourceTracker->evaluate(*unit, currentCycle);
+    if (!evaluation.legal) {
+      detail = evaluation.reason;
+      return mlir::failure();
+    }
+    if (evaluation.earliestCycle > currentCycle) {
+      blocked.push_back({unit, evaluation.earliestCycle});
+    }
+  }
+  for (auto [unit, readyCycle] : blocked) {
+    if (failed(defer(*unit, readyCycle, budget))) {
+      detail = "failed to defer a resource-blocked node";
+      return mlir::failure();
+    }
+  }
+  return !available.empty();
+}
+
 LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
                                         VPTOSchedulingBudget &budget,
                                         std::string &detail) {
@@ -382,6 +409,17 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
       isAvailable(&unit) && issueCycle == currentCycle;
   if (!selectedAtCurrentCycle) {
     detail = "selected node is not available at the current cycle";
+    return mlir::failure();
+  }
+
+  VPTOResourceEvaluation resourceEvaluation =
+      resourceTracker->evaluate(unit, issueCycle);
+  if (!resourceEvaluation.legal) {
+    detail = resourceEvaluation.reason;
+    return mlir::failure();
+  }
+  if (resourceEvaluation.earliestCycle != issueCycle) {
+    detail = "selected node cannot reserve resources at the current cycle";
     return mlir::failure();
   }
 
@@ -401,6 +439,10 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
   }
   if (failed(pressureTracker->commit(unit))) {
     detail = "register-pressure tracker rejected selected node";
+    return mlir::failure();
+  }
+  if (failed(resourceTracker->commit(unit, issueCycle))) {
+    detail = "resource tracker rejected a prevalidated node";
     return mlir::failure();
   }
   if (direction == VPTOSchedDirection::Top) {

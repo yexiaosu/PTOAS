@@ -86,8 +86,15 @@ public:
   /// work-unit budget cannot pay for inspecting the pending queue.
   FailureOr<bool> advanceToNextPendingCycle(VPTOSchedulingBudget &budget);
 
+  /// Move dependency-ready units which cannot reserve the modeled machine at
+  /// the current cycle to their earliest resource-available cycle. Returns
+  /// true when at least one unit remains available at the current cycle.
+  FailureOr<bool> deferResourceBlockedUnits(VPTOSchedulingBudget &budget,
+                                            std::string &detail);
+
   /// Commit an available unit at the current cycle, update pressure, and
-  /// release or defer newly dependency-ready neighbors using edge latency.
+  /// reserve its modeled machine resources before releasing or deferring newly
+  /// dependency-ready neighbors using edge latency.
   /// Dependency traversal and queue work are paid before tracker or queue
   /// state changes, so budget failure cannot leave a partial commit.
   LogicalResult commit(VPTOSUnit &unit, unsigned issueCycle,
