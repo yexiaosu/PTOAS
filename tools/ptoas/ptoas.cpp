@@ -3363,13 +3363,6 @@ int mlir::pto::compilePTOASModule(
                     "--vpto-scheduler=on.\n";
     return 1;
   }
-  if (schedulerMode == VPTOSchedulerCLIMode::On &&
-      pto::isBishengVecMISchedEnabled()) {
-    llvm::errs() << "Error: VPTO scheduler on mode conflicts with "
-                    "--enable-bisheng-vec-misched.\n";
-    return 1;
-  }
-
   module->getOperation()->setAttr("pto.target_arch",
                                   mlir::StringAttr::get(module->getContext(), arch));
 

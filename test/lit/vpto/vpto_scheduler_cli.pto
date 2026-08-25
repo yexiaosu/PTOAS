@@ -22,7 +22,6 @@
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler-trace %S/auto_vecscope_infer_simple.pto -o %t.trace.cpp 2>&1 | FileCheck %s --check-prefix=DEFAULT-ON
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=analyze %S/auto_vecscope_infer_simple.pto -o %t.analyze.cpp 2>&1 | FileCheck %s --check-prefix=PIPELINE
 // RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=off --vpto-scheduler-trace %S/auto_vecscope_infer_simple.pto -o %t.invalid-trace.cpp 2>&1 | FileCheck %s --check-prefix=INVALID-TRACE
-// RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=on --enable-bisheng-vec-misched %S/auto_vecscope_infer_simple.pto -o %t.conflict.cpp 2>&1 | FileCheck %s --check-prefix=CONFLICT
 
 // HELP: --vpto-scheduler=<value>
 // HELP-SAME: VPTO scheduler mode
@@ -41,7 +40,6 @@
 // PIPELINE-NOT: vpto-scheduler: unsupported-op=
 // PIPELINE-NOT: vpto-scheduler: unclassified-op=
 // INVALID-TRACE: Error: --vpto-scheduler-trace requires --vpto-scheduler=on.
-// CONFLICT: Error: VPTO scheduler on mode conflicts with --enable-bisheng-vec-misched.
 
 module {
 }
