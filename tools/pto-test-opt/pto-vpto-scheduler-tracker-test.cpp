@@ -49,12 +49,11 @@ enum PressureSetID : unsigned {
 class TrackerTestModel final : public VPTOSchedModel {
 public:
   explicit TrackerTestModel(bool trackUnboundedPressure = false,
-                            unsigned predicateLimit = 2,
-                            unsigned issueWidth = 2)
+                            unsigned predicateLimit = 2)
       : trackUnboundedPressure(trackUnboundedPressure) {
     machine.target = "test";
     machine.version = "tracker-test-v1";
-    machine.issueWidth = issueWidth;
+    machine.issueWidth = 2;
 
     resources = {
         {MultiUnitResource, "multi-unit", 2, 0, {}},
@@ -1978,9 +1977,6 @@ int main() {
   context.loadAllAvailableDialects();
 
   TrackerTestModel model;
-  TrackerTestModel pressureIdleModel(/*trackUnboundedPressure=*/false,
-                                     /*predicateLimit=*/2,
-                                     /*issueWidth=*/4);
   VPTOGenericA5SchedModel genericModel;
   if (!testResourceTracker(context, model) ||
       !testPressureTracker(context, model) ||
@@ -1989,8 +1985,7 @@ int main() {
       !testPressureAwareStrategy(context) ||
       !testGenericA5PredicateLimit() || !testGenericA5DualIssue(context) ||
       !testBoundary(context, model) ||
-      !testBoundaryBudget(context, model) ||
-      !testScheduler(context, pressureIdleModel) ||
+      !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
       !testPressureNoPendingProgress(context) ||
       !testPressureReliefDoesNotIdle(context) ||
       !testUnboundedPressureScheduling(context) ||
