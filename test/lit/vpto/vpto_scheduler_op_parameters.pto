@@ -15,10 +15,15 @@
 // CHECK: node=2 original-index=2 op=pto.vbitcast semantic=schedulable sched-class=vector-predicate known=true micro-ops=0 write-latency=0 resource-uses=0
 // CHECK: edge=0->1 kind=data strength=must latency=0
 // CHECK: edge=1->2 kind=data strength=must latency=10
+// CHECK: pressure node=0 delta={vector:0,predicate:0} current={vector:1,predicate:1}
+// CHECK: pressure node=1 delta={vector:0,predicate:-1} current={vector:1,predicate:0}
+// CHECK: pressure node=2 delta={vector:-1,predicate:0} current={vector:0,predicate:0}
 // CHECK-LABEL: vpto-scheduler: function=predicate_bitcast_parameters mode=analyze
 // CHECK: node=0 original-index=0 op=pto.pbitcast semantic=schedulable sched-class=vector-predicate known=true micro-ops=0 write-latency=0 resource-uses=0
 // CHECK: node=1 original-index=1 op=pto.pbitcast semantic=schedulable sched-class=vector-predicate known=true micro-ops=0 write-latency=0 resource-uses=0
 // CHECK: edge=0->1 kind=data strength=must latency=0
+// CHECK: pressure node=0 delta={vector:0,predicate:0} current={vector:0,predicate:1}
+// CHECK: pressure node=1 delta={vector:0,predicate:-1} current={vector:0,predicate:0}
 
 module attributes {pto.target_arch = "a5"} {
   func.func @vector_bitcast_parameters(%input: !pto.vreg<64xf32>,

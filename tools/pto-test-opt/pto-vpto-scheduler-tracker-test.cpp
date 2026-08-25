@@ -460,6 +460,185 @@ static bool testPressureTracker(MLIRContext &context,
   return true;
 }
 
+static bool testBitcastPressureAliasing(
+    MLIRContext &context, const VPTOGenericA5SchedModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @bitcast_pressure(%input: !pto.vreg<64xf32>,
+                              %minus_one: i32,
+                              %active: !pto.mask<b32>,
+                              %predicate: !pto.mask<b8>) {
+    pto.vecscope {
+      %bits = pto.vbitcast %input : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %previous = pto.vadds %bits, %minus_one, %active : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %view = pto.vbitcast %previous : !pto.vreg<64xi32> -> !pto.vreg<64xf32>
+      %b16 = pto.pbitcast %predicate : !pto.mask<b8> -> !pto.mask<b16>
+      %b32 = pto.pbitcast %b16 : !pto.mask<b16> -> !pto.mask<b32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  bool hasModule = check(static_cast<bool>(module),
+                         "cannot parse bitcast-pressure fixture");
+  if (!hasModule) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  bool hasScope = check(static_cast<bool>(scope),
+                        "bitcast-pressure fixture has no vecscope");
+  if (!hasScope) {
+    return false;
+  }
+
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  bool hasDAG = check(succeeded(dag),
+                      "cannot build bitcast-pressure fixture");
+  if (!hasDAG) {
+    return false;
+  }
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = (*dag)->getUnits();
+  bool hasExpectedUnitCount =
+      check(units.size() == 5, "bitcast-pressure fixture unit count");
+  if (!hasExpectedUnitCount) {
+    return false;
+  }
+
+  VPTORegPressureTracker top(model, **dag, VPTOSchedDirection::Top);
+  bool ok = check(top.getCurrent()[VectorPressure] == 1 &&
+                      top.getCurrent()[PredicatePressure] == 2,
+                  "bitcast top pressure initializes physical live-ins");
+  VPTORegPressureEvaluation vectorAlias = top.evaluate(*units[0]);
+  ok &= check(vectorAlias.delta[VectorPressure] == 0 &&
+                  vectorAlias.introduced[VectorPressure] == 0 &&
+                  vectorAlias.released[VectorPressure] == 0,
+              "vbitcast must preserve one physical live range");
+  ok &= check(commitOrder(top, units, {0, 1, 2}),
+              "commit vector bitcast chain");
+  VPTORegPressureEvaluation predicateAlias = top.evaluate(*units[3]);
+  ok &= check(predicateAlias.delta[PredicatePressure] == 0 &&
+                  predicateAlias.introduced[PredicatePressure] == 0 &&
+                  predicateAlias.released[PredicatePressure] == 0,
+              "pbitcast must preserve one physical live range");
+  ok &= check(commitOrder(top, units, {3, 4}),
+              "commit predicate bitcast chain");
+  ok &= check(top.getCurrent()[VectorPressure] == 0 &&
+                  top.getCurrent()[PredicatePressure] == 0 &&
+                  top.getPeak()[VectorPressure] == 1 &&
+                  top.getPeak()[PredicatePressure] == 2,
+              "bitcast top pressure must not create view registers");
+
+  VPTORegPressureTracker bottom(model, **dag, VPTOSchedDirection::Bottom);
+  ok &= check(commitOrder(bottom, units, {4}),
+              "start bottom predicate chain");
+  VPTORegPressureEvaluation bottomPredicateAlias = bottom.evaluate(*units[3]);
+  ok &= check(bottomPredicateAlias.delta[PredicatePressure] == 0 &&
+                  bottomPredicateAlias.introduced[PredicatePressure] == 0 &&
+                  bottomPredicateAlias.released[PredicatePressure] == 0,
+              "bottom pbitcast must preserve one physical live range");
+  ok &= check(commitOrder(bottom, units, {3, 2, 1}),
+              "advance bottom bitcast chains");
+  VPTORegPressureEvaluation bottomVectorAlias = bottom.evaluate(*units[0]);
+  ok &= check(bottomVectorAlias.delta[VectorPressure] == 0 &&
+                  bottomVectorAlias.introduced[VectorPressure] == 0 &&
+                  bottomVectorAlias.released[VectorPressure] == 0,
+              "bottom vbitcast must preserve one physical live range");
+  ok &= check(commitOrder(bottom, units, {0}),
+              "finish bottom bitcast chain");
+  ok &= check(bottom.getCurrent()[VectorPressure] == 1 &&
+                  bottom.getCurrent()[PredicatePressure] == 2,
+              "bitcast bottom pressure must recover physical live-ins");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "pressure bitcast-alias: pass\n";
+  return true;
+}
+
+static bool testBitcastPressureCacheInvalidation(
+    MLIRContext &context, const VPTOGenericA5SchedModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @bitcast_pressure_cache(%input: !pto.vreg<64xf32>,
+                                    %one: f32,
+                                    %direct_active: !pto.mask<b32>,
+                                    %alias_active: !pto.mask<b32>) {
+    pto.vecscope {
+      %bits = pto.vbitcast %input : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %direct = pto.vadds %input, %one, %direct_active : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %alias = pto.vadds %bits, %one, %alias_active : !pto.vreg<64xi32>, f32, !pto.mask<b32> -> !pto.vreg<64xi32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  if (!check(static_cast<bool>(module),
+             "cannot parse bitcast-pressure-cache fixture")) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  if (!check(static_cast<bool>(scope),
+             "bitcast-pressure-cache fixture has no vecscope")) {
+    return false;
+  }
+
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (!check(succeeded(dag),
+             "cannot build bitcast-pressure-cache fixture")) {
+    return false;
+  }
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = (*dag)->getUnits();
+  bool hasExpectedUnitCount = units.size() == 3;
+  if (!check(hasExpectedUnitCount,
+             "bitcast-pressure-cache fixture unit count")) {
+    return false;
+  }
+
+  VPTOSchedBoundary boundary(**dag, model, VPTOSchedDirection::Top);
+  VPTOSchedulingBudget budget(128);
+  std::string detail;
+  bool ok = check(succeeded(boundary.commit(*units[0], 0, budget, detail)),
+                  "commit pressure-alias producer");
+  VPTORegPressureEvaluation beforeDirect =
+      boundary.evaluatePressure(*units[2]);
+  ok &= check(beforeDirect.delta[VectorPressure] == 0,
+              "cached alias pressure must retain another use");
+  ok &= check(succeeded(boundary.commit(*units[1], 0, budget, detail)),
+              "commit direct pressure-alias user");
+  VPTORegPressureEvaluation afterDirect =
+      boundary.evaluatePressure(*units[2]);
+  ok &= check(afterDirect.delta[VectorPressure] == -1 &&
+                  afterDirect.released[VectorPressure] == 1,
+              "alias pressure cache must invalidate after a shared use");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "pressure bitcast-cache-invalidation: pass\n";
+  return true;
+}
+
 static VPTOSchedCandidate makeStrategyCandidate(
     const VPTOSchedModel &model, VPTOSUnit &unit, unsigned criticalPath,
     unsigned originalIndex, ArrayRef<int64_t> current,
@@ -1697,8 +1876,11 @@ int main() {
   context.loadAllAvailableDialects();
 
   TrackerTestModel model;
+  VPTOGenericA5SchedModel genericModel;
   if (!testResourceTracker(context, model) ||
       !testPressureTracker(context, model) ||
+      !testBitcastPressureAliasing(context, genericModel) ||
+      !testBitcastPressureCacheInvalidation(context, genericModel) ||
       !testPressureAwareStrategy(context) ||
       !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
