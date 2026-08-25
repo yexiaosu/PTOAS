@@ -571,13 +571,16 @@ static bool testBitcastPressureCacheInvalidation(
   static constexpr StringLiteral source = R"mlir(
 module attributes {pto.target_arch = "a5"} {
   func.func @bitcast_pressure_cache(%input: !pto.vreg<64xf32>,
-                                    %one: f32,
+                                    %float_one: f32,
+                                    %int_one: i32,
                                     %direct_active: !pto.mask<b32>,
                                     %alias_active: !pto.mask<b32>) {
     pto.vecscope {
       %bits = pto.vbitcast %input : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
-      %direct = pto.vadds %input, %one, %direct_active : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
-      %alias = pto.vadds %bits, %one, %alias_active : !pto.vreg<64xi32>, f32, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %direct = pto.vadds %input, %float_one, %direct_active
+          : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %alias = pto.vadds %bits, %int_one, %alias_active
+          : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
     }
     return
   }
