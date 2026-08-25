@@ -482,6 +482,7 @@ static FailureOr<int64_t> getLiveSupportPressure(
     unsigned pressureSet, VPTOSchedulingBudget &budget) {
   VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
   int64_t pressure = 0;
+  DenseSet<Value> countedValues;
   for (VPTOSUnit *unit : simulation.scheduled) {
     if (simulation.core.contains(unit)) {
       continue;
@@ -490,11 +491,14 @@ static FailureOr<int64_t> getLiveSupportPressure(
       if (!budget.consume()) {
         return failure();
       }
-      if (!tracker.isLive(result)) {
+      Value representative = tracker.getPressureRepresentative(result);
+      bool isLive = tracker.isLive(representative);
+      bool isFirstContribution = countedValues.insert(representative).second;
+      if (!isLive || !isFirstContribution) {
         continue;
       }
       for (const VPTORegPressureContribution &contribution :
-           model.getPressure(result)) {
+           model.getPressure(representative)) {
         if (contribution.pressureSet != pressureSetID) {
           continue;
         }

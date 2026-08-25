@@ -100,6 +100,10 @@ public:
     return {schedClass.microOps, schedClass.writeLatency,
             schedClass.resources, schedClass.readAdvance};
   }
+  /// Return the direct SSA source whose physical register pressure is shared
+  /// by `value`. Trackers may follow this relation across view-like operations
+  /// that belong to their scheduling region.
+  virtual Value getPressureRepresentative(Value value) const { return value; }
   virtual SmallVector<VPTORegPressureContribution>
   getPressure(Value value) const = 0;
 };
@@ -122,6 +126,7 @@ public:
   }
   const VPTOSchedClass &getSchedClass(Operation *op) const override;
   VPTOSchedParameters getSchedParameters(Operation *op) const override;
+  Value getPressureRepresentative(Value value) const override;
   SmallVector<VPTORegPressureContribution>
   getPressure(Value value) const override;
 

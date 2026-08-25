@@ -85,7 +85,7 @@ hasControlSchedulingEffect(const VPTOSchedulingSemantics &semantics) {
 
 VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
   machine.target = "a5";
-  machine.version = "generic-a5-v3";
+  machine.version = "generic-a5-v4";
   machine.issueWidth = 1;
   machine.microOpBufferSize = 0;
 
@@ -166,6 +166,15 @@ VPTOGenericA5SchedModel::getSchedParameters(Operation *op) const {
     parameters.readAdvance = {};
   }
   return parameters;
+}
+
+Value
+VPTOGenericA5SchedModel::getPressureRepresentative(Value value) const {
+  Operation *definingOp = value ? value.getDefiningOp() : nullptr;
+  if (definingOp && isa<VbitcastOp, PbitcastOp>(definingOp)) {
+    return definingOp->getOperand(0);
+  }
+  return value;
 }
 
 SmallVector<VPTORegPressureContribution>
