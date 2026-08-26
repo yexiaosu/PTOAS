@@ -39,6 +39,8 @@ public:
 private:
   LogicalResult buildSSAEdges(VPTOSchedDAG &dag,
                               VPTOScheduleFailure &failure) const;
+  LogicalResult buildTiedOperandEdges(VPTOSchedDAG &dag,
+                                      VPTOScheduleFailure &failure) const;
   LogicalResult buildMemoryEdges(VPTOSchedDAG &dag,
                                  VPTOScheduleFailure &failure) const;
   LogicalResult buildImplicitAndSyncEdges(

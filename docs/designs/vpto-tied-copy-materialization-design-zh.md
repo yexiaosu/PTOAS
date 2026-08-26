@@ -279,10 +279,10 @@ pass 必须幂等：
 ... soft-lib expansion / inline
   -> canonicalize
   -> CSE
-  -> VPTOMaterializeTiedOperandCopiesPass
-  -> VPTOSchedulerPass
   -> VPTOCombineReductionsPass
   -> CSE
+  -> VPTOMaterializeTiedOperandCopiesPass
+  -> VPTOSchedulerPass
   -> PTOValidateVPTOEmissionIR
 ```
 
@@ -290,8 +290,9 @@ pass 必须幂等：
 
 - 所有可能新增首期 tied operation 的 lowering 已完成；
 - 物化之前仍可正常优化 SSA；
+- reduction combine 和最终 CSE 已完成，不会再有后续 IR 变换改写 scheduler 的输出顺序；
 - scheduler 能看到完整 VMOV；
-- 物化之后的 CSE 不会合并 VMOV，因为不可折叠性由 operation 自身保证。
+- scheduler 与最终 emission legality validation 之间不再插入其他 transform。
 
 `vpto-mov` PR 只注册独立 pass，不进行上述 driver 接线。`vpto-sched-2` PR 完成接线。pass 本身不区分 `off`、`analyze` 或 `on`；具体模式是否组合该 pass 是 driver 的 pipeline policy，不进入物化算法。
 

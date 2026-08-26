@@ -14,7 +14,7 @@
 // CHECK-COUNT-2: pto.vmov %arg0 : !pto.vreg<64xf32> -> !pto.vreg<64xf32>
 // SCHED-LABEL: vpto-scheduler: function=copies_are_not_folded_or_eliminated
 // SCHED: nodes=2 edges=0
-// SCHED-COUNT-2: op=pto.vmov semantic=schedulable sched-class=vector known=true
+// SCHED-COUNT-2: op=pto.vmov semantic=schedulable sched-class=vector-predicate known=true
 // SCHED: coverage schedulable=2 structural=0 boundary=0 unsupported=0 unclassified=0
 
 module attributes {pto.target_arch = "a5"} {

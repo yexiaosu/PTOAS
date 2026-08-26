@@ -21,9 +21,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <optional>
@@ -123,67 +121,16 @@ static LogicalResult collectTiedUseGroups(func::FuncOp function,
   return failure(result.wasInterrupted());
 }
 
-struct RootUseAnalysis {
-  bool allUsesInBlock = true;
-  SmallVector<Operation *, 8> materialUsers;
-};
-
-static RootUseAnalysis analyzeRootUses(Value root, Block *expectedBlock) {
-  RootUseAnalysis analysis;
-  SmallVector<Value, 8> worklist{root};
-  llvm::DenseSet<Value> visitedValues;
-  llvm::SmallPtrSet<Operation *, 8> visitedMaterialUsers;
-
-  while (!worklist.empty()) {
-    Value value = worklist.pop_back_val();
-    if (!visitedValues.insert(value).second) {
-      continue;
-    }
-    for (OpOperand &use : value.getUses()) {
-      Operation *owner = use.getOwner();
-      bool isViewOperand =
-          isPhysicalRegisterView(owner) && use.getOperandNumber() == 0;
-      if (isViewOperand) {
-        analysis.allUsesInBlock &= owner->getBlock() == expectedBlock;
-        worklist.append(owner->getResults().begin(), owner->getResults().end());
-        continue;
-      }
-
-      analysis.allUsesInBlock &= owner->getBlock() == expectedBlock;
-      if (visitedMaterialUsers.insert(owner).second) {
-        analysis.materialUsers.push_back(owner);
-      }
-    }
-  }
-  return analysis;
-}
-
-static Operation *findLastMaterialUser(const RootUseAnalysis &analysis,
-                                       Block *block) {
-  if (!analysis.allUsesInBlock) {
-    return nullptr;
-  }
-  Operation *last = nullptr;
-  for (Operation *user : analysis.materialUsers) {
-    Block *userBlock = user->getBlock();
-    if (userBlock != block) {
-      return nullptr;
-    }
-    if (!last || last->isBeforeInBlock(user)) {
-      last = user;
-    }
-  }
-  return last;
-}
-
 static std::optional<TiedUse> chooseOwner(Value root,
                                           ArrayRef<TiedUse> tiedUses) {
   if (tiedUses.empty()) {
     return std::nullopt;
   }
   Block *block = tiedUses.front().operation->getBlock();
-  RootUseAnalysis analysis = analyzeRootUses(root, block);
-  Operation *lastMaterialUser = findLastMaterialUser(analysis, block);
+  PhysicalRegisterRootUseAnalysis analysis =
+      analyzePhysicalRegisterRootUses(root, block);
+  Operation *lastMaterialUser =
+      findLastPhysicalRegisterMaterialUser(analysis, block);
   if (!lastMaterialUser) {
     return std::nullopt;
   }

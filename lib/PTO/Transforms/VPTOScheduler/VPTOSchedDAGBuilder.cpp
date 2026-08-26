@@ -11,6 +11,7 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/VPTOPhysicalRegister.h"
 
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/DenseSet.h"
@@ -43,6 +44,9 @@ FailureOr<std::unique_ptr<VPTOSchedDAG>> VPTOSchedDAGBuilder::build(
 
   auto dag = std::make_unique<VPTOSchedDAG>(region);
   if (failed(buildSSAEdges(*dag, failure))) {
+    return mlir::failure();
+  }
+  if (failed(buildTiedOperandEdges(*dag, failure))) {
     return mlir::failure();
   }
   if (failed(buildMemoryEdges(*dag, failure))) {
@@ -578,6 +582,58 @@ LogicalResult VPTOSchedDAGBuilder::buildSSAEdges(
       }
       if (hasExternalUser) {
         dag.addLiveOut(result);
+      }
+    }
+  }
+  return success();
+}
+
+LogicalResult VPTOSchedDAGBuilder::buildTiedOperandEdges(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
+  for (const std::unique_ptr<VPTOSUnit> &unitOwner : dag.getUnits()) {
+    Operation *operation = unitOwner->getOperation();
+    auto tied = dyn_cast<VPTOTiedOperandOpInterface>(operation);
+    if (!tied) {
+      continue;
+    }
+    unsigned operandIndex = tied.getTiedOperandIndex();
+    unsigned resultIndex = tied.getTiedResultIndex();
+    bool hasInvalidOperandIndex =
+        operandIndex >= operation->getNumOperands();
+    bool hasInvalidResultIndex = resultIndex >= operation->getNumResults();
+    if (hasInvalidOperandIndex || hasInvalidResultIndex) {
+      failure.kind = VPTOScheduleFailureKind::InvalidModel;
+      failure.detail = "tied-operand interface returned an invalid index";
+      return mlir::failure();
+    }
+
+    Value root =
+        getPhysicalRegisterViewRoot(operation->getOperand(operandIndex));
+    PhysicalRegisterRootUseAnalysis analysis =
+        analyzePhysicalRegisterRootUses(root, operation->getBlock());
+    if (failed(consumeWork(failure, analysis.materialUsers.size()))) {
+      return mlir::failure();
+    }
+    Operation *lastMaterialUser = findLastPhysicalRegisterMaterialUser(
+        analysis, operation->getBlock());
+    if (lastMaterialUser != operation) {
+      continue;
+    }
+
+    for (Operation *reader : analysis.materialUsers) {
+      if (reader == operation) {
+        continue;
+      }
+      VPTOSUnit *readerUnit = dag.lookup(reader);
+      if (!readerUnit) {
+        continue;
+      }
+      if (failed(addEdge(dag, *readerUnit, *unitOwner,
+                         VPTOSchedEdgeKind::Anti,
+                         VPTOSchedEdgeStrength::Must, 0,
+                         "original-register owner waits for physical-root read",
+                         failure))) {
+        return mlir::failure();
       }
     }
   }

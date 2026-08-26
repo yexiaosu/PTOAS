@@ -12,6 +12,7 @@
 
 #include "PTO/IR/PTO.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
 using namespace mlir;
@@ -39,4 +40,52 @@ Value mlir::pto::getPhysicalRegisterViewRoot(Value value) {
     break;
   }
   return value;
+}
+
+PhysicalRegisterRootUseAnalysis
+mlir::pto::analyzePhysicalRegisterRootUses(Value root, Block *expectedBlock) {
+  PhysicalRegisterRootUseAnalysis analysis;
+  SmallVector<Value, 8> worklist{root};
+  llvm::DenseSet<Value> visitedValues;
+  llvm::SmallPtrSet<Operation *, 8> visitedMaterialUsers;
+
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!visitedValues.insert(value).second) {
+      continue;
+    }
+    for (OpOperand &use : value.getUses()) {
+      Operation *owner = use.getOwner();
+      bool isViewOperand =
+          isPhysicalRegisterView(owner) && use.getOperandNumber() == 0;
+      if (isViewOperand) {
+        analysis.allUsesInBlock &= owner->getBlock() == expectedBlock;
+        worklist.append(owner->getResults().begin(), owner->getResults().end());
+        continue;
+      }
+      analysis.allUsesInBlock &= owner->getBlock() == expectedBlock;
+      if (visitedMaterialUsers.insert(owner).second) {
+        analysis.materialUsers.push_back(owner);
+      }
+    }
+  }
+  return analysis;
+}
+
+Operation *mlir::pto::findLastPhysicalRegisterMaterialUser(
+    const PhysicalRegisterRootUseAnalysis &analysis, Block *block) {
+  if (!analysis.allUsesInBlock) {
+    return nullptr;
+  }
+  Operation *last = nullptr;
+  for (Operation *user : analysis.materialUsers) {
+    bool isOutsideBlock = user->getBlock() != block;
+    if (isOutsideBlock) {
+      return nullptr;
+    }
+    if (!last || last->isBeforeInBlock(user)) {
+      last = user;
+    }
+  }
+  return last;
 }

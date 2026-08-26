@@ -566,6 +566,140 @@ module attributes {pto.target_arch = "a5"} {
   return true;
 }
 
+static bool testVmovSchedulingAndPressure(
+    MLIRContext &context, const VPTOGenericA5SchedModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @vmov_pressure(%input: !pto.vreg<64xf32>, %float_one: f32,
+                           %int_one: i32,
+                           %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %copy = pto.vmov %input : !pto.vreg<64xf32> -> !pto.vreg<64xf32>
+      %view = pto.vbitcast %copy : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %copy_user = pto.vadds %view, %int_one, %active : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %input_user = pto.vadds %input, %float_one, %active : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  if (!check(static_cast<bool>(module), "cannot parse vmov-pressure fixture")) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  if (!check(static_cast<bool>(scope),
+             "vmov-pressure fixture has no vecscope")) {
+    return false;
+  }
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &operation : *region.block) {
+    if (!operation.hasTrait<OpTrait::IsTerminator>()) {
+      region.operations.push_back(&operation);
+    }
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (!check(succeeded(dag), "cannot build vmov-pressure fixture")) {
+    return false;
+  }
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = (*dag)->getUnits();
+  bool hasExpectedUnitCount = units.size() == 4;
+  if (!check(hasExpectedUnitCount, "vmov-pressure fixture unit count")) {
+    return false;
+  }
+
+  VPTOSchedParameters vmov = model.getSchedParameters(
+      units.front()->getOperation());
+  bool ok = check(vmov.microOps == 1 && vmov.writeLatency == 10 &&
+                      vmov.resources.size() == 1,
+                  "vmov must retain real vector scheduling cost");
+  VPTORegPressureTracker tracker(model, **dag, VPTOSchedDirection::Top);
+  VPTORegPressureEvaluation copy = tracker.evaluate(*units[0]);
+  ok &= check(copy.delta[VectorPressure] == 1 &&
+                  copy.introduced[VectorPressure] == 1,
+              "vmov must create a distinct vector live range");
+  ok &= check(commitOrder(tracker, units, {0}), "commit vmov copy");
+  VPTORegPressureEvaluation view = tracker.evaluate(*units[1]);
+  ok &= check(view.delta[VectorPressure] == 0 &&
+                  view.introduced[VectorPressure] == 0,
+              "vbitcast of vmov result must remain a zero-cost view");
+  ok &= check(commitOrder(tracker, units, {1, 2, 3}),
+              "commit vmov-pressure users");
+  ok &= check(tracker.getPeak()[VectorPressure] == 2,
+              "vmov-pressure peak must include source and copy");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "pressure vmov: pass\n";
+  return true;
+}
+
+static bool testTiedOwnerPressure(
+    MLIRContext &context, const VPTOGenericA5SchedModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @tied_owner_pressure(%acc: !pto.vreg<64xf32>,
+                                 %lhs: !pto.vreg<64xf32>,
+                                 %rhs: !pto.vreg<64xf32>,
+                                 %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %owner = pto.vmula %acc, %lhs, %rhs, %active
+          : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+            !pto.mask<b32> -> !pto.vreg<64xf32>
+      %keep_inputs_live = pto.vadd %lhs, %rhs, %active
+          : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>
+            -> !pto.vreg<64xf32>
+      %result = pto.vadd %owner, %keep_inputs_live, %active
+          : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>
+            -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  if (!check(static_cast<bool>(module), "cannot parse tied-owner fixture")) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  if (!check(static_cast<bool>(scope), "tied-owner fixture has no vecscope")) {
+    return false;
+  }
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &operation : *region.block) {
+    if (!operation.hasTrait<OpTrait::IsTerminator>()) {
+      region.operations.push_back(&operation);
+    }
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (!check(succeeded(dag), "cannot build tied-owner fixture")) {
+    return false;
+  }
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = (*dag)->getUnits();
+  bool hasExpectedUnitCount = units.size() == 3;
+  if (!check(hasExpectedUnitCount, "tied-owner fixture unit count")) {
+    return false;
+  }
+
+  VPTORegPressureTracker tracker(model, **dag, VPTOSchedDirection::Top);
+  VPTORegPressureEvaluation owner = tracker.evaluate(*units[0]);
+  bool ok = check(owner.released[VectorPressure] == 1 &&
+                      owner.introduced[VectorPressure] == 1 &&
+                      owner.delta[VectorPressure] == 0,
+                  "tied owner must replace its operand without extra pressure");
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "pressure tied-owner: pass\n";
+  return true;
+}
+
 static bool testBitcastPressureCacheInvalidation(
     MLIRContext &context, const VPTOGenericA5SchedModel &model) {
   static constexpr StringLiteral source = R"mlir(
@@ -1883,6 +2017,8 @@ int main() {
   if (!testResourceTracker(context, model) ||
       !testPressureTracker(context, model) ||
       !testBitcastPressureAliasing(context, genericModel) ||
+      !testVmovSchedulingAndPressure(context, genericModel) ||
+      !testTiedOwnerPressure(context, genericModel) ||
       !testBitcastPressureCacheInvalidation(context, genericModel) ||
       !testPressureAwareStrategy(context) ||
       !testGenericA5PredicateLimit() || !testBoundary(context, model) ||

@@ -3149,15 +3149,17 @@ static void prepareVPTOForEmission(PassManager &pm,
   kernelModulePM.addPass(pto::createPTOInlineLibCallPass());
   kernelModulePM.addPass(createCanonicalizerPass());
   kernelModulePM.addPass(createCSEPass());
+  kernelModulePM.addPass(pto::createVPTOCombineReductionsPass());
+  kernelModulePM.addPass(createCSEPass());
   if (schedulerMode != VPTOSchedulerCLIMode::Off) {
+    kernelModulePM.addNestedPass<func::FuncOp>(
+        pto::createVPTOMaterializeTiedOperandCopiesPass());
     pto::VPTOSchedulerOptions schedulerOptions;
     schedulerOptions.mode =
         schedulerMode == VPTOSchedulerCLIMode::Analyze ? "analyze" : "on";
     schedulerOptions.trace = vptoSchedulerTrace;
     kernelModulePM.addPass(pto::createVPTOSchedulerPass(schedulerOptions));
   }
-  kernelModulePM.addPass(pto::createVPTOCombineReductionsPass());
-  kernelModulePM.addPass(createCSEPass());
   kernelModulePM.addPass(pto::createPTOValidateVPTOEmissionIRPass());
 }
 

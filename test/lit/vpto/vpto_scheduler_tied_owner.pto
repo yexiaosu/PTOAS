@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -pto-vpto-materialize-tied-operand-copies '-pto-vpto-scheduler=mode=analyze' > %t 2> %t.trace
+// RUN: FileCheck %s --check-prefix=IR < %t
+// RUN: FileCheck %s --check-prefix=TRACE < %t.trace
+// RUN: pto-test-opt %s -pto-vpto-materialize-tied-operand-copies '-pto-vpto-scheduler=mode=on' | FileCheck %s --check-prefix=IR
+
+// IR-LABEL: func.func @tied_owner_dependencies
+// IR-COUNT-2: pto.vmov
+// TRACE-LABEL: vpto-scheduler: function=tied_owner_dependencies mode=analyze
+// TRACE-COUNT-2: op=pto.vmov semantic=schedulable sched-class=vector-predicate known=true micro-ops=1 write-latency=10 resource-uses=1
+// TRACE-COUNT-3: kind=anti strength=must latency=0 reason=original-register owner waits for physical-root read
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @tied_owner_dependencies(%acc: !pto.vreg<64xf32>, %lhs0: !pto.vreg<64xf32>, %lhs1: !pto.vreg<64xf32>, %lhs2: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %r0 = pto.vmula %acc, %lhs0, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %r1 = pto.vmula %acc, %lhs1, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %view = pto.vbitcast %acc : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %read = pto.vabs %view, %active : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %owner = pto.vmula %acc, %lhs2, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}

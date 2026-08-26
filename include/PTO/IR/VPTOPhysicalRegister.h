@@ -18,6 +18,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir::pto {
 
@@ -28,6 +29,22 @@ bool isPhysicalRegisterView(Operation *op);
 /// Follow zero-cost physical-register views to their shared SSA root. A real
 /// copy such as pto.vmov always starts a new root.
 Value getPhysicalRegisterViewRoot(Value value);
+
+/// Material users of one physical-register root, excluding zero-cost view
+/// operations that only forward the same register under another SSA type.
+struct PhysicalRegisterRootUseAnalysis {
+  bool allUsesInBlock = true;
+  SmallVector<Operation *, 8> materialUsers;
+};
+
+/// Follow all zero-cost view chains from `root` and collect operations that
+/// materially read the physical register.
+PhysicalRegisterRootUseAnalysis
+analyzePhysicalRegisterRootUses(Value root, Block *expectedBlock);
+
+/// Return the last material user when every use stays in `block`.
+Operation *findLastPhysicalRegisterMaterialUser(
+    const PhysicalRegisterRootUseAnalysis &analysis, Block *block);
 
 } // namespace mlir::pto
 

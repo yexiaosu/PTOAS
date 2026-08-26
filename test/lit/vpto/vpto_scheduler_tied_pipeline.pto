@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=off %s -o - | FileCheck %s --check-prefix=OFF
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=analyze %s -o - | FileCheck %s --check-prefix=ENABLED
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=on %s -o - | FileCheck %s --check-prefix=ENABLED
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vpto-scheduler=analyze --mlir-print-ir-after-all %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=ORDER
+
+// OFF-LABEL: func.func @tied_pipeline
+// OFF-NOT: pto.vmov
+// ENABLED-LABEL: func.func @tied_pipeline
+// ENABLED-COUNT-2: pto.vmov
+// ORDER: IR Dump After VPTOCombineReductions
+// ORDER: IR Dump After CSE
+// ORDER-NOT: IR Dump After
+// ORDER: IR Dump After VPTOMaterializeTiedOperandCopies
+// ORDER: IR Dump After VPTOScheduler
+// ORDER-NOT: IR Dump After
+// ORDER: IR Dump After {{.*}}PTOValidateVPTOEmissionIRPass
+
+module attributes {pto.target_arch = "a5"} {
+  module attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    func.func @tied_pipeline(%acc: !pto.vreg<64xf32>, %lhs0: !pto.vreg<64xf32>, %lhs1: !pto.vreg<64xf32>, %lhs2: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %out: !pto.ptr<f32, ub>, %index: index, %active: !pto.mask<b32>) {
+      pto.vecscope {
+        %r0 = pto.vmula %acc, %lhs0, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %r1 = pto.vmula %acc, %lhs1, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %r2 = pto.vmula %acc, %lhs2, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %sum01 = pto.vadd %r0, %r1, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %sum = pto.vadd %sum01, %r2, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        pto.vsts %sum, %out[%index], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      }
+      return
+    }
+  }
+}
