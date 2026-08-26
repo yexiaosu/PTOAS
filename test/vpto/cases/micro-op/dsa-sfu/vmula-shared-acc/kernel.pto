@@ -39,15 +39,15 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           iter_args(%remaining = %c1024_i32) -> (i32) {
         %mask, %next_remaining = pto.plt_b32 %remaining : i32 -> !pto.mask<b32>, i32
         %acc = pto.vlds %ub_input[%offset] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
-        %lhs = pto.vabs %acc, %mask : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
-        %rhs = pto.vabs %lhs, %mask : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
-        %result0 = pto.vmula %acc, %lhs, %rhs, %mask
+        %absolute = pto.vabs %acc, %mask : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %negative = pto.vneg %acc, %mask : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %result0 = pto.vmula %acc, %absolute, %absolute, %mask
           : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>
           -> !pto.vreg<64xf32>
-        %result1 = pto.vmula %acc, %lhs, %rhs, %mask
+        %result1 = pto.vmula %acc, %acc, %absolute, %mask
           : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>
           -> !pto.vreg<64xf32>
-        %result2 = pto.vmula %acc, %lhs, %rhs, %mask
+        %result2 = pto.vmula %acc, %negative, %absolute, %mask
           : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>
           -> !pto.vreg<64xf32>
         pto.vsts %result0, %ub_output0[%offset], %mask

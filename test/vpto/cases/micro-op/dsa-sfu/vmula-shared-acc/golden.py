@@ -20,9 +20,12 @@ SEED = 1327
 def main() -> None:
     rng = np.random.default_rng(SEED)
     input_values = rng.uniform(-4.0, 4.0, size=ELEMENT_COUNT).astype(np.float32)
-    expected = (input_values + np.abs(input_values) * np.abs(input_values)).astype(np.float32)
+    absolute = np.abs(input_values)
+    expected0 = (input_values + absolute * absolute).astype(np.float32)
+    expected1 = (input_values + input_values * absolute).astype(np.float32)
+    expected2 = (input_values - input_values * absolute).astype(np.float32)
     output_values = np.zeros(ELEMENT_COUNT * OUTPUT_COUNT, dtype=np.float32)
-    golden_values = np.tile(expected, OUTPUT_COUNT)
+    golden_values = np.concatenate((expected0, expected1, expected2))
 
     output_dir = Path.cwd()
     input_values.tofile(output_dir / "input.bin")
