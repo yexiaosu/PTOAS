@@ -95,8 +95,24 @@ int main() {
         return 1;
     }
 
-    ReadFile("./input.bin", kInputBytes, resources.inputHost, kInputBytes);
-    ReadFile("./output.bin", kOutputBytes, resources.outputHost, kOutputBytes);
+    std::size_t inputFileSize = 0;
+    std::size_t outputFileSize = 0;
+    if (!ReadFile("./input.bin", inputFileSize, resources.inputHost, kInputBytes)) {
+        std::fprintf(stderr, "[ERROR] failed to read input.bin\n");
+        return 1;
+    }
+    if (inputFileSize != kInputBytes) {
+        std::fprintf(stderr, "[ERROR] input.bin has an unexpected size\n");
+        return 1;
+    }
+    if (!ReadFile("./output.bin", outputFileSize, resources.outputHost, kOutputBytes)) {
+        std::fprintf(stderr, "[ERROR] failed to read output.bin\n");
+        return 1;
+    }
+    if (outputFileSize != kOutputBytes) {
+        std::fprintf(stderr, "[ERROR] output.bin has an unexpected size\n");
+        return 1;
+    }
     if (!CheckAcl(aclrtMemcpy(resources.inputDevice, kInputBytes, resources.inputHost, kInputBytes,
                               ACL_MEMCPY_HOST_TO_DEVICE),
                   "aclrtMemcpy(input)")) {
@@ -118,6 +134,9 @@ int main() {
                   "aclrtMemcpy(result)")) {
         return 1;
     }
-    WriteFile("./output.bin", resources.outputHost, kOutputBytes);
+    if (!WriteFile("./output.bin", resources.outputHost, kOutputBytes)) {
+        std::fprintf(stderr, "[ERROR] failed to write output.bin\n");
+        return 1;
+    }
     return 0;
 }
