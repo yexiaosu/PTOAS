@@ -613,7 +613,7 @@ module attributes {pto.target_arch = "a5"} {
 
   VPTOSchedParameters vmov = model.getSchedParameters(
       units.front()->getOperation());
-  bool ok = check(vmov.microOps == 1 && vmov.writeLatency == 10 &&
+  bool ok = check(vmov.microOps == 1 && vmov.writeLatency == 2 &&
                       vmov.resources.size() == 1,
                   "vmov must retain real vector scheduling cost");
   VPTORegPressureTracker tracker(model, **dag, VPTOSchedDirection::Top);

@@ -14,7 +14,7 @@
 // IR-LABEL: func.func @tied_owner_dependencies
 // IR-COUNT-2: pto.vmov
 // TRACE-LABEL: vpto-scheduler: function=tied_owner_dependencies mode=analyze
-// TRACE-COUNT-2: op=pto.vmov semantic=schedulable sched-class=vector-predicate known=true micro-ops=1 write-latency=10 resource-uses=1
+// TRACE-COUNT-2: op=pto.vmov semantic=schedulable sched-class=vector-predicate known=true micro-ops=1 write-latency=2 resource-uses=1
 // TRACE-COUNT-3: kind=anti strength=must latency=0 reason=original-register owner waits for physical-root read
 
 module attributes {pto.target_arch = "a5"} {

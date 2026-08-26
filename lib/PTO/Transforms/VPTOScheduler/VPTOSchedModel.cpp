@@ -85,7 +85,7 @@ hasControlSchedulingEffect(const VPTOSchedulingSemantics &semantics) {
 
 VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
   machine.target = "a5";
-  machine.version = "generic-a5-v4";
+  machine.version = "generic-a5-v5";
   machine.issueWidth = 1;
   machine.microOpBufferSize = 0;
 
@@ -164,6 +164,8 @@ VPTOGenericA5SchedModel::getSchedParameters(Operation *op) const {
     parameters.writeLatency = 0;
     parameters.resources = {};
     parameters.readAdvance = {};
+  } else if (op && isa<VmovOp>(op)) {
+    parameters.writeLatency = 2;
   }
   return parameters;
 }

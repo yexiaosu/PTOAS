@@ -379,13 +379,13 @@ height(node)     = max(height(node), height(successor) + edge.latency)
 | 字段 | 当前值 |
 | --- | --- |
 | target | `a5` |
-| version | `generic-a5-v4` |
+| version | `generic-a5-v5` |
 
 当前 A5 模型中与 resource 和 hazard 有关的字段或实现都是为框架占位的 mock 值。`VPTOSchedBoundary` 仍持有相应 tracker，保留后续扩展契约；`analyze`/trace 会展示 operation 的 effective micro-op 和 resource-use 数量，但当前调度和重放不据此推进真实机器周期，不能据此得出实际硬件性能分析结论。
 
 ### 逻辑延迟
 
-当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并默认按非零 `write latency` 处理，当前值为 10。`pto.vbitcast` 和 `pto.pbitcast` 保留这个基础 class，但使用 operation-specific 参数覆盖：`microOps=0`、`writeLatency=0`，且不占用调度资源；它们只表达同一物理值的类型视图。Pressure tracker 还会把连续 bitcast 的输入和输出归并到同一个代表值，所有后续 use 都延长同一条 live range，不为类型视图增加 vector 或 predicate 寄存器需求。延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
+当前所有 Vector micro-op，以及声明 `PIPE_V`/`PIPE_V2` 的 operation，共用 `vector-predicate` sched class，并默认按非零 `write latency` 处理，当前值为 10。`pto.vbitcast` 和 `pto.pbitcast` 保留这个基础 class，但使用 operation-specific 参数覆盖：`microOps=0`、`writeLatency=0`，且不占用调度资源；它们只表达同一物理值的类型视图。`pto.vmov` 同样保留基础 class 的 1 micro-op 和 vector resource，但使用 CA model 中依赖 RV_VMOV 连续 432 次稳定相隔 2 ticks 的结果，将 `writeLatency` 覆盖为 2。Pressure tracker 还会把连续 bitcast 的输入和输出归并到同一个代表值，所有后续 use 都延长同一条 live range，不为类型视图增加 vector 或 predicate 寄存器需求；VMOV result 则仍是新的 live range。延迟只用于“结果定义者 -> 同一调度区间内使用者”的数据依赖。Scalar、Cube、MTE、Control、Structural 和未细分的通用 sched class 当前不增加这类逻辑等待时间。
 
 ### vector/predicate SSA value 的压力参数
 

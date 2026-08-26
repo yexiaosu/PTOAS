@@ -312,7 +312,7 @@ VMOV 到其 destructive consumer 已由 SSA 建立 data edge。除此之外，�
 
 ### 8.2 Resource 和 latency
 
-`pto.vmov` 是真实 vector micro-op，不能按零 micro-op 或零 latency 建模。首版可以使用 A5 vector-move 参数；最终 write latency 和 resource occupancy 必须用 CA trace 或工具链资料验证。现有文档中的 9-cycle `RV_VLD` proxy 只能作为待验证初值，不能直接当作 VMOV 实测结论。
+`pto.vmov` 是真实 vector micro-op，不能按零 micro-op 或零 latency 建模。它保留 `vector-predicate` 基础 class 的 1 micro-op 和 vector resource。Issue #1327 的 CA model trace 中，显式 VMOV 经 RA 形成依赖 copy chain 后，18 条 stream 的 432 对 `RV_VMOV` 全部稳定相隔 2 ticks，因此 A5 generic model 对 `pto.vmov` 使用 operation-specific `writeLatency=2`；该值表示依赖指令的可发射间距，不是把 VMOV 当成零成本 view。
 
 ### 8.3 Register pressure
 
