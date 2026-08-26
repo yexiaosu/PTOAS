@@ -13,7 +13,10 @@
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/VPTOPhysicalRegister.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -108,10 +111,16 @@ LogicalResult VPTOSchedDAGBuilder::addEdge(
 }
 
 namespace {
+struct IntegerRange {
+  int64_t lowerInclusive = 0;
+  int64_t upperInclusive = 0;
+};
+
 struct ResolvedMemoryAccess {
   VPTOMemoryAccess semantics;
   Value aliasRoot;
   std::optional<int64_t> absoluteByteOffset;
+  std::optional<IntegerRange> absoluteByteRange;
 };
 
 static std::optional<int64_t> getConstantInteger(Value value) {
@@ -125,13 +134,85 @@ static std::optional<int64_t> getConstantInteger(Value value) {
   return constant.getValue().getSExtValue();
 }
 
-/// Resolve the byte address represented by the pointer-producing operations
-/// that are explicit at the VPTO scheduling boundary. Keep all other pointer
-/// transforms conservative: their layout may not be expressible as one
-/// constant byte displacement.
-static std::optional<int64_t> getConstantPointerAddress(Value value) {
+static std::optional<ConstantIntRanges>
+getIntegerRanges(Value value, unsigned depth = 0) {
+  constexpr unsigned maxDepth = 32;
+  if (!value || depth > maxDepth) {
+    return std::nullopt;
+  }
+  IntegerAttr constant;
+  if (matchPattern(value, m_Constant(&constant))) {
+    return ConstantIntRanges::constant(constant.getValue());
+  }
+
+  unsigned bitWidth =
+      ConstantIntRanges::getStorageBitwidth(value.getType());
+  if (bitWidth == 0) {
+    return std::nullopt;
+  }
+  if (auto blockArgument = dyn_cast<BlockArgument>(value)) {
+    auto forOp = dyn_cast_or_null<scf::ForOp>(
+        blockArgument.getOwner()->getParentOp());
+    bool invalidLoopArgument = !forOp || forOp.getInductionVar() != value;
+    if (invalidLoopArgument) {
+      return std::nullopt;
+    }
+    std::optional<int64_t> lower =
+        getConstantIntValue(forOp.getLowerBound());
+    std::optional<int64_t> step = getConstantIntValue(forOp.getStep());
+    if (!lower || !step || *lower < 0 || *step <= 0) {
+      return std::nullopt;
+    }
+    APInt lowerBound(bitWidth, static_cast<uint64_t>(*lower),
+                     /*isSigned=*/true);
+    return ConstantIntRanges::fromSigned(
+        lowerBound, APInt::getSignedMaxValue(bitWidth));
+  }
+
+  Operation *definingOp = value.getDefiningOp();
+  auto rangeInterface = dyn_cast_or_null<InferIntRangeInterface>(definingOp);
+  if (!rangeInterface) {
+    return std::nullopt;
+  }
+  SmallVector<ConstantIntRanges> operandRanges;
+  operandRanges.reserve(definingOp->getNumOperands());
+  for (Value operand : definingOp->getOperands()) {
+    std::optional<ConstantIntRanges> operandRange =
+        getIntegerRanges(operand, depth + 1);
+    if (!operandRange) {
+      return std::nullopt;
+    }
+    operandRanges.push_back(std::move(*operandRange));
+  }
+
+  std::optional<ConstantIntRanges> result;
+  rangeInterface.inferResultRanges(
+      operandRanges,
+      [&](Value resultValue, const ConstantIntRanges &range) {
+        if (resultValue == value) {
+          result = range;
+        }
+      });
+  return result;
+}
+
+static std::optional<IntegerRange> getIntegerRange(Value value) {
+  std::optional<ConstantIntRanges> range = getIntegerRanges(value);
+  bool invalidRange = !range || !range->smin().isSignedIntN(64) ||
+                      !range->smax().isSignedIntN(64);
+  if (invalidRange) {
+    return std::nullopt;
+  }
+  return IntegerRange{range->smin().getSExtValue(),
+                      range->smax().getSExtValue()};
+}
+
+/// Resolve a conservative byte-address range for pointer-producing operations
+/// explicit at the VPTO scheduling boundary. Unknown transforms and possible
+/// integer overflow deliberately fall back to may-alias.
+static std::optional<IntegerRange> getPointerAddressRange(Value value) {
   SmallPtrSet<Operation *, 8> visited;
-  int64_t displacement = 0;
+  IntegerRange displacement;
   while (Operation *definingOp = value.getDefiningOp()) {
     if (!visited.insert(definingOp).second) {
       return std::nullopt;
@@ -139,8 +220,11 @@ static std::optional<int64_t> getConstantPointerAddress(Value value) {
     if (auto cast = dyn_cast<CastPtrOp>(definingOp)) {
       Value input = cast.getInput();
       if (std::optional<int64_t> address = getConstantInteger(input)) {
-        int64_t absoluteAddress;
-        if (llvm::AddOverflow(*address, displacement, absoluteAddress)) {
+        IntegerRange absoluteAddress;
+        if (llvm::AddOverflow(*address, displacement.lowerInclusive,
+                              absoluteAddress.lowerInclusive) ||
+            llvm::AddOverflow(*address, displacement.upperInclusive,
+                              absoluteAddress.upperInclusive)) {
           return std::nullopt;
         }
         return absoluteAddress;
@@ -156,15 +240,18 @@ static std::optional<int64_t> getConstantPointerAddress(Value value) {
       if (!address) {
         return std::nullopt;
       }
-      int64_t absoluteAddress;
-      if (llvm::AddOverflow(*address, displacement, absoluteAddress)) {
+      IntegerRange absoluteAddress;
+      if (llvm::AddOverflow(*address, displacement.lowerInclusive,
+                            absoluteAddress.lowerInclusive) ||
+          llvm::AddOverflow(*address, displacement.upperInclusive,
+                            absoluteAddress.upperInclusive)) {
         return std::nullopt;
       }
       return absoluteAddress;
     }
     if (auto addPtr = dyn_cast<AddPtrOp>(definingOp)) {
-      std::optional<int64_t> elementOffset =
-          getConstantInteger(addPtr.getOffset());
+      std::optional<IntegerRange> elementOffset =
+          getIntegerRange(addPtr.getOffset());
       auto pointerType = dyn_cast<PtrType>(addPtr.getPtr().getType());
       if (!elementOffset || !pointerType) {
         return std::nullopt;
@@ -175,12 +262,19 @@ static std::optional<int64_t> getConstantPointerAddress(Value value) {
       if (invalidElementType) {
         return std::nullopt;
       }
-      int64_t byteOffset;
+      int64_t minimumByteOffset;
+      int64_t maximumByteOffset;
+      int64_t elementByteSize =
+          static_cast<int64_t>(elementType.getIntOrFloatBitWidth() / 8);
       if (llvm::MulOverflow(
-              *elementOffset,
-              static_cast<int64_t>(elementType.getIntOrFloatBitWidth() / 8),
-              byteOffset) ||
-          llvm::AddOverflow(displacement, byteOffset, displacement)) {
+              elementOffset->lowerInclusive, elementByteSize,
+              minimumByteOffset) ||
+          llvm::MulOverflow(elementOffset->upperInclusive, elementByteSize,
+                            maximumByteOffset) ||
+          llvm::AddOverflow(displacement.lowerInclusive, minimumByteOffset,
+                            displacement.lowerInclusive) ||
+          llvm::AddOverflow(displacement.upperInclusive, maximumByteOffset,
+                            displacement.upperInclusive)) {
         return std::nullopt;
       }
       value = addPtr.getPtr();
@@ -210,16 +304,23 @@ resolveMemoryAccesses(const VPTOSchedulingSemantics &semantics) {
   SmallVector<ResolvedMemoryAccess> accesses;
   accesses.reserve(semantics.memoryAccesses.size());
   for (const VPTOMemoryAccess &memoryAccess : semantics.memoryAccesses) {
-    ResolvedMemoryAccess access{memoryAccess, {}, std::nullopt};
+    ResolvedMemoryAccess access{memoryAccess, {}, std::nullopt, std::nullopt};
     if (access.semantics.address) {
-      std::optional<int64_t> pointerAddress =
-          getConstantPointerAddress(access.semantics.address);
-      if (pointerAddress && access.semantics.byteOffset) {
-        int64_t absoluteByteOffset;
-        if (!llvm::AddOverflow(*pointerAddress,
+      std::optional<IntegerRange> pointerRange =
+          getPointerAddressRange(access.semantics.address);
+      if (pointerRange && access.semantics.byteOffset) {
+        IntegerRange byteRange;
+        if (!llvm::AddOverflow(pointerRange->lowerInclusive,
                                *access.semantics.byteOffset,
-                               absoluteByteOffset))
-          access.absoluteByteOffset = absoluteByteOffset;
+                               byteRange.lowerInclusive) &&
+            !llvm::AddOverflow(pointerRange->upperInclusive,
+                               *access.semantics.byteOffset,
+                               byteRange.upperInclusive)) {
+          access.absoluteByteRange = byteRange;
+          if (byteRange.lowerInclusive == byteRange.upperInclusive) {
+            access.absoluteByteOffset = byteRange.lowerInclusive;
+          }
+        }
       }
       access.aliasRoot = getAliasRoot(access.semantics.address);
       if (access.aliasRoot != access.semantics.address) {
@@ -238,6 +339,19 @@ static bool mayAlias(const ResolvedMemoryAccess &lhs,
     return false;
   if (!lhs.semantics.address || !rhs.semantics.address)
     return true;
+  if (lhs.absoluteByteRange && lhs.semantics.byteSize &&
+      rhs.absoluteByteRange && rhs.semantics.byteSize) {
+    int64_t lhsLatestEnd;
+    int64_t rhsLatestEnd;
+    if (!llvm::AddOverflow(lhs.absoluteByteRange->upperInclusive,
+                           *lhs.semantics.byteSize, lhsLatestEnd) &&
+        !llvm::AddOverflow(rhs.absoluteByteRange->upperInclusive,
+                           *rhs.semantics.byteSize, rhsLatestEnd) &&
+        (lhsLatestEnd <= rhs.absoluteByteRange->lowerInclusive ||
+         rhsLatestEnd <= lhs.absoluteByteRange->lowerInclusive)) {
+      return false;
+    }
+  }
   if (lhs.absoluteByteOffset && lhs.semantics.byteSize &&
       rhs.absoluteByteOffset && rhs.semantics.byteSize) {
     int64_t lhsEnd;
