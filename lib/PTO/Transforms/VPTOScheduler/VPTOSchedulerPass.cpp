@@ -198,7 +198,55 @@ static void printScheduleResult(llvm::raw_ostream &os, unsigned blockIndex,
        << " reason=" << entry.reason
        << " op=" << entry.unit->getOperation()->getName().getStringRef()
        << " pressure-idle=" << (entry.pressureDrivenIdle ? "true" : "false")
+       << " recovery-idle=" << (entry.recoveryDrivenIdle ? "true" : "false")
        << '\n';
+  }
+  for (auto [position, diagnosticValue] :
+       llvm::enumerate(result.diagnostics)) {
+    if (!diagnosticValue) {
+      continue;
+    }
+    const VPTOScheduleDiagnostic &diagnostic = *diagnosticValue;
+    os << "vpto-scheduler: decision-detail position=" << position
+       << " candidates=" << diagnostic.candidateCount;
+    printPressureVector(os, "current", diagnostic.currentPressure, model);
+    if (diagnostic.closurePressureSet) {
+      os << " closure-set=" << *diagnostic.closurePressureSet
+         << " closure-bundle={";
+      llvm::interleaveComma(diagnostic.closureBundleOriginalIndices, os);
+      os << "} closure-target="
+         << diagnostic.closureTargetOriginalIndex.value_or(0)
+         << " closure-size=" << diagnostic.closureGroupSize
+         << " closure-steps=" << diagnostic.closureSteps
+         << " closure-support=" << diagnostic.closureSupportPressure
+         << " closure-effective-end=" << diagnostic.closureEffectiveEnd
+         << " closure-net-relief=" << diagnostic.closureNetRelief;
+      printPressureVector(os, "closure-peak", diagnostic.closurePeak, model);
+      printPressureVector(os, "closure-end", diagnostic.closureEnd, model);
+    } else {
+      os << " closure-set=none";
+    }
+    os << " selected-cp=" << diagnostic.selectedCriticalPath
+       << " selected-closure="
+       << (diagnostic.selectedAdvancesClosure ? "true" : "false");
+    printPressureVector(os, "selected-projected",
+                        diagnostic.selectedProjectedPressure, model);
+    printPressureVector(os, "selected-released",
+                        diagnostic.selectedReleasedPressure, model);
+    if (diagnostic.safeAlternativeOriginalIndex) {
+      os << " safe-alt=" << *diagnostic.safeAlternativeOriginalIndex
+         << " safe-alt-cp=" << diagnostic.safeAlternativeCriticalPath
+         << " safe-alt-opens-frontier="
+         << (diagnostic.safeAlternativeOpensPressureFrontier ? "true"
+                                                             : "false");
+      printPressureVector(os, "safe-alt-projected",
+                          diagnostic.safeAlternativeProjectedPressure, model);
+      printPressureVector(os, "safe-alt-released",
+                          diagnostic.safeAlternativeReleasedPressure, model);
+    } else {
+      os << " safe-alt=none";
+    }
+    os << '\n';
   }
 }
 
@@ -220,6 +268,22 @@ static void emitRegionFailure(func::FuncOp func, unsigned blockIndex,
   if (!failure.detail.empty()) {
     diagnostic << " (" << failure.detail << ")";
   }
+}
+
+static void printRegionFailure(llvm::raw_ostream &os, unsigned blockIndex,
+                               const VPTOSchedRegion &region,
+                               const VPTOScheduleFailure &failure) {
+  os << "vpto-scheduler: schedule-failure block=" << blockIndex
+     << " region=" << region.index
+     << " kind=" << stringifyVPTOScheduleFailureKind(failure.kind);
+  if (!failure.name.empty()) {
+    os << " name=" << failure.name << " actual=" << failure.actual
+       << " limit=" << failure.limit;
+  }
+  if (!failure.detail.empty()) {
+    os << " detail=" << failure.detail;
+  }
+  os << '\n';
 }
 
 static bool reportUnknownClasses(func::FuncOp func, unsigned blockIndex,
@@ -252,21 +316,33 @@ static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
   }
 
   VPTOScheduleFailure failure;
-  VPTOScheduler scheduler(model, dag, limits, budget);
+  VPTOScheduler scheduler(model, dag, limits, budget, trace);
   FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
   if (failed(result)) {
+    if (trace) {
+      printRegionFailure(os, blockIndex, region, failure);
+    }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
   if (failed(verifyVPTOScheduleResult(dag, *result, budget, failure))) {
+    if (trace) {
+      printRegionFailure(os, blockIndex, region, failure);
+    }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
   if (failed(replayVPTOScheduleResult(model, dag, *result, budget, failure))) {
+    if (trace) {
+      printRegionFailure(os, blockIndex, region, failure);
+    }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
   if (failed(applyVPTOScheduleResult(dag, *result, budget, failure))) {
+    if (trace) {
+      printRegionFailure(os, blockIndex, region, failure);
+    }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
