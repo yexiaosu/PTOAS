@@ -11871,6 +11871,23 @@ static void applyArtifactVisibilityLinkage(ModuleOp sourceModule,
   }
 }
 
+static void markVmovCallsNoMerge(llvm::Module &llvmModule) {
+  for (llvm::Function &function : llvmModule) {
+    for (llvm::BasicBlock &block : function) {
+      for (llvm::Instruction &inst : block) {
+        auto *call = llvm::dyn_cast<llvm::CallBase>(&inst);
+        if (!call) {
+          continue;
+        }
+        llvm::Function *callee = call->getCalledFunction();
+        if (callee && callee->getName().starts_with("llvm.hivm.vmov.")) {
+          call->setCannotMerge();
+        }
+      }
+    }
+  }
+}
+
 static void applySimtEntryCallingConvention(
     llvm::Module &llvmModule,
     const llvm::StringSet<llvm::BumpPtrAllocator> &simtEntryNames) {
@@ -11926,6 +11943,7 @@ emitDeviceLLVMModule(ModuleOp deviceModule, StringRef kernelKind,
   }
 
   applyArtifactVisibilityLinkage(deviceModule, *llvmModule);
+  markVmovCallsNoMerge(*llvmModule);
   for (llvm::Function &func : *llvmModule) {
     if (!func.getName().starts_with("llvm.hivm.vscatter."))
       continue;

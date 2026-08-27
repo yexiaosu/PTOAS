@@ -14,14 +14,20 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     %c0 = arith.constant 0 : index
     pto.vecscope {
       %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
-      %copy = pto.vmov %input : !pto.vreg<64xf32> -> !pto.vreg<64xf32>
-      pto.vsts %copy, %destination[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      %copy0 = pto.vmov %input : !pto.vreg<64xf32> -> !pto.vreg<64xf32>
+      %copy1 = pto.vmov %input : !pto.vreg<64xf32> -> !pto.vreg<64xf32>
+      pto.vsts %copy0, %destination[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+      pto.vsts %copy1, %destination[%c0], %mask : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
     }
     return
   }
 }
 
 // CANN900-LABEL: define void @vmov_f32_mix_aiv
-// CANN900: call <64 x float> @llvm.hivm.vmov.x.v64f32(<64 x float>
+// CANN900: call <64 x float> @llvm.hivm.vmov.x.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS:[0-9]+]]
+// CANN900: call <64 x float> @llvm.hivm.vmov.x.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS]]
+// CANN900: attributes #[[VMOV_CALL_ATTRS]] = { nomerge }
 // BETA1-LABEL: define void @vmov_f32_mix_aiv
-// BETA1: call <64 x float> @llvm.hivm.vmov.v64f32(<64 x float>
+// BETA1: call <64 x float> @llvm.hivm.vmov.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS:[0-9]+]]
+// BETA1: call <64 x float> @llvm.hivm.vmov.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS]]
+// BETA1: attributes #[[VMOV_CALL_ATTRS]] = { nomerge }
