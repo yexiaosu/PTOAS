@@ -104,6 +104,7 @@ VPTORegPressureTracker::evaluateTop(const VPTOSUnit &unit) const {
   evaluation.delta.assign(current.size(), 0);
   evaluation.released.assign(current.size(), 0);
   evaluation.introduced.assign(current.size(), 0);
+  evaluation.transientDelta.assign(current.size(), 0);
 
   DenseMap<Value, unsigned> candidateUses;
   for (Value operand : unit.getOperation()->getOperands()) {
@@ -144,6 +145,7 @@ VPTORegPressureTracker::evaluateBottom(const VPTOSUnit &unit) const {
   evaluation.delta.assign(current.size(), 0);
   evaluation.released.assign(current.size(), 0);
   evaluation.introduced.assign(current.size(), 0);
+  evaluation.transientDelta.assign(current.size(), 0);
   DenseSet<Value> results;
   for (Value result : unit.getOperation()->getResults()) {
     results.insert(getPressureRepresentative(result));
@@ -179,20 +181,31 @@ VPTORegPressureTracker::evaluateBottom(const VPTOSUnit &unit) const {
 void VPTORegPressureTracker::refreshSummary(
     VPTORegPressureEvaluation &evaluation) const {
   evaluation.projected.resize(current.size());
+  evaluation.projectedPeak.resize(current.size());
   evaluation.projectedExcess.assign(current.size(), 0);
   for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
     evaluation.projected[index] = current[index] + evaluation.delta[index];
+    evaluation.projectedPeak[index] = std::max(
+        evaluation.projected[index], current[index] +
+                                         evaluation.transientDelta[index]);
     if (pressureSet.limit)
       evaluation.projectedExcess[index] =
-          std::max<int64_t>(0, evaluation.projected[index] -
+          std::max<int64_t>(0, evaluation.projectedPeak[index] -
                                    static_cast<int64_t>(*pressureSet.limit));
   }
 }
 
 VPTORegPressureEvaluation
 VPTORegPressureTracker::evaluate(const VPTOSUnit &unit) const {
-  return direction == VPTOSchedDirection::Top ? evaluateTop(unit)
-                                              : evaluateBottom(unit);
+  VPTORegPressureEvaluation evaluation =
+      direction == VPTOSchedDirection::Top ? evaluateTop(unit)
+                                           : evaluateBottom(unit);
+  if (unit.requiresImplicitCopy()) {
+    addValuePressure(unit.getTiedCopyInfo()->physicalRoot, 1,
+                     evaluation.transientDelta);
+    refreshSummary(evaluation);
+  }
+  return evaluation;
 }
 
 LogicalResult VPTORegPressureTracker::commit(const VPTOSUnit &unit) {
@@ -201,7 +214,7 @@ LogicalResult VPTORegPressureTracker::commit(const VPTOSUnit &unit) {
     if (projected < 0)
       return failure();
     current[index] = projected;
-    peak[index] = std::max(peak[index], projected);
+    peak[index] = std::max(peak[index], evaluation.projectedPeak[index]);
   }
 
   if (direction == VPTOSchedDirection::Top) {

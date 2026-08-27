@@ -13,6 +13,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -74,13 +75,34 @@ bool VPTOResourceTracker::canReserve(const VPTOSchedParameters &parameters,
   return true;
 }
 
+bool VPTOResourceTracker::canReserveUnit(const VPTOSUnit &unit, unsigned cycle,
+                                         std::string &reason) const {
+  VPTOResourceTracker probe(*this);
+  if (unit.requiresImplicitCopy()) {
+    VPTOSchedParameters copy = model.getImplicitCopyParameters(
+        unit.getTiedCopyInfo()->physicalRoot);
+    if (!probe.canReserve(copy, cycle, reason)) {
+      return false;
+    }
+    probe.reserve(copy, cycle);
+  }
+  unsigned offset = unit.getConsumerIssueOffset();
+  unsigned maxStartCycle = std::numeric_limits<unsigned>::max() - offset;
+  if (cycle > maxStartCycle) {
+    reason = "composite scheduling unit cycle overflow";
+    return false;
+  }
+  unsigned consumerCycle = cycle + offset;
+  VPTOSchedParameters consumer =
+      model.getSchedParameters(unit.getOperation());
+  return probe.canReserve(consumer, consumerCycle, reason);
+}
+
 VPTOResourceEvaluation
 VPTOResourceTracker::evaluate(const VPTOSUnit &unit,
                               unsigned requestedCycle) const {
   VPTOResourceEvaluation evaluation;
   evaluation.earliestCycle = requestedCycle;
-  VPTOSchedParameters parameters =
-      model.getSchedParameters(unit.getOperation());
   std::string reason;
 
   // This upper bound protects analyze mode from malformed model data. Normal
@@ -89,7 +111,7 @@ VPTOResourceTracker::evaluate(const VPTOSUnit &unit,
   for (unsigned attempt = 0; attempt < kMaxResourceSearchCycles; ++attempt) {
     unsigned cycle = requestedCycle + attempt;
     reason.clear();
-    if (canReserve(parameters, cycle, reason)) {
+    if (canReserveUnit(unit, cycle, reason)) {
       evaluation.earliestCycle = cycle;
       evaluation.issueSlot = getIssueOccupancy(cycle);
       evaluation.stallCycles = attempt;
@@ -122,12 +144,22 @@ void VPTOResourceTracker::reserve(const VPTOSchedParameters &parameters,
   }
 }
 
+void VPTOResourceTracker::reserveUnit(const VPTOSUnit &unit, unsigned cycle) {
+  if (unit.requiresImplicitCopy()) {
+    reserve(model.getImplicitCopyParameters(
+                unit.getTiedCopyInfo()->physicalRoot),
+            cycle);
+  }
+  reserve(model.getSchedParameters(unit.getOperation()),
+          unit.getConsumerIssueCycle(cycle));
+}
+
 LogicalResult VPTOResourceTracker::commit(const VPTOSUnit &unit,
                                           unsigned cycle) {
   VPTOResourceEvaluation evaluation = evaluate(unit, cycle);
   if (!evaluation.legal || evaluation.earliestCycle != cycle)
     return failure();
-  reserve(model.getSchedParameters(unit.getOperation()), cycle);
+  reserveUnit(unit, cycle);
   return success();
 }
 
@@ -143,6 +175,20 @@ void VPTONullHazardRecognizer::commit(const VPTOSUnit &unit,
                                       VPTOSchedDirection direction,
                                       unsigned cycle) {
   (void)unit;
+  (void)direction;
+  (void)cycle;
+}
+
+VPTOHazardResult VPTOHazardRecognizer::checkImplicitCopy(
+    Value physicalRoot, VPTOSchedDirection direction, unsigned cycle) const {
+  (void)physicalRoot;
+  (void)direction;
+  return {/*legal=*/true, cycle, {}};
+}
+
+void VPTOHazardRecognizer::commitImplicitCopy(
+    Value physicalRoot, VPTOSchedDirection direction, unsigned cycle) {
+  (void)physicalRoot;
   (void)direction;
   (void)cycle;
 }

@@ -69,7 +69,9 @@ static bool hasCompletePressureResult(const VPTOScheduleContext &context,
          candidate.pressure.delta.size() == pressureSetCount &&
          candidate.pressure.released.size() == pressureSetCount &&
          candidate.pressure.introduced.size() == pressureSetCount &&
+         candidate.pressure.transientDelta.size() == pressureSetCount &&
          candidate.pressure.projected.size() == pressureSetCount &&
+         candidate.pressure.projectedPeak.size() == pressureSetCount &&
          candidate.pressure.projectedExcess.size() == pressureSetCount &&
          candidate.lookaheadPeak.size() == pressureSetCount &&
          candidate.lookaheadEnd.size() == pressureSetCount;
@@ -167,7 +169,9 @@ rankCandidate(const VPTOScheduleContext &context,
         context.currentPressure[index] < 0 ||
         candidate.pressure.released[index] < 0 ||
         candidate.pressure.introduced[index] < 0 ||
+        candidate.pressure.transientDelta[index] < 0 ||
         candidate.pressure.projected[index] < 0 ||
+        candidate.pressure.projectedPeak[index] < 0 ||
         candidate.pressure.projectedExcess[index] < 0) {
       detail =
           "pressure set or candidate contains an invalid scoring parameter";
@@ -185,6 +189,13 @@ rankCandidate(const VPTOScheduleContext &context,
       detail = "candidate pressure snapshot is inconsistent or overflows";
       return failure();
     }
+    int64_t expectedPeak = std::max(
+        expectedProjected, context.currentPressure[index] +
+                               candidate.pressure.transientDelta[index]);
+    if (candidate.pressure.projectedPeak[index] != expectedPeak) {
+      detail = "candidate transient pressure peak is inconsistent";
+      return failure();
+    }
     int64_t currentExcess = 0;
     int64_t projectedExcess = 0;
     if (pressureSet.limit) {
@@ -192,7 +203,7 @@ rankCandidate(const VPTOScheduleContext &context,
                                                *pressureSet.limit);
       projectedExcess = candidate.pressure.projectedExcess[index];
       int64_t expectedExcess = std::max<int64_t>(
-          0, expectedProjected - static_cast<int64_t>(*pressureSet.limit));
+          0, expectedPeak - static_cast<int64_t>(*pressureSet.limit));
       if (projectedExcess != expectedExcess) {
         detail = "candidate projected pressure excess is inconsistent";
         return failure();
@@ -215,7 +226,7 @@ rankCandidate(const VPTOScheduleContext &context,
     }
     if (rankingContext.nearLimitPressureSets[index] &&
         (!checkedMultiplyAdd(pressureSet.spillCost,
-                             candidate.pressure.projected[index],
+                             candidate.pressure.projectedPeak[index],
                              rank.nearLimitProjectedCost) ||
          !checkedMultiplyAdd(pressureSet.spillCost,
                              candidate.pressure.released[index],
@@ -225,7 +236,7 @@ rankCandidate(const VPTOScheduleContext &context,
     }
     if (rankingContext.highPressureSets[index] &&
         (!checkedMultiplyAdd(pressureSet.spillCost,
-                             candidate.pressure.projected[index],
+                             candidate.pressure.projectedPeak[index],
                              rank.highPressureProjectedCost) ||
          !checkedMultiplyAdd(pressureSet.spillCost,
                              candidate.pressure.released[index],
@@ -247,7 +258,7 @@ rankCandidate(const VPTOScheduleContext &context,
       int64_t lookaheadExcess =
           std::max<int64_t>(0, lookaheadPeak - limit);
       int64_t lookaheadRisk =
-          std::max<int64_t>(0, candidate.pressure.projected[index] -
+          std::max<int64_t>(0, candidate.pressure.projectedPeak[index] -
                                    criticalThreshold) /
           bandWidth;
       if (!checkedMultiplyAdd(pressureSet.spillCost, lookaheadExcess,

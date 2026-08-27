@@ -47,6 +47,9 @@ private:
   bool canReserve(const VPTOSchedParameters &parameters, unsigned cycle,
                   std::string &reason) const;
   void reserve(const VPTOSchedParameters &parameters, unsigned cycle);
+  bool canReserveUnit(const VPTOSUnit &unit, unsigned cycle,
+                      std::string &reason) const;
+  void reserveUnit(const VPTOSUnit &unit, unsigned cycle);
 
   const VPTOSchedModel &model;
   SmallVector<unsigned> issueOccupancy;
@@ -70,6 +73,12 @@ public:
                                  unsigned cycle) const = 0;
   virtual void commit(const VPTOSUnit &unit, VPTOSchedDirection direction,
                       unsigned cycle) = 0;
+  virtual VPTOHazardResult checkImplicitCopy(Value physicalRoot,
+                                             VPTOSchedDirection direction,
+                                             unsigned cycle) const;
+  virtual void commitImplicitCopy(Value physicalRoot,
+                                  VPTOSchedDirection direction,
+                                  unsigned cycle);
 };
 
 class VPTONullHazardRecognizer final : public VPTOHazardRecognizer {

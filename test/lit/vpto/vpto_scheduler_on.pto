@@ -35,29 +35,29 @@
 // ORDER-COUNT-6: pto.vcmp
 // ORDER-NEXT: pto.vsel
 
-// TRACE: vpto-scheduler: function=aabbcc mode=on target=a5 model=generic-a5-v4
+// TRACE: vpto-scheduler: function=aabbcc mode=on target=a5 model=generic-a5-v5
 // TRACE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
 // TRACE: vpto-scheduler: pressure node=0
 // TRACE: vpto-scheduler: schedule-result block=0 region=0 nodes=6 work-units={{[0-9]+}}
 // TRACE: result-position=0 node=0 original-index=0 cycle=0 direction=top reason=deterministic-tie-break op=pto.vmax
-// TRACE-NEXT: vpto-scheduler: result-position=1 node=3 original-index=3 cycle=0 direction=top reason=only-candidate op=pto.vmax
-// TRACE-NEXT: vpto-scheduler: result-position=2 node=1 original-index=1 cycle=10 direction=top reason=lower-pressure-delta op=pto.vmin
-// TRACE-NEXT: vpto-scheduler: result-position=3 node=4 original-index=4 cycle=10 direction=top reason=only-candidate op=pto.vmin
-// TRACE-NEXT: vpto-scheduler: result-position=4 node=2 original-index=2 cycle=20 direction=top reason=deterministic-tie-break op=pto.vmax
-// TRACE-NEXT: vpto-scheduler: result-position=5 node=5 original-index=5 cycle=20 direction=top reason=only-candidate op=pto.vmax
+// TRACE-NEXT: vpto-scheduler: result-position=1 node=3 original-index=3 cycle=1 direction=top reason=only-candidate op=pto.vmax
+// TRACE-NEXT: vpto-scheduler: result-position=2 node=1 original-index=1 cycle=10 direction=top reason=only-candidate op=pto.vmin
+// TRACE-NEXT: vpto-scheduler: result-position=3 node=4 original-index=4 cycle=11 direction=top reason=only-candidate op=pto.vmin
+// TRACE-NEXT: vpto-scheduler: result-position=4 node=2 original-index=2 cycle=20 direction=top reason=only-candidate op=pto.vmax
+// TRACE-NEXT: vpto-scheduler: result-position=5 node=5 original-index=5 cycle=21 direction=top reason=only-candidate op=pto.vmax
 // TRACE: vpto-scheduler: function=pressure_tie mode=on
-// TRACE: result-position=2 node=3 original-index=3 cycle=10 direction=top reason=lower-pressure-delta op=pto.vsel
-// TRACE-NEXT: vpto-scheduler: result-position=3 node=2 original-index=2 cycle=10 direction=top reason=only-candidate op=pto.vcmp
+// TRACE: result-position=2 node=3 original-index=3 cycle=10 direction=top reason=only-candidate op=pto.vsel
+// TRACE-NEXT: vpto-scheduler: result-position=3 node=2 original-index=2 cycle=11 direction=top reason=only-candidate op=pto.vcmp
 // TRACE: vpto-scheduler: function=pressure_idle mode=on
 // TRACE: vpto-scheduler: schedule-result block=0 region=0 nodes=18 work-units={{[0-9]+}} pressure-idles=2 peak={vector:2,predicate:4}
 // TRACE: vpto-scheduler: result-position=3 node=9 original-index=9 cycle=10 direction=top reason={{[^ ]+}} op=pto.vsel pressure-idle=true
-// TRACE: vpto-scheduler: result-position=9 node=12 original-index=12 cycle=20 direction=top reason={{[^ ]+}} op=pto.vsel pressure-idle=true
+// TRACE: vpto-scheduler: result-position=9 node=12 original-index=12 cycle=21 direction=top reason={{[^ ]+}} op=pto.vsel pressure-idle=true
 
-// ANALYZE: vpto-scheduler: function=aabbcc mode=analyze target=a5 model=generic-a5-v4
+// ANALYZE: vpto-scheduler: function=aabbcc mode=analyze target=a5 model=generic-a5-v5
 // ANALYZE: vpto-scheduler: region=0 before=block-start after=block-end nodes=6
 // ANALYZE: vpto-scheduler: pressure node=0
-// ANALYZE-NOT: schedule-result
-// ANALYZE-NOT: result-position=
+// ANALYZE: schedule-result
+// ANALYZE: result-position=0
 // ANALYZE: vpto-scheduler: coverage
 
 // QUIET-NOT: vpto-scheduler:

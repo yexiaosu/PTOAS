@@ -32,7 +32,10 @@ struct VPTORegPressureEvaluation {
   /// Direction-local pressure introduced by result definitions (top-down) or
   /// operand liveness (bottom-up).
   SmallVector<int64_t, 2> introduced;
+  /// Temporary pressure between the implicit copy and its consumer.
+  SmallVector<int64_t, 2> transientDelta;
   SmallVector<int64_t, 2> projected;
+  SmallVector<int64_t, 2> projectedPeak;
   SmallVector<int64_t, 2> projectedExcess;
 };
 

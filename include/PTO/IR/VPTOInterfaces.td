@@ -53,6 +53,24 @@ def VPTOSchedulingOpInterface : OpInterface<"VPTOSchedulingOpInterface"> {
   ];
 }
 
+def VPTOTiedOperandOpInterface
+    : OpInterface<"VPTOTiedOperandOpInterface"> {
+  let description = [{
+    Describes one operation-local physical register constraint where a result
+    must reuse and overwrite one operand's register. Scheduler analyses consume
+    this fact without changing the VPTO IR.
+  }];
+  let cppNamespace = "::mlir::pto";
+  let methods = [
+    InterfaceMethod<
+      "Return the operand index whose physical register is reused.",
+      "unsigned", "getTiedOperandIndex">,
+    InterfaceMethod<
+      "Return the result index tied to the operand.",
+      "unsigned", "getTiedResultIndex">
+  ];
+}
+
 def PTO_MadSemanticOpInterface : OpInterface<"MadSemanticOpInterface"> {
   let description = [{
     Interface for semantic MAD-family ops. The interface is only a uniform view

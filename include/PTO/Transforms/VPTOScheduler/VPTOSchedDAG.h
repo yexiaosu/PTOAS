@@ -27,7 +27,9 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace mlir::pto {
 
@@ -46,21 +48,53 @@ enum class VPTOSchedEdgeStrength { Must, Weak };
 
 class VPTOSUnit;
 
+struct VPTOImplicitTiedCopyInfo {
+  Value physicalRoot;
+  unsigned rootId = 0;
+  unsigned operandIndex = 0;
+  unsigned resultIndex = 0;
+  unsigned copyLatency = 0;
+  bool owner = false;
+  bool requiresCopy = false;
+};
+
+struct VPTOTiedRootInfo {
+  unsigned id = 0;
+  Value physicalRoot;
+  VPTOSUnit *owner = nullptr;
+  SmallVector<VPTOSUnit *, 4> consumers;
+  bool liveOut = false;
+  bool ownerRejectedForCycle = false;
+};
+
 class VPTOSchedEdge {
 public:
   VPTOSchedEdge(VPTOSUnit *predecessor, VPTOSUnit *successor,
                 VPTOSchedEdgeKind kind, VPTOSchedEdgeStrength strength,
-                unsigned latency, std::string reason)
+                unsigned latency, std::string reason,
+                std::optional<unsigned> successorOperandIndex = std::nullopt)
       : predecessor(predecessor), successor(successor), kind(kind),
-        strength(strength), latency(latency), reason(std::move(reason)) {}
+        strength(strength), latency(latency), reason(std::move(reason)),
+        successorOperandIndex(successorOperandIndex) {}
 
   VPTOSUnit *getPredecessor() const { return predecessor; }
   VPTOSUnit *getSuccessor() const { return successor; }
   VPTOSchedEdgeKind getKind() const { return kind; }
   VPTOSchedEdgeStrength getStrength() const { return strength; }
   unsigned getLatency() const { return latency; }
+  unsigned getSuccessorReadOffset() const { return successorReadOffset; }
+  unsigned getReadyLatency() const {
+    return latency > successorReadOffset ? latency - successorReadOffset : 0;
+  }
   StringRef getReason() const { return reason; }
   bool isMust() const { return strength == VPTOSchedEdgeStrength::Must; }
+  std::optional<unsigned> getSuccessorOperandIndex() const {
+    return successorOperandIndex;
+  }
+  void setLatency(unsigned value) { latency = value; }
+  void setSuccessorReadOffset(unsigned value) {
+    successorReadOffset = value;
+  }
 
 private:
   VPTOSUnit *predecessor;
@@ -69,6 +103,8 @@ private:
   VPTOSchedEdgeStrength strength;
   unsigned latency;
   std::string reason;
+  unsigned successorReadOffset = 0;
+  std::optional<unsigned> successorOperandIndex;
 };
 
 class VPTOSUnit {
@@ -98,6 +134,30 @@ public:
   unsigned getHeight() const { return height; }
   void setDepth(unsigned value) { depth = value; }
   void setHeight(unsigned value) { height = value; }
+  const std::optional<VPTOImplicitTiedCopyInfo> &getTiedCopyInfo() const {
+    return tiedCopyInfo;
+  }
+  void setTiedCopyInfo(VPTOImplicitTiedCopyInfo info) {
+    tiedCopyInfo = std::move(info);
+  }
+  bool requiresImplicitCopy() const {
+    return tiedCopyInfo && tiedCopyInfo->requiresCopy;
+  }
+  bool isTiedOwner() const { return tiedCopyInfo && tiedCopyInfo->owner; }
+  unsigned getConsumerIssueOffset() const {
+    return requiresImplicitCopy() ? tiedCopyInfo->copyLatency : 0;
+  }
+  unsigned getConsumerIssueCycle(unsigned unitIssueCycle) const {
+    return unitIssueCycle + getConsumerIssueOffset();
+  }
+  unsigned getPhysicalRootReadOffset(Value root) const {
+    bool readsAtUnitStart =
+        !requiresImplicitCopy() || tiedCopyInfo->physicalRoot == root;
+    if (readsAtUnitStart) {
+      return 0;
+    }
+    return getConsumerIssueOffset();
+  }
 
 private:
   friend class VPTOSchedDAG;
@@ -112,6 +172,7 @@ private:
   unsigned remainingSuccessors = 0;
   unsigned depth = 0;
   unsigned height = 0;
+  std::optional<VPTOImplicitTiedCopyInfo> tiedCopyInfo;
 };
 
 class VPTOSchedDAG {
@@ -123,16 +184,22 @@ public:
   ArrayRef<std::unique_ptr<VPTOSchedEdge>> getEdges() const { return edges; }
   ArrayRef<Value> getLiveIns() const { return liveIns; }
   ArrayRef<Value> getLiveOuts() const { return liveOuts; }
+  ArrayRef<VPTOTiedRootInfo> getTiedRoots() const { return tiedRoots; }
   VPTOSUnit *lookup(Operation *op) const;
 
   VPTOSchedEdge &addEdge(VPTOSUnit &predecessor, VPTOSUnit &successor,
                          VPTOSchedEdgeKind kind,
                          VPTOSchedEdgeStrength strength, unsigned latency,
-                         Twine reason);
+                         Twine reason,
+                         std::optional<unsigned> successorOperandIndex =
+                             std::nullopt);
   void resetDependencyCounts();
   LogicalResult computeCriticalPaths();
   void addLiveIn(Value value);
   void addLiveOut(Value value);
+  void addTiedRoot(VPTOTiedRootInfo info) {
+    tiedRoots.push_back(std::move(info));
+  }
 
 private:
   VPTOSchedRegion region;
@@ -141,6 +208,7 @@ private:
   DenseMap<Operation *, VPTOSUnit *> unitByOperation;
   SmallVector<Value> liveIns;
   SmallVector<Value> liveOuts;
+  SmallVector<VPTOTiedRootInfo> tiedRoots;
 };
 
 StringRef stringifyVPTOSchedEdgeKind(VPTOSchedEdgeKind kind);

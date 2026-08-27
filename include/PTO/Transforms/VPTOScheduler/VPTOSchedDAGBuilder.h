@@ -39,16 +39,22 @@ public:
 private:
   LogicalResult buildSSAEdges(VPTOSchedDAG &dag,
                               VPTOScheduleFailure &failure) const;
+  LogicalResult buildTiedCopyModel(VPTOSchedDAG &dag,
+                                   VPTOScheduleFailure &failure) const;
   LogicalResult buildMemoryEdges(VPTOSchedDAG &dag,
                                  VPTOScheduleFailure &failure) const;
   LogicalResult buildImplicitAndSyncEdges(
+      VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const;
+  LogicalResult buildNonSpeculatableStructuralEdges(
       VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const;
   LogicalResult buildModelFallbackEdges(
       VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const;
   LogicalResult addEdge(VPTOSchedDAG &dag, VPTOSUnit &predecessor,
                         VPTOSUnit &successor, VPTOSchedEdgeKind kind,
                         VPTOSchedEdgeStrength strength, unsigned latency,
-                        Twine reason, VPTOScheduleFailure &failure) const;
+                        Twine reason, VPTOScheduleFailure &failure,
+                        std::optional<unsigned> successorOperandIndex =
+                            std::nullopt) const;
   LogicalResult consumeWork(VPTOScheduleFailure &failure,
                             uint64_t amount = 1) const;
 

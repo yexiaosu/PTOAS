@@ -83,6 +83,9 @@ static void printOriginalOrderPressureReport(llvm::raw_ostream &os,
     printPressureVector(os, "delta", pressure.delta, model);
     printPressureVector(os, "current", tracker.getCurrent(), model);
     printPressureVector(os, "peak", tracker.getPeak(), model);
+    printPressureVector(os, "transient-delta", pressure.transientDelta,
+                        model);
+    printPressureVector(os, "unit-peak", pressure.projectedPeak, model);
     os << '\n';
   }
 }
@@ -110,6 +113,43 @@ static void printRegionReport(llvm::raw_ostream &os,
      << " known-classes=" << knownClasses
      << " unknown-classes=" << unknownClasses << '\n';
 
+  unsigned implicitCopies = 0;
+  for (const VPTOTiedRootInfo &root : dag.getTiedRoots()) {
+    implicitCopies += llvm::count_if(
+        root.consumers,
+        [](VPTOSUnit *consumer) { return consumer->requiresImplicitCopy(); });
+    os << "vpto-scheduler: physical-root=" << root.id
+       << " live-out=" << (root.liveOut ? "true" : "false")
+       << " owner=";
+    if (root.owner) {
+      os << root.owner->getId();
+    } else {
+      os << "none";
+    }
+    os << " owner-cycle-rejected="
+       << (root.ownerRejectedForCycle ? "true" : "false")
+       << " consumers=" << root.consumers.size() << '\n';
+    for (VPTOSUnit *consumer : root.consumers) {
+      const VPTOImplicitTiedCopyInfo &copy = *consumer->getTiedCopyInfo();
+      os << "vpto-scheduler: tied-consumer root=" << root.id
+         << " node=" << consumer->getId()
+         << " disposition="
+         << (copy.owner ? "owner" : "implicit-copy")
+         << " operand=" << copy.operandIndex << " result=" << copy.resultIndex;
+      if (copy.requiresCopy) {
+        VPTOSchedParameters copyParameters =
+            model.getImplicitCopyParameters(copy.physicalRoot);
+        os << " dependency=physical-root-" << root.id
+           << " copy-latency=" << copy.copyLatency
+           << " copy-micro-ops=" << copyParameters.microOps
+           << " copy-resource-uses=" << copyParameters.resources.size()
+           << " register-count=1 mask-independent=true";
+      }
+      os << '\n';
+    }
+  }
+  os << "vpto-scheduler: implicit-vmov-count=" << implicitCopies << '\n';
+
   for (const std::unique_ptr<VPTOSUnit> &unit : dag.getUnits()) {
     Operation *op = unit->getOperation();
     const VPTOSchedClass &schedClass =
@@ -133,7 +173,10 @@ static void printRegionReport(llvm::raw_ostream &os,
        << edge->getSuccessor()->getId()
        << " kind=" << stringifyVPTOSchedEdgeKind(edge->getKind())
        << " strength=" << stringifyVPTOSchedEdgeStrength(edge->getStrength())
-       << " latency=" << edge->getLatency() << " reason=" << edge->getReason()
+       << " latency=" << edge->getLatency()
+       << " reason=" << edge->getReason()
+       << " read-offset=" << edge->getSuccessorReadOffset()
+       << " ready-latency=" << edge->getReadyLatency()
        << '\n';
   }
   printOriginalOrderPressureReport(os, dag, model, budget);
@@ -198,8 +241,16 @@ static void printScheduleResult(llvm::raw_ostream &os, unsigned blockIndex,
        << " reason=" << entry.reason
        << " op=" << entry.unit->getOperation()->getName().getStringRef()
        << " pressure-idle=" << (entry.pressureDrivenIdle ? "true" : "false")
-       << " recovery-idle=" << (entry.recoveryDrivenIdle ? "true" : "false")
-       << '\n';
+       << " recovery-idle=" << (entry.recoveryDrivenIdle ? "true" : "false");
+    if (entry.unit->requiresImplicitCopy()) {
+      os << " implicit-copy=true copy-cycle=" << entry.issueCycle
+         << " consumer-cycle="
+         << entry.unit->getConsumerIssueCycle(entry.issueCycle)
+         << " transient-pressure=1";
+    } else {
+      os << " implicit-copy=false consumer-cycle=" << entry.issueCycle;
+    }
+    os << '\n';
   }
   for (auto [position, diagnosticValue] :
        llvm::enumerate(result.diagnostics)) {
@@ -310,43 +361,46 @@ static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
                            unsigned blockIndex, const VPTOSchedRegion &region,
                            VPTOSchedDAG &dag, const VPTOSchedModel &model,
                            const VPTOSchedulerLimits &limits,
-                           VPTOSchedulingBudget &budget, bool trace) {
+                           VPTOSchedulingBudget &budget, bool applyResult,
+                           bool report) {
   if (reportUnknownClasses(func, blockIndex, region, dag, model)) {
     return;
   }
 
   VPTOScheduleFailure failure;
-  VPTOScheduler scheduler(model, dag, limits, budget, trace);
+  VPTOScheduler scheduler(model, dag, limits, budget, report);
   FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
   if (failed(result)) {
-    if (trace) {
+    if (report) {
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
   if (failed(verifyVPTOScheduleResult(dag, *result, budget, failure))) {
-    if (trace) {
+    if (report) {
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
   if (failed(replayVPTOScheduleResult(model, dag, *result, budget, failure))) {
-    if (trace) {
+    if (report) {
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
     return;
   }
-  if (failed(applyVPTOScheduleResult(dag, *result, budget, failure))) {
-    if (trace) {
-      printRegionFailure(os, blockIndex, region, failure);
+  if (applyResult) {
+    if (failed(applyVPTOScheduleResult(dag, *result, budget, failure))) {
+      if (report) {
+        printRegionFailure(os, blockIndex, region, failure);
+      }
+      emitRegionFailure(func, blockIndex, region, failure);
+      return;
     }
-    emitRegionFailure(func, blockIndex, region, failure);
-    return;
   }
-  if (trace) {
+  if (report) {
     printScheduleResult(os, blockIndex, region, *result, model,
                         budget.getUsed());
   }
@@ -399,10 +453,13 @@ static void runFunction(func::FuncOp func, llvm::raw_ostream &os,
           printRegionReport(os, region, **dag, model, reportBudget);
         }
         if (mode == "analyze") {
+          scheduleRegion(func, os, currentBlockIndex, region, **dag, model,
+                         limits, schedulingBudget, /*applyResult=*/false,
+                         /*report=*/true);
           continue;
         }
         scheduleRegion(func, os, currentBlockIndex, region, **dag, model,
-                       limits, schedulingBudget, trace);
+                       limits, schedulingBudget, /*applyResult=*/true, trace);
       }
       for (Operation &op : block) {
         if (isa<VecScopeOp, StrictVecScopeOp>(op)) {

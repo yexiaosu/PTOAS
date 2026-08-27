@@ -2340,7 +2340,10 @@ def PTO_VcgmaxOp : PTO_UnaryVecOp<"vcgmax">;
 def PTO_VcgminOp : PTO_UnaryVecOp<"vcgmin">;
 def PTO_VcpaddOp : PTO_UnaryVecOp<"vcpadd">;
 
-class PTO_HistogramOp<string mnemonic> : PTO_VectorMicroOp<mnemonic, [Pure]> {
+class PTO_HistogramOp<string mnemonic> : PTO_VectorMicroOp<mnemonic, [
+    Pure,
+    DeclareOpInterfaceMethods<VPTOTiedOperandOpInterface>
+  ]> {
   let arguments = (ins
     PTO_VectorType:$acc,
     PTO_VectorType:$source,
@@ -2405,7 +2408,8 @@ def PTO_VandOp : PTO_BinaryVecOp<"vand">;
 def PTO_VorOp : PTO_BinaryVecOp<"vor">;
 def PTO_VxorOp : PTO_BinaryVecOp<"vxor">;
 
-class PTO_TernaryVecOp<string mnemonic> : PTO_VectorMicroOp<mnemonic, [Pure]> {
+class PTO_TernaryVecOp<string mnemonic, list<Trait> traits = []>
+    : PTO_VectorMicroOp<mnemonic, !listconcat([Pure], traits)> {
   let arguments = (ins
     PTO_VectorType:$acc,
     PTO_VectorType:$lhs,
@@ -2421,7 +2425,9 @@ class PTO_TernaryVecOp<string mnemonic> : PTO_VectorMicroOp<mnemonic, [Pure]> {
   }];
 }
 
-def PTO_VmaddOp : PTO_TernaryVecOp<"vmadd">;
+def PTO_VmaddOp : PTO_TernaryVecOp<"vmadd", [
+  DeclareOpInterfaceMethods<VPTOTiedOperandOpInterface>
+]>;
 
 def PTO_VaddcOp : PTO_VectorMicroOp<"vaddc", [Pure]> {
   let arguments = (ins
@@ -3407,7 +3413,10 @@ def PTO_VselrOp : PTO_VectorMicroOp<"vselr", [Pure]> {
 
 def PTO_VsqzOp : PTO_UnaryVecOp<"vsqz">;
 
-def PTO_VusqzOp : PTO_VectorMicroOp<"vusqz", [Pure]> {
+def PTO_VusqzOp : PTO_VectorMicroOp<"vusqz", [
+  Pure,
+  DeclareOpInterfaceMethods<VPTOTiedOperandOpInterface>
+]> {
   let arguments = (ins
     PTO_VectorType:$src,
     PTO_MaskTypeConstraint:$mask
@@ -3550,7 +3559,10 @@ def PTO_VmullOp : PTO_VectorMicroOp<"vmull", [Pure]> {
   }];
 }
 
-def PTO_VmulaOp : PTO_VectorMicroOp<"vmula", [Pure]> {
+def PTO_VmulaOp : PTO_VectorMicroOp<"vmula", [
+  Pure,
+  DeclareOpInterfaceMethods<VPTOTiedOperandOpInterface>
+]> {
   let arguments = (ins
     PTO_VectorType:$acc,
     PTO_VectorType:$lhs,
@@ -3614,7 +3626,10 @@ def PTO_VexpdifOp : PTO_VectorMicroOp<"vexpdif", [Pure]> {
   }];
 }
 
-def PTO_VaxpyOp : PTO_VectorMicroOp<"vaxpy", [Pure]> {
+def PTO_VaxpyOp : PTO_VectorMicroOp<"vaxpy", [
+  Pure,
+  DeclareOpInterfaceMethods<VPTOTiedOperandOpInterface>
+]> {
   let arguments = (ins
     PTO_VectorType:$src0,
     PTO_VectorType:$src1,

@@ -43,6 +43,19 @@
 using namespace mlir;
 using namespace mlir::pto;
 
+unsigned Chistv2Op::getTiedOperandIndex() { return 0; }
+unsigned Chistv2Op::getTiedResultIndex() { return 0; }
+unsigned Dhistv2Op::getTiedOperandIndex() { return 0; }
+unsigned Dhistv2Op::getTiedResultIndex() { return 0; }
+unsigned VmaddOp::getTiedOperandIndex() { return 0; }
+unsigned VmaddOp::getTiedResultIndex() { return 0; }
+unsigned VusqzOp::getTiedOperandIndex() { return 0; }
+unsigned VusqzOp::getTiedResultIndex() { return 0; }
+unsigned VmulaOp::getTiedOperandIndex() { return 0; }
+unsigned VmulaOp::getTiedResultIndex() { return 0; }
+unsigned VaxpyOp::getTiedOperandIndex() { return 1; }
+unsigned VaxpyOp::getTiedResultIndex() { return 0; }
+
 static llvm::cl::opt<bool> disableVPTOAlignChainVerification(
     "vpto-disable-align-chain-verification",
     llvm::cl::desc("Disable !pto.align linear-chain verifier checks"),

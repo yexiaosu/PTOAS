@@ -11,11 +11,13 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/VPTOPhysicalRegister.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -54,7 +56,13 @@ FailureOr<std::unique_ptr<VPTOSchedDAG>> VPTOSchedDAGBuilder::build(
   if (failed(buildImplicitAndSyncEdges(*dag, failure))) {
     return mlir::failure();
   }
+  if (failed(buildNonSpeculatableStructuralEdges(*dag, failure))) {
+    return mlir::failure();
+  }
   if (failed(buildModelFallbackEdges(*dag, failure))) {
+    return mlir::failure();
+  }
+  if (failed(buildTiedCopyModel(*dag, failure))) {
     return mlir::failure();
   }
   if (failed(consumeWork(failure, dag->getUnits().size()))) {
@@ -89,7 +97,8 @@ VPTOSchedDAGBuilder::consumeWork(VPTOScheduleFailure &failure,
 LogicalResult VPTOSchedDAGBuilder::addEdge(
     VPTOSchedDAG &dag, VPTOSUnit &predecessor, VPTOSUnit &successor,
     VPTOSchedEdgeKind kind, VPTOSchedEdgeStrength strength, unsigned latency,
-    Twine reason, VPTOScheduleFailure &failure) const {
+    Twine reason, VPTOScheduleFailure &failure,
+    std::optional<unsigned> successorOperandIndex) const {
   uint64_t edgeCount = dag.getEdges().size();
   if (limits && edgeCount >= limits->maxEdges) {
     uint64_t actual = edgeCount == std::numeric_limits<uint64_t>::max()
@@ -102,7 +111,8 @@ LogicalResult VPTOSchedDAGBuilder::addEdge(
   if (failed(consumeWork(failure))) {
     return mlir::failure();
   }
-  dag.addEdge(predecessor, successor, kind, strength, latency, reason);
+  dag.addEdge(predecessor, successor, kind, strength, latency, reason,
+              successorOperandIndex);
   return success();
 }
 
@@ -479,6 +489,30 @@ static bool isPostUpdateAddress(const VPTOSUnit &producer, Value value) {
       });
 }
 
+static FailureOr<bool> hasMustPath(VPTOSUnit &source, VPTOSUnit &target,
+                                   VPTOSchedulingBudget *budget) {
+  SmallVector<VPTOSUnit *, 8> worklist{&source};
+  llvm::SmallPtrSet<VPTOSUnit *, 16> visited;
+  while (!worklist.empty()) {
+    if (budget && !budget->consume()) {
+      return mlir::failure();
+    }
+    VPTOSUnit *current = worklist.pop_back_val();
+    if (!visited.insert(current).second) {
+      continue;
+    }
+    if (current == &target) {
+      return true;
+    }
+    for (VPTOSchedEdge *edge : current->getSuccessors()) {
+      if (edge->isMust()) {
+        worklist.push_back(edge->getSuccessor());
+      }
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 LogicalResult VPTOSchedDAGBuilder::buildMemoryEdges(
@@ -674,7 +708,7 @@ LogicalResult VPTOSchedDAGBuilder::buildSSAEdges(
               .str();
       if (failed(addEdge(dag, *predecessor, unit, VPTOSchedEdgeKind::Data,
                          VPTOSchedEdgeStrength::Must, latency, reason,
-                         failure))) {
+                         failure, operandIndex))) {
         return mlir::failure();
       }
     }
@@ -694,6 +728,164 @@ LogicalResult VPTOSchedDAGBuilder::buildSSAEdges(
         dag.addLiveOut(result);
       }
     }
+  }
+  return success();
+}
+
+LogicalResult VPTOSchedDAGBuilder::buildTiedCopyModel(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
+  if (!model) {
+    return success();
+  }
+
+  struct RootPlan {
+    VPTOTiedRootInfo info;
+    SmallVector<VPTOSUnit *, 8> materialReaders;
+  };
+  SmallVector<RootPlan, 4> plans;
+  DenseMap<Value, unsigned> planByRoot;
+  for (const std::unique_ptr<VPTOSUnit> &unitOwner : dag.getUnits()) {
+    auto tied = dyn_cast<VPTOTiedOperandOpInterface>(unitOwner->getOperation());
+    if (!tied) {
+      continue;
+    }
+    Operation *operation = unitOwner->getOperation();
+    unsigned operandIndex = tied.getTiedOperandIndex();
+    unsigned resultIndex = tied.getTiedResultIndex();
+    bool hasValidIndices = operandIndex < operation->getNumOperands() &&
+                           resultIndex < operation->getNumResults();
+    if (!hasValidIndices) {
+      failure.kind = VPTOScheduleFailureKind::InvalidModel;
+      failure.detail = "tied-operand interface returned an invalid index";
+      return mlir::failure();
+    }
+    Value root =
+        getPhysicalRegisterViewRoot(operation->getOperand(operandIndex));
+    unsigned nextPlan = static_cast<unsigned>(plans.size());
+    auto [position, inserted] = planByRoot.try_emplace(root, nextPlan);
+    if (inserted) {
+      RootPlan plan;
+      plan.info.id = nextPlan;
+      plan.info.physicalRoot = root;
+      plans.push_back(std::move(plan));
+    }
+    RootPlan &plan = plans[position->second];
+    plan.info.consumers.push_back(unitOwner.get());
+    VPTOSchedParameters copy = model->getImplicitCopyParameters(root);
+    bool invalidCopyModel = copy.microOps == 0 || copy.writeLatency == 0 ||
+                            copy.resources.empty();
+    if (invalidCopyModel) {
+      failure.kind = VPTOScheduleFailureKind::InvalidModel;
+      failure.detail = "implicit tied copy has an incomplete scheduling model";
+      return mlir::failure();
+    }
+    unitOwner->setTiedCopyInfo({root, plan.info.id, operandIndex, resultIndex,
+                                copy.writeLatency, false, false});
+  }
+
+  for (RootPlan &plan : plans) {
+    PhysicalRegisterRootUseAnalysis uses = analyzePhysicalRegisterRootUses(
+        plan.info.physicalRoot, dag.getRegion().block);
+    plan.info.liveOut = !uses.allUsesInBlock || llvm::any_of(
+        dag.getLiveOuts(), [&](Value value) {
+          return getPhysicalRegisterViewRoot(value) == plan.info.physicalRoot;
+        });
+    for (Operation *reader : uses.materialUsers) {
+      VPTOSUnit *readerUnit = dag.lookup(reader);
+      if (!readerUnit) {
+        plan.info.liveOut = true;
+        continue;
+      }
+      plan.materialReaders.push_back(readerUnit);
+    }
+    VPTOSUnit *candidate = *llvm::max_element(
+        plan.info.consumers, [](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+          return lhs->getOriginalIndex() < rhs->getOriginalIndex();
+        });
+    if (!plan.info.liveOut) {
+      bool createsCycle = false;
+      for (VPTOSUnit *reader : plan.materialReaders) {
+        if (reader == candidate) {
+          continue;
+        }
+        FailureOr<bool> candidatePrecedesReader =
+            hasMustPath(*candidate, *reader, budget);
+        if (failed(candidatePrecedesReader)) {
+          failure = {VPTOScheduleFailureKind::Budget, "work-units",
+                     budget ? budget->getLimit() : 0,
+                     budget ? budget->getLimit() : 0, {}};
+          return mlir::failure();
+        }
+        createsCycle |= *candidatePrecedesReader;
+      }
+      plan.info.ownerRejectedForCycle = createsCycle;
+      if (!createsCycle) {
+        plan.info.owner = candidate;
+      }
+    }
+    for (VPTOSUnit *consumer : plan.info.consumers) {
+      VPTOImplicitTiedCopyInfo info = *consumer->getTiedCopyInfo();
+      info.owner = consumer == plan.info.owner;
+      info.requiresCopy = !info.owner;
+      consumer->setTiedCopyInfo(info);
+    }
+  }
+
+  for (const std::unique_ptr<VPTOSchedEdge> &edgeOwner : dag.getEdges()) {
+    VPTOSchedEdge &edge = *edgeOwner;
+    bool isDataEdge = edge.getKind() == VPTOSchedEdgeKind::Data;
+    if (!isDataEdge) {
+      continue;
+    }
+    unsigned producerOffset = edge.getPredecessor()->getConsumerIssueOffset();
+    unsigned remainingLatency =
+        std::numeric_limits<unsigned>::max() - edge.getLatency();
+    if (producerOffset > remainingLatency) {
+      failure.kind = VPTOScheduleFailureKind::InvalidModel;
+      failure.detail = "implicit tied-copy result latency overflow";
+      return mlir::failure();
+    }
+    edge.setLatency(edge.getLatency() + producerOffset);
+    std::optional<unsigned> operandIndex = edge.getSuccessorOperandIndex();
+    if (operandIndex) {
+      VPTOSUnit *successor = edge.getSuccessor();
+      const auto &copyInfo = successor->getTiedCopyInfo();
+      bool readsAtCopy = copyInfo && copyInfo->requiresCopy &&
+                         *operandIndex == copyInfo->operandIndex;
+      bool readsAtConsumer = successor->requiresImplicitCopy() && !readsAtCopy;
+      if (readsAtConsumer) {
+        edge.setSuccessorReadOffset(successor->getConsumerIssueOffset());
+      }
+    }
+  }
+
+  for (RootPlan &plan : plans) {
+    if (VPTOSUnit *owner = plan.info.owner) {
+      for (VPTOSUnit *reader : plan.materialReaders) {
+        if (reader == owner) {
+          continue;
+        }
+        FailureOr<bool> alreadyOrdered = hasMustPath(*reader, *owner, budget);
+        if (failed(alreadyOrdered)) {
+          failure = {VPTOScheduleFailureKind::Budget, "work-units",
+                     budget ? budget->getLimit() : 0,
+                     budget ? budget->getLimit() : 0, {}};
+          return mlir::failure();
+        }
+        if (*alreadyOrdered) {
+          continue;
+        }
+        unsigned readOffset =
+            reader->getPhysicalRootReadOffset(plan.info.physicalRoot);
+        if (failed(addEdge(dag, *reader, *owner, VPTOSchedEdgeKind::Anti,
+                           VPTOSchedEdgeStrength::Must, readOffset,
+                           "tied owner waits for physical-root reader",
+                           failure))) {
+          return mlir::failure();
+        }
+      }
+    }
+    dag.addTiedRoot(std::move(plan.info));
   }
   return success();
 }
@@ -723,6 +915,38 @@ LogicalResult VPTOSchedDAGBuilder::buildModelFallbackEdges(
                          VPTOSchedEdgeKind::Artificial,
                          VPTOSchedEdgeStrength::Must, 0,
                          "unknown sched class preserves successor order",
+                         failure))) {
+        return mlir::failure();
+      }
+    }
+  }
+  return success();
+}
+
+LogicalResult VPTOSchedDAGBuilder::buildNonSpeculatableStructuralEdges(
+    VPTOSchedDAG &dag, VPTOScheduleFailure &failure) const {
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = dag.getUnits();
+  for (auto [index, unitOwner] : llvm::enumerate(units)) {
+    VPTOSUnit &unit = *unitOwner;
+    bool isStructural =
+        unit.getSchedulingClass() == VPTOSchedulingClass::Structural;
+    if (!isStructural || mlir::isSpeculatable(unit.getOperation())) {
+      continue;
+    }
+    for (size_t predecessor = 0; predecessor < index; ++predecessor) {
+      if (failed(addEdge(dag, *units[predecessor], unit,
+                         VPTOSchedEdgeKind::Control,
+                         VPTOSchedEdgeStrength::Must, 0,
+                         "non-speculatable op preserves predecessor order",
+                         failure))) {
+        return mlir::failure();
+      }
+    }
+    for (size_t successor = index + 1; successor < units.size(); ++successor) {
+      if (failed(addEdge(dag, unit, *units[successor],
+                         VPTOSchedEdgeKind::Control,
+                         VPTOSchedEdgeStrength::Must, 0,
+                         "non-speculatable op preserves successor order",
                          failure))) {
         return mlir::failure();
       }

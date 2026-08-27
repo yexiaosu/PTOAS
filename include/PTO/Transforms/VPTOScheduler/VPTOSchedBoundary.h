@@ -47,6 +47,12 @@ struct VPTOPendingUnit {
   unsigned readyCycle = 0;
 };
 
+struct VPTOIssueEvaluation {
+  bool legal = true;
+  unsigned earliestCycle = 0;
+  std::string reason;
+};
+
 class VPTOSchedBoundary {
 public:
   VPTOSchedBoundary(const VPTOSchedDAG &dag, const VPTOSchedModel &model,
@@ -75,6 +81,8 @@ public:
   VPTORegPressureEvaluation evaluatePressure(const VPTOSUnit &unit) const;
   VPTOHazardRecognizer &getHazardRecognizer();
   const VPTOHazardRecognizer &getHazardRecognizer() const;
+  VPTOIssueEvaluation evaluateIssue(const VPTOSUnit &unit,
+                                    unsigned requestedCycle) const;
 
   /// Move a dependency-ready unit to a future cycle.  Resource and hazard
   /// trackers use this without mutating DAG readiness.

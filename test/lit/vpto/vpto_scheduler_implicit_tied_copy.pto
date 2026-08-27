@@ -1,0 +1,109 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s '-pto-vpto-scheduler=mode=off' > %t.off
+// RUN: pto-test-opt %s '-pto-vpto-scheduler=mode=analyze' > %t.analyze-ir 2> %t.analyze
+// RUN: diff %t.off %t.analyze-ir
+// RUN: FileCheck %s --check-prefix=ANALYZE < %t.analyze
+// RUN: pto-test-opt %s '-pto-vpto-scheduler=mode=on trace=true' > %t.on 2> %t.on-report
+// RUN: FileCheck %s --check-prefix=IR < %t.on
+// RUN: FileCheck %s --check-prefix=SCHEDULE < %t.on-report
+
+// IR-NOT: pto.vmov
+// IR-COUNT-10: pto.vmula
+// IR-COUNT-2: pto.vmadd
+
+// ANALYZE-LABEL: vpto-scheduler: function=shared_with_reader mode=analyze
+// ANALYZE: physical-root=0 live-out=false owner=4 owner-cycle-rejected=false consumers=3
+// ANALYZE-COUNT-2: tied-consumer root=0 node={{[01]}} disposition=implicit-copy operand=0 result=0 dependency=physical-root-0 copy-latency=2 copy-micro-ops=1 copy-resource-uses=1 register-count=1 mask-independent=true
+// ANALYZE: tied-consumer root=0 node=4 disposition=owner operand=0 result=0
+// ANALYZE: implicit-vmov-count=2
+// ANALYZE-COUNT-3: kind=anti strength=must latency=0 reason=tied owner waits for physical-root reader read-offset=0 ready-latency=0
+// ANALYZE-COUNT-2: transient-delta={vector:1,predicate:0}
+// ANALYZE-NOT: pto.vmov
+// ANALYZE-LABEL: vpto-scheduler: function=single_consumer mode=analyze
+// ANALYZE: physical-root=0 live-out=false owner=0 owner-cycle-rejected=false consumers=1
+// ANALYZE: tied-consumer root=0 node=0 disposition=owner
+// ANALYZE: implicit-vmov-count=0
+// ANALYZE-LABEL: vpto-scheduler: function=bitcast_root mode=analyze
+// ANALYZE: physical-root=0 live-out=false owner=3 owner-cycle-rejected=false consumers=2
+// ANALYZE: tied-consumer root=0 node=2 disposition=implicit-copy
+// ANALYZE: tied-consumer root=0 node=3 disposition=owner
+// ANALYZE: implicit-vmov-count=1
+// ANALYZE-LABEL: vpto-scheduler: function=live_out_root mode=analyze
+// ANALYZE: physical-root=0 live-out=true owner=none owner-cycle-rejected=false consumers=2
+// ANALYZE-COUNT-2: tied-consumer root=0 node={{[01]}} disposition=implicit-copy
+// ANALYZE: implicit-vmov-count=2
+// ANALYZE-LABEL: vpto-scheduler: function=cycle_rejected mode=analyze
+// ANALYZE: physical-root=0 live-out=false owner=none owner-cycle-rejected=true consumers=2
+// ANALYZE: implicit-vmov-count=2
+// ANALYZE-LABEL: vpto-scheduler: function=vmadd_genericity mode=analyze
+// ANALYZE: physical-root=0 live-out=false owner=1 owner-cycle-rejected=false consumers=2
+// ANALYZE: tied-consumer root=0 node=0 disposition=implicit-copy
+// ANALYZE: tied-consumer root=0 node=1 disposition=owner
+
+// SCHEDULE-LABEL: vpto-scheduler: function=shared_with_reader mode=on
+// SCHEDULE-COUNT-2: implicit-copy=true copy-cycle={{[0-9]+}} consumer-cycle={{[0-9]+}} transient-pressure=1
+// SCHEDULE: node=4 original-index=4 cycle={{[0-9]+}} direction=top reason={{[^ ]+}} op=pto.vmula
+// SCHEDULE-LABEL: vpto-scheduler: function=single_consumer mode=on
+// SCHEDULE: implicit-vmov-count=0
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @shared_with_reader(%acc: !pto.vreg<64xf32>, %lhs0: !pto.vreg<64xf32>, %lhs1: !pto.vreg<64xf32>, %lhs2: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %r0 = pto.vmula %acc, %lhs0, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %r1 = pto.vmula %acc, %lhs1, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %view = pto.vbitcast %acc : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %read = pto.vabs %view, %active : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %r2 = pto.vmula %acc, %lhs2, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+
+  func.func @single_consumer(%acc: !pto.vreg<64xf32>, %lhs: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %r0 = pto.vmula %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+
+  func.func @bitcast_root(%acc: !pto.vreg<64xf32>, %lhs: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %bits = pto.vbitcast %acc : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+      %view = pto.vbitcast %bits : !pto.vreg<64xi32> -> !pto.vreg<64xf32>
+      %r0 = pto.vmula %view, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %r1 = pto.vmula %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+
+  func.func @live_out_root(%acc: !pto.vreg<64xf32>, %lhs: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) -> !pto.vreg<64xf32> {
+    pto.vecscope {
+      %r0 = pto.vmula %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %r1 = pto.vmula %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return %acc : !pto.vreg<64xf32>
+  }
+
+  func.func @cycle_rejected(%acc: !pto.vreg<64xf32>, %lhs: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %r0 = pto.vmula %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %candidate = pto.vmula %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %read = pto.vadd %candidate, %acc, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+
+  func.func @vmadd_genericity(%acc: !pto.vreg<64xf32>, %lhs: !pto.vreg<64xf32>, %rhs: !pto.vreg<64xf32>, %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %r0 = pto.vmadd %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %r1 = pto.vmadd %acc, %lhs, %rhs, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}

@@ -100,6 +100,12 @@ public:
     return {schedClass.microOps, schedClass.writeLatency,
             schedClass.resources, schedClass.readAdvance};
   }
+  /// Return the target event used for a full physical vector-register copy.
+  /// The scheduler consumes this without materializing an IR operation.
+  virtual VPTOSchedParameters getImplicitCopyParameters(Value source) const {
+    (void)source;
+    return {};
+  }
   /// Return the direct SSA source whose physical register pressure is shared
   /// by `value`. Trackers may follow this relation across view-like operations
   /// that belong to their scheduling region.
@@ -126,6 +132,7 @@ public:
   }
   const VPTOSchedClass &getSchedClass(Operation *op) const override;
   VPTOSchedParameters getSchedParameters(Operation *op) const override;
+  VPTOSchedParameters getImplicitCopyParameters(Value source) const override;
   Value getPressureRepresentative(Value value) const override;
   SmallVector<VPTORegPressureContribution>
   getPressure(Value value) const override;

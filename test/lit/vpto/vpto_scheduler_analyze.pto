@@ -19,15 +19,15 @@
 // OFF-LABEL: func.func @scheduler_analysis
 // OFF: pto.vadd
 
-// ANALYZE: vpto-scheduler: function=scheduler_analysis mode=analyze target=a5 model=generic-a5-v4
+// ANALYZE: vpto-scheduler: function=scheduler_analysis mode=analyze target=a5 model=generic-a5-v5
 // ANALYZE: vpto-scheduler: block=0 regions=1
 // ANALYZE: vpto-scheduler: region=0 before=block-start after=block-end nodes=3
 // ANALYZE: vpto-scheduler: node=0 original-index=0 op=pto.pset_b32 semantic=schedulable sched-class=vector-predicate known=true
 // ANALYZE: vpto-scheduler: node=1 original-index=1 op=pto.vadd semantic=schedulable sched-class=vector-predicate known=true
 // ANALYZE: vpto-scheduler: edge=0->1 kind=data strength=must
-// ANALYZE: vpto-scheduler: pressure node=0 delta={vector:0,predicate:1} current={vector:2,predicate:1} peak={vector:2,predicate:1}
-// ANALYZE-NOT: schedule-result
-// ANALYZE-NOT: result-position=
+// ANALYZE: vpto-scheduler: pressure node=0 delta={vector:0,predicate:1} current={vector:2,predicate:1} peak={vector:2,predicate:1} transient-delta={vector:0,predicate:0} unit-peak={vector:2,predicate:1}
+// ANALYZE: schedule-result
+// ANALYZE: result-position=0
 // ANALYZE-NOT: op=pto.set_ctrl
 // ANALYZE-NOT: vpto-scheduler: issue node=
 // ANALYZE-NOT: timeline cycle=

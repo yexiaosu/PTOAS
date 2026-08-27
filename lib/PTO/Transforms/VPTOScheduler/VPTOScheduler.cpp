@@ -100,7 +100,7 @@ static int64_t getEvaluationPressure(
     ArrayRef<VPTORegPressureSet> pressureSets) {
   int64_t cost = 0;
   for (auto [index, pressureSet] : llvm::enumerate(pressureSets)) {
-    saturatingMultiplyAdd(evaluation.projected[index], pressureSet.weight,
+    saturatingMultiplyAdd(evaluation.projectedPeak[index], pressureSet.weight,
                           cost);
   }
   return cost;
@@ -121,7 +121,7 @@ buildCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
                                criticalPath,
                                unit.getOriginalIndex(),
                                pressure,
-                               pressure.projected,
+                               pressure.projectedPeak,
                                pressure.projected,
                                0,
                                false};
@@ -723,12 +723,12 @@ refreshPressureClosureGroup(PressureClosureGroup &closureGroup,
   return success();
 }
 
-static FailureOr<SmallVector<VPTOSchedCandidate>>
+static FailureOr<SmallVector<VPTOSchedCandidate, 0>>
 buildCandidates(const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
                 VPTOSchedulingBudget &budget,
                 VPTOScheduleFailure &failure,
                 const PressureClosureGroup *closureGroup = nullptr) {
-  SmallVector<VPTOSchedCandidate> candidates;
+  SmallVector<VPTOSchedCandidate, 0> candidates;
   candidates.reserve(boundary.getAvailable().size());
   for (VPTOSUnit *unit : boundary.getAvailable()) {
     if (!budget.consume()) {
@@ -850,7 +850,7 @@ static bool increasesPressureRisk(
     int64_t limit = static_cast<int64_t>(*pressureSet.limit);
     bool critical = currentPressure[index] * 2 >= limit;
     if (critical &&
-        candidate.pressure.projected[index] > currentPressure[index])
+        candidate.pressure.projectedPeak[index] > currentPressure[index])
       return true;
   }
   return false;
@@ -900,7 +900,7 @@ static LogicalResult replayPressureDrivenIdle(
     if (currentCycle >= entry.issueCycle) {
       break;
     }
-    FailureOr<SmallVector<VPTOSchedCandidate>> candidates =
+    FailureOr<SmallVector<VPTOSchedCandidate, 0>> candidates =
         buildCandidates(boundary, model, budget, failure);
     if (failed(candidates)) {
       return mlir::failure();
@@ -986,6 +986,39 @@ static LogicalResult replayMandatoryDependencyIdle(
   return success();
 }
 
+static LogicalResult prepareIssueReadyUnits(
+    VPTOSchedBoundary &boundary, VPTOSchedulingBudget &budget,
+    VPTOScheduleFailure &failure) {
+  SmallVector<VPTOSUnit *, 8> available(boundary.getAvailable().begin(),
+                                        boundary.getAvailable().end());
+  for (VPTOSUnit *unit : available) {
+    if (!budget.consume()) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
+    VPTOIssueEvaluation issue =
+        boundary.evaluateIssue(*unit, boundary.getCurrentCycle());
+    if (!issue.legal) {
+      setFailure(failure, VPTOScheduleFailureKind::InvalidModel,
+                 issue.reason);
+      return mlir::failure();
+    }
+    if (issue.earliestCycle == boundary.getCurrentCycle()) {
+      continue;
+    }
+    if (failed(boundary.defer(*unit, issue.earliestCycle, budget))) {
+      if (budget.hasExceeded()) {
+        setWorkBudgetFailure(failure, budget);
+      } else {
+        setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                   "failed to defer a resource- or hazard-blocked unit");
+      }
+      return mlir::failure();
+    }
+  }
+  return success();
+}
+
 } // namespace
 
 bool VPTOSchedulingBudget::consume(uint64_t amount) {
@@ -1037,7 +1070,7 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
   while (!boundary.isComplete()) {
     bool pressureDrivenIdle = std::exchange(carriedPressureDrivenIdle, false);
     bool recoveryDrivenIdle = std::exchange(carriedRecoveryDrivenIdle, false);
-    SmallVector<VPTOSchedCandidate> candidates;
+    SmallVector<VPTOSchedCandidate, 0> candidates;
     while (true) {
       if (boundary.getAvailable().empty()) {
         FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
@@ -1051,6 +1084,12 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
           return mlir::failure();
         }
       }
+      if (failed(prepareIssueReadyUnits(boundary, budget, failure))) {
+        return mlir::failure();
+      }
+      if (boundary.getAvailable().empty()) {
+        continue;
+      }
 
       LogicalResult refreshed =
           refreshPressureClosureGroup(closureGroup, boundary, model, dag,
@@ -1063,7 +1102,7 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
           closureGroup.target && closureGroup.netRelief == 0;
       const PressureClosureGroup *rankingClosure =
           hasZeroReliefClosure ? nullptr : &closureGroup;
-      FailureOr<SmallVector<VPTOSchedCandidate>> builtCandidates =
+      FailureOr<SmallVector<VPTOSchedCandidate, 0>> builtCandidates =
           buildCandidates(boundary, model, budget, failure, rankingClosure);
       if (failed(builtCandidates)) {
         return mlir::failure();
@@ -1387,21 +1426,23 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
       setWorkBudgetFailure(failure, budget);
       return mlir::failure();
     }
-    LogicalResult mandatoryIdle =
-        replayMandatoryDependencyIdle(entry, boundary, budget, failure);
-    if (failed(mandatoryIdle)) {
-      return mlir::failure();
-    }
-    if (failed(
-            replayPressureDrivenIdle(entry, boundary, model, budget,
-                                     failure))) {
-      return mlir::failure();
-    }
-    if (failed(replayRecoveryDrivenIdle(entry, boundary, budget, failure))) {
-      return mlir::failure();
-    }
-    if (boundary.getAvailable().empty()) {
-      FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
+    while (true) {
+      LogicalResult mandatoryIdle =
+          replayMandatoryDependencyIdle(entry, boundary, budget, failure);
+      if (failed(mandatoryIdle)) {
+        return mlir::failure();
+      }
+      if (failed(prepareIssueReadyUnits(boundary, budget, failure))) {
+        if (failure.kind == VPTOScheduleFailureKind::Scheduling) {
+          failure.kind = VPTOScheduleFailureKind::ModelReplay;
+        }
+        return mlir::failure();
+      }
+      if (!boundary.getAvailable().empty()) {
+        break;
+      }
+      FailureOr<bool> advanced =
+          boundary.advanceToNextPendingCycle(budget);
       if (failed(advanced)) {
         setWorkBudgetFailure(failure, budget);
         return mlir::failure();
@@ -1411,6 +1452,14 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
                    "replay has no candidate or pending event");
         return mlir::failure();
       }
+    }
+    if (failed(
+            replayPressureDrivenIdle(entry, boundary, model, budget,
+                                     failure))) {
+      return mlir::failure();
+    }
+    if (failed(replayRecoveryDrivenIdle(entry, boundary, budget, failure))) {
+      return mlir::failure();
     }
     bool isCandidate = boundary.isAvailable(entry.unit);
     bool hasRecordedDirection = entry.direction == boundary.getDirection();

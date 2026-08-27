@@ -14,6 +14,7 @@
 // CHECK-NEXT: resource shared: pass
 // CHECK-NEXT: resource issue-width: pass
 // CHECK-NEXT: resource reservation: pass
+// CHECK-NEXT: implicit tied-copy trackers: pass
 // CHECK-NEXT: pressure live-in-out-last-use: pass
 // CHECK-NEXT: pressure compare-select: grouped=3 interleaved=2
 // CHECK-NEXT: pressure bottom: pass

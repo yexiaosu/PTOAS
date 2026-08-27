@@ -34,10 +34,12 @@ VPTOSUnit *VPTOSchedDAG::lookup(Operation *op) const {
 
 VPTOSchedEdge &VPTOSchedDAG::addEdge(
     VPTOSUnit &predecessor, VPTOSUnit &successor, VPTOSchedEdgeKind kind,
-    VPTOSchedEdgeStrength strength, unsigned latency, Twine reason) {
+    VPTOSchedEdgeStrength strength, unsigned latency, Twine reason,
+    std::optional<unsigned> successorOperandIndex) {
   assert(&predecessor != &successor && "self dependencies are invalid");
   auto edge = std::make_unique<VPTOSchedEdge>(
-      &predecessor, &successor, kind, strength, latency, reason.str());
+      &predecessor, &successor, kind, strength, latency, reason.str(),
+      successorOperandIndex);
   VPTOSchedEdge *edgePtr = edge.get();
   predecessor.successors.push_back(edgePtr);
   successor.predecessors.push_back(edgePtr);
@@ -71,7 +73,7 @@ LogicalResult VPTOSchedDAG::computeCriticalPaths() {
 
   for (const std::unique_ptr<VPTOSUnit> &unit : units) {
     unit->setDepth(0);
-    unit->setHeight(0);
+    unit->setHeight(unit->getConsumerIssueOffset());
     indegree[unit->getId()] = llvm::count_if(
         unit->getPredecessors(),
         [](VPTOSchedEdge *edge) { return edge->isMust(); });
@@ -88,7 +90,7 @@ LogicalResult VPTOSchedDAG::computeCriticalPaths() {
       VPTOSUnit *successor = edge->getSuccessor();
       successor->setDepth(
           std::max(successor->getDepth(),
-                   unit->getDepth() + edge->getLatency()));
+                   unit->getDepth() + edge->getReadyLatency()));
       unsigned &remaining = indegree[successor->getId()];
       assert(remaining != 0 && "invalid dependency count");
       if (--remaining == 0)
@@ -105,7 +107,7 @@ LogicalResult VPTOSchedDAG::computeCriticalPaths() {
         continue;
       unit->setHeight(std::max(
           unit->getHeight(), edge->getSuccessor()->getHeight() +
-                                 edge->getLatency()));
+                                 edge->getReadyLatency()));
     }
   }
   return success();

@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -49,11 +50,12 @@ enum PressureSetID : unsigned {
 class TrackerTestModel final : public VPTOSchedModel {
 public:
   explicit TrackerTestModel(bool trackUnboundedPressure = false,
-                            unsigned predicateLimit = 2)
+                            unsigned predicateLimit = 2,
+                            unsigned issueWidth = 2)
       : trackUnboundedPressure(trackUnboundedPressure) {
     machine.target = "test";
     machine.version = "tracker-test-v1";
-    machine.issueWidth = 2;
+    machine.issueWidth = issueWidth;
 
     resources = {
         {MultiUnitResource, "multi-unit", 2, 0, {}},
@@ -241,6 +243,123 @@ module attributes {pto.target_arch = "a5"} {
   if (!ok)
     return false;
   llvm::outs() << "resource reservation: pass\n";
+  return true;
+}
+
+static bool testImplicitTiedCopyTrackers(
+    MLIRContext &context, const VPTOGenericA5SchedModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @implicit_tied_copy(%acc: !pto.vreg<64xf32>,
+                                %lhs: !pto.vreg<64xf32>,
+                                %rhs: !pto.vreg<64xf32>,
+                                %active: !pto.mask<b32>) {
+    pto.vecscope {
+      %first = pto.vmula %acc, %lhs, %rhs, %active
+          : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %owner = pto.vmula %acc, %lhs, %rhs, %active
+          : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+    }
+    return
+  }
+}
+)mlir";
+
+  OwningOpRef<ModuleOp> module = parseModule(context, source);
+  if (!check(static_cast<bool>(module),
+             "cannot parse implicit-tied-copy fixture")) {
+    return false;
+  }
+  VecScopeOp scope = findVecScope(*module);
+  VPTOSchedRegion region;
+  region.block = &scope.getBody().front();
+  for (Operation &op : scope.getBody().front()) {
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      break;
+    }
+    region.operations.push_back(&op);
+  }
+  VPTOSchedDAGBuilder builder(&model);
+  FailureOr<std::unique_ptr<VPTOSchedDAG>> dag = builder.build(region);
+  if (!check(succeeded(dag), "cannot build implicit-tied-copy DAG")) {
+    return false;
+  }
+  ArrayRef<std::unique_ptr<VPTOSUnit>> units = (*dag)->getUnits();
+  bool ok = check(units.size() == 2, "implicit-tied-copy unit count") &&
+            check((*dag)->getTiedRoots().size() == 1,
+                  "implicit-tied-copy physical root count") &&
+            check(units[0]->requiresImplicitCopy(),
+                  "first tied consumer requires a copy") &&
+            check(units[1]->isTiedOwner(), "last tied consumer owns the root");
+  if (!ok) {
+    return false;
+  }
+
+  std::optional<VPTOSchedResourceID> vectorResource;
+  for (const VPTOSchedResource &resource : model.getResources()) {
+    if (resource.name == "vector") {
+      vectorResource = resource.id;
+      break;
+    }
+  }
+  std::optional<unsigned> vectorPressureIndex;
+  for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
+    if (pressureSet.name == "vector") {
+      vectorPressureIndex = index;
+      break;
+    }
+  }
+  ok &= check(vectorResource.has_value(), "generic model vector resource") &&
+        check(vectorPressureIndex.has_value(),
+              "generic model vector pressure set");
+  if (!ok) {
+    return false;
+  }
+
+  VPTOResourceTracker resources(model);
+  VPTOResourceEvaluation copyReservation = resources.evaluate(*units[0], 0);
+  ok &= check(copyReservation.legal && copyReservation.earliestCycle == 0,
+              "implicit-copy composite reservation is legal") &&
+        check(succeeded(resources.commit(*units[0], 0)),
+              "commit implicit-copy composite reservation") &&
+        check(resources.getIssueOccupancy(0) == 1 &&
+                  resources.getIssueOccupancy(1) == 0 &&
+                  resources.getIssueOccupancy(2) == 1,
+              "copy and consumer occupy distinct issue cycles") &&
+        check(resources.getResourceOccupancy(*vectorResource, 0) == 1 &&
+                  resources.getResourceOccupancy(*vectorResource, 1) == 0 &&
+                  resources.getResourceOccupancy(*vectorResource, 2) == 1,
+              "copy and consumer reserve the vector resource");
+
+  VPTORegPressureTracker pressure(model, **dag, VPTOSchedDirection::Top);
+  VPTORegPressureEvaluation copyPressure = pressure.evaluate(*units[0]);
+  unsigned vector = *vectorPressureIndex;
+  ok &= check(copyPressure.transientDelta[vector] == 1,
+              "implicit copy contributes one transient vector register") &&
+        check(copyPressure.projectedPeak[vector] ==
+                  std::max(copyPressure.projected[vector],
+                           pressure.getCurrent()[vector] + 1),
+              "implicit copy contributes to projected peak pressure");
+
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(1ULL << 16);
+  VPTOScheduleFailure failure;
+  VPTOScheduler scheduler(model, **dag, limits, budget);
+  FailureOr<VPTOScheduleResult> result = scheduler.schedule(failure);
+  ok &= check(succeeded(result), "schedule implicit-tied-copy fixture");
+  if (succeeded(result)) {
+    ok &= check(result->entries.size() == 2 &&
+                    result->entries[0].unit == units[0].get() &&
+                    result->entries[0].issueCycle == 0 &&
+                    units[0]->getConsumerIssueCycle(
+                        result->entries[0].issueCycle) == 2 &&
+                    result->entries[1].issueCycle > 2,
+                "scheduler keeps the copy/consumer composite indivisible");
+  }
+  if (!ok) {
+    return false;
+  }
+  llvm::outs() << "implicit tied-copy trackers: pass\n";
   return true;
 }
 
@@ -654,8 +773,14 @@ static VPTOSchedCandidate makeStrategyCandidate(
   candidate.pressure.delta = {0, predicateDelta};
   candidate.pressure.released = {0, predicateReleased};
   candidate.pressure.introduced = {0, predicateIntroduced};
+  candidate.pressure.transientDelta = {0, 0};
   candidate.pressure.projected = {current[VectorPressure],
                                   current[PredicatePressure] + predicateDelta};
+  candidate.pressure.projectedPeak = {
+      std::max(current[VectorPressure],
+               candidate.pressure.projected[VectorPressure]),
+      std::max(current[PredicatePressure],
+               candidate.pressure.projected[PredicatePressure])};
   candidate.pressure.projectedExcess = {0, 0};
   std::optional<unsigned> predicateLimit =
       model.getPressureSets()[PredicatePressure].limit;
@@ -735,7 +860,7 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
   decision =
       strategy.pickCandidate(atLimitContext, {producer, consumer}, detail);
   ok = check(succeeded(decision) && decision->unit == consumer.unit &&
-                 decision->reason == "high-pressure-preserving",
+                 decision->reason == "high-pressure-live-range-closing",
              "critical-pressure strategy must prefer a live-range-closing "
              "candidate at the limit");
   if (!ok) {
@@ -914,7 +1039,9 @@ static bool testBoundaryBudget(MLIRContext &context,
   return ok;
 }
 
-static bool testScheduler(MLIRContext &context, const TrackerTestModel &model) {
+static bool testScheduler(MLIRContext &context) {
+  TrackerTestModel model(/*trackUnboundedPressure=*/false,
+                         /*predicateLimit=*/2, /*issueWidth=*/4);
   FailureOr<PressureFixture> fixture = buildPressureFixture(context, model);
   if (!check(succeeded(fixture), "cannot build scheduler fixture")) {
     return false;
@@ -1881,12 +2008,13 @@ int main() {
   TrackerTestModel model;
   VPTOGenericA5SchedModel genericModel;
   if (!testResourceTracker(context, model) ||
+      !testImplicitTiedCopyTrackers(context, genericModel) ||
       !testPressureTracker(context, model) ||
       !testBitcastPressureAliasing(context, genericModel) ||
       !testBitcastPressureCacheInvalidation(context, genericModel) ||
       !testPressureAwareStrategy(context) ||
       !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
-      !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
+      !testBoundaryBudget(context, model) || !testScheduler(context) ||
       !testPressureNoPendingProgress(context) ||
       !testPressureReliefDoesNotIdle(context) ||
       !testUnboundedPressureScheduling(context) ||

@@ -11,6 +11,7 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedModel.h"
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/VPTOPhysicalRegister.h"
 #include "PTO/IR/VPTOScheduling.h"
 
 #include "mlir/IR/BuiltinTypes.h"
@@ -85,7 +86,7 @@ hasControlSchedulingEffect(const VPTOSchedulingSemantics &semantics) {
 
 VPTOGenericA5SchedModel::VPTOGenericA5SchedModel() {
   machine.target = "a5";
-  machine.version = "generic-a5-v4";
+  machine.version = "generic-a5-v5";
   machine.issueWidth = 1;
   machine.microOpBufferSize = 0;
 
@@ -168,13 +169,17 @@ VPTOGenericA5SchedModel::getSchedParameters(Operation *op) const {
   return parameters;
 }
 
+VPTOSchedParameters
+VPTOGenericA5SchedModel::getImplicitCopyParameters(Value source) const {
+  (void)source;
+  const VPTOSchedClass &copyClass = schedClasses[VectorPredicateClass];
+  return {copyClass.microOps, /*writeLatency=*/2, copyClass.resources,
+          copyClass.readAdvance};
+}
+
 Value
 VPTOGenericA5SchedModel::getPressureRepresentative(Value value) const {
-  Operation *definingOp = value ? value.getDefiningOp() : nullptr;
-  if (definingOp && isa<VbitcastOp, PbitcastOp>(definingOp)) {
-    return definingOp->getOperand(0);
-  }
-  return value;
+  return getPhysicalRegisterViewRoot(value);
 }
 
 SmallVector<VPTORegPressureContribution>

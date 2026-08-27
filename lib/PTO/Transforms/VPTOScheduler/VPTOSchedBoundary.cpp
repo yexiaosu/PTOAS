@@ -68,7 +68,7 @@ collectDependencyUpdates(VPTOSUnit &unit, VPTOSchedDirection direction,
     VPTOSUnit *neighbor = direction == VPTOSchedDirection::Top
                               ? edge->getSuccessor()
                               : edge->getPredecessor();
-    unsigned latency = edge->getLatency();
+    unsigned latency = edge->getReadyLatency();
     unsigned maxIssueCycle = std::numeric_limits<unsigned>::max() - latency;
     if (issueCycle > maxIssueCycle) {
       detail = "dependency-ready cycle overflow";
@@ -259,6 +259,45 @@ const VPTOHazardRecognizer &VPTOSchedBoundary::getHazardRecognizer() const {
   return *hazardRecognizer;
 }
 
+VPTOIssueEvaluation
+VPTOSchedBoundary::evaluateIssue(const VPTOSUnit &unit,
+                                 unsigned requestedCycle) const {
+  constexpr unsigned kMaxIssueSearchCycles = 1U << 20;
+  unsigned cycle = requestedCycle;
+  for (unsigned attempt = 0; attempt < kMaxIssueSearchCycles; ++attempt) {
+    VPTOResourceEvaluation resource = resourceTracker->evaluate(unit, cycle);
+    if (!resource.legal) {
+      return {/*legal=*/false, cycle, std::move(resource.reason)};
+    }
+    cycle = resource.earliestCycle;
+    unsigned earliestStart = cycle;
+    if (unit.requiresImplicitCopy()) {
+      VPTOHazardResult copyHazard = hazardRecognizer->checkImplicitCopy(
+          unit.getTiedCopyInfo()->physicalRoot, direction, cycle);
+      if (!copyHazard.legal) {
+        return {/*legal=*/false, cycle, std::move(copyHazard.reason)};
+      }
+      earliestStart = std::max(earliestStart, copyHazard.earliestCycle);
+    }
+    unsigned consumerCycle = unit.getConsumerIssueCycle(cycle);
+    VPTOHazardResult consumerHazard =
+        hazardRecognizer->check(unit, direction, consumerCycle);
+    if (!consumerHazard.legal) {
+      return {/*legal=*/false, cycle, std::move(consumerHazard.reason)};
+    }
+    unsigned offset = unit.getConsumerIssueOffset();
+    unsigned consumerStart = consumerHazard.earliestCycle > offset
+                                 ? consumerHazard.earliestCycle - offset
+                                 : 0;
+    earliestStart = std::max(earliestStart, consumerStart);
+    if (earliestStart == cycle) {
+      return {/*legal=*/true, cycle, {}};
+    }
+    cycle = earliestStart;
+  }
+  return {/*legal=*/false, cycle, "issue search budget exceeded"};
+}
+
 bool VPTOSchedBoundary::isScheduled(const VPTOSUnit *unit) const {
   return unit && unit->getId() < states.size() &&
          states[unit->getId()] == UnitState::Scheduled;
@@ -384,6 +423,12 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
     detail = "selected node is not available at the current cycle";
     return mlir::failure();
   }
+  VPTOIssueEvaluation issue = evaluateIssue(unit, issueCycle);
+  if (!issue.legal || issue.earliestCycle != issueCycle) {
+    detail = issue.reason.empty() ? "selected node is not resource-ready"
+                                  : std::move(issue.reason);
+    return mlir::failure();
+  }
 
   SmallVector<DependencyUpdate, 8> updates;
   if (failed(collectDependencyUpdates(unit, direction, issueCycle, budget,
@@ -403,6 +448,16 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
     detail = "register-pressure tracker rejected selected node";
     return mlir::failure();
   }
+  if (failed(resourceTracker->commit(unit, issueCycle))) {
+    detail = "resource tracker rejected selected node";
+    return mlir::failure();
+  }
+  if (unit.requiresImplicitCopy()) {
+    hazardRecognizer->commitImplicitCopy(
+        unit.getTiedCopyInfo()->physicalRoot, direction, issueCycle);
+  }
+  hazardRecognizer->commit(unit, direction,
+                           unit.getConsumerIssueCycle(issueCycle));
   if (direction == VPTOSchedDirection::Top) {
     DenseSet<Value> consumedRepresentatives;
     for (Value operand : unit.getOperation()->getOperands()) {
@@ -425,6 +480,8 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
   eraseAvailable(&unit);
   states[id] = UnitState::Scheduled;
   ++scheduledCount;
+  currentCycle =
+      std::max(currentCycle, unit.getConsumerIssueCycle(issueCycle));
   for (const DependencyUpdate &update : updates) {
     unsigned neighborId = update.unit->getId();
     readyCycles[neighborId] =
