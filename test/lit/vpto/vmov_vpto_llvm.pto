@@ -24,10 +24,8 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 }
 
 // CANN900-LABEL: define void @vmov_f32_mix_aiv
-// CANN900: call <64 x float> @llvm.hivm.vmov.x.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS:[0-9]+]]
-// CANN900: call <64 x float> @llvm.hivm.vmov.x.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS]]
-// CANN900: attributes #[[VMOV_CALL_ATTRS]] = { nomerge }
+// CANN900: call <64 x float> asm sideeffect "vmov $0, $1", "=&v,v"(<64 x float>
+// CANN900: call <64 x float> asm sideeffect "vmov $0, $1", "=&v,v"(<64 x float>
 // BETA1-LABEL: define void @vmov_f32_mix_aiv
-// BETA1: call <64 x float> @llvm.hivm.vmov.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS:[0-9]+]]
-// BETA1: call <64 x float> @llvm.hivm.vmov.v64f32(<64 x float> {{.*}}) #[[VMOV_CALL_ATTRS]]
-// BETA1: attributes #[[VMOV_CALL_ATTRS]] = { nomerge }
+// BETA1: call <64 x float> asm sideeffect "vmov $0, $1", "=&v,v"(<64 x float>
+// BETA1: call <64 x float> asm sideeffect "vmov $0, $1", "=&v,v"(<64 x float>

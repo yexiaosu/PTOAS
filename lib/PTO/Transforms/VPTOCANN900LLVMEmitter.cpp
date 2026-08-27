@@ -3741,15 +3741,6 @@ static FailureOr<StringRef> buildVmulaCallee(MLIRContext *context,
   return buildCANN900SignedModeTypedCallee(context, resultType, "vmula", "m");
 }
 
-static FailureOr<StringRef> buildVmovCallee(MLIRContext *context,
-                                            Type resultType) {
-  std::string vec = getCANN900VectorTypeFragment(resultType);
-  if (vec.empty()) {
-    return failure();
-  }
-  return StringAttr::get(context, "llvm.hivm.vmov.x." + vec).getValue();
-}
-
 static FailureOr<StringRef> buildVmullCallee(MLIRContext *context,
                                              Type resultType) {
   return buildLaneTypedCallee(context, resultType, "vmull", "");
@@ -8457,18 +8448,12 @@ private:
 class LowerVmovOpPattern final : public OpConversionPattern<pto::VmovOp> {
 public:
   explicit LowerVmovOpPattern(TypeConverter &typeConverter,
-                              MLIRContext *context, LoweringState &state)
-      : OpConversionPattern<pto::VmovOp>(typeConverter, context), state(state) {}
+                              MLIRContext *context, LoweringState &)
+      : OpConversionPattern<pto::VmovOp>(typeConverter, context) {}
 
   LogicalResult
   matchAndRewrite(pto::VmovOp op, pto::VmovOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    FailureOr<StringRef> calleeName =
-        buildVmovCallee(op.getContext(), op.getResult().getType());
-    if (failed(calleeName)) {
-      return rewriter.notifyMatchFailure(op, "unsupported vmov VPTO signature");
-    }
-
     Type resultType =
         this->getTypeConverter()->convertType(op.getResult().getType());
     Value input = adaptor.getInput();
@@ -8477,17 +8462,14 @@ public:
       return rewriter.notifyMatchFailure(op, "failed to convert vmov types");
     }
 
-    auto funcType =
-        rewriter.getFunctionType(TypeRange{resultType}, TypeRange{resultType});
-    auto call = rewriter.create<func::CallOp>(
-        op.getLoc(), *calleeName, TypeRange{resultType}, ValueRange{input});
-    state.plannedDecls.push_back(PlannedDecl{calleeName->str(), funcType});
-    rewriter.replaceOp(op, call.getResults());
+    auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
+        op.getLoc(), TypeRange{resultType}, ValueRange{input},
+        "vmov $0, $1", "=&v,v", true, false,
+        LLVM::AsmDialectAttr::get(op.getContext(), LLVM::AsmDialect::AD_ATT),
+        ArrayAttr{});
+    rewriter.replaceOp(op, asmOp.getResults());
     return success();
   }
-
-private:
-  LoweringState &state;
 };
 
 class LowerVbitcastOpPattern final
@@ -11871,23 +11853,6 @@ static void applyArtifactVisibilityLinkage(ModuleOp sourceModule,
   }
 }
 
-static void markVmovCallsNoMerge(llvm::Module &llvmModule) {
-  for (llvm::Function &function : llvmModule) {
-    for (llvm::BasicBlock &block : function) {
-      for (llvm::Instruction &inst : block) {
-        auto *call = llvm::dyn_cast<llvm::CallBase>(&inst);
-        if (!call) {
-          continue;
-        }
-        llvm::Function *callee = call->getCalledFunction();
-        if (callee && callee->getName().starts_with("llvm.hivm.vmov.")) {
-          call->setCannotMerge();
-        }
-      }
-    }
-  }
-}
-
 static void applySimtEntryCallingConvention(
     llvm::Module &llvmModule,
     const llvm::StringSet<llvm::BumpPtrAllocator> &simtEntryNames) {
@@ -11943,7 +11908,6 @@ emitDeviceLLVMModule(ModuleOp deviceModule, StringRef kernelKind,
   }
 
   applyArtifactVisibilityLinkage(deviceModule, *llvmModule);
-  markVmovCallsNoMerge(*llvmModule);
   for (llvm::Function &func : *llvmModule) {
     if (!func.getName().starts_with("llvm.hivm.vscatter."))
       continue;
