@@ -27,6 +27,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace mlir::pto {
@@ -52,17 +53,43 @@ private:
   bool exceeded = false;
 };
 
+struct VPTOScheduleDiagnostic {
+  SmallVector<int64_t, 2> currentPressure;
+  unsigned candidateCount = 0;
+  std::optional<unsigned> closurePressureSet;
+  SmallVector<unsigned, 2> closureBundleOriginalIndices;
+  std::optional<unsigned> closureTargetOriginalIndex;
+  unsigned closureGroupSize = 0;
+  unsigned closureSteps = 0;
+  int64_t closureSupportPressure = 0;
+  int64_t closureEffectiveEnd = 0;
+  int64_t closureNetRelief = 0;
+  SmallVector<int64_t, 2> closurePeak;
+  SmallVector<int64_t, 2> closureEnd;
+  unsigned selectedCriticalPath = 0;
+  bool selectedAdvancesClosure = false;
+  SmallVector<int64_t, 2> selectedProjectedPressure;
+  SmallVector<int64_t, 2> selectedReleasedPressure;
+  std::optional<unsigned> safeAlternativeOriginalIndex;
+  unsigned safeAlternativeCriticalPath = 0;
+  bool safeAlternativeOpensPressureFrontier = false;
+  SmallVector<int64_t, 2> safeAlternativeProjectedPressure;
+  SmallVector<int64_t, 2> safeAlternativeReleasedPressure;
+};
+
 struct VPTOScheduleEntry {
   VPTOSUnit *unit = nullptr;
   VPTOSchedDirection direction = VPTOSchedDirection::Top;
   unsigned issueCycle = 0;
   std::string reason;
   bool pressureDrivenIdle = false;
+  bool recoveryDrivenIdle = false;
 };
 
 struct VPTOScheduleResult {
   SmallVector<VPTOScheduleEntry> entries;
   SmallVector<int64_t> peakPressure;
+  SmallVector<std::optional<VPTOScheduleDiagnostic>, 0> diagnostics;
 };
 
 enum class VPTOScheduleFailureKind {
@@ -88,9 +115,10 @@ public:
   VPTOScheduler(
       const VPTOSchedModel &model, VPTOSchedDAG &dag,
       const VPTOSchedulerLimits &limits, VPTOSchedulingBudget &budget,
+      bool collectDiagnostics = false,
       const VPTOSchedStrategy &strategy = getDefaultVPTOSchedStrategy())
       : model(model), dag(dag), limits(limits), budget(budget),
-        strategy(strategy) {}
+        collectDiagnostics(collectDiagnostics), strategy(strategy) {}
 
   FailureOr<VPTOScheduleResult> schedule(VPTOScheduleFailure &failure) const;
 
@@ -99,6 +127,7 @@ private:
   VPTOSchedDAG &dag;
   const VPTOSchedulerLimits &limits;
   VPTOSchedulingBudget &budget;
+  bool collectDiagnostics;
   const VPTOSchedStrategy &strategy;
 };
 

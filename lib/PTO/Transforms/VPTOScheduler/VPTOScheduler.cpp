@@ -33,18 +33,30 @@ constexpr unsigned kMaxClosureGroupNodes = 96;
 struct PressureClosureGroup {
   VPTOSUnit *target = nullptr;
   std::optional<unsigned> pressureSet;
+  SmallVector<unsigned, 2> bundleOriginalIndices;
+  SmallVector<Value, 2> targetValues;
   DenseSet<VPTOSUnit *> units;
+  SmallVector<VPTOSUnit *, 8> witness;
   SmallVector<int64_t, 2> peak;
   SmallVector<int64_t, 2> end;
   unsigned steps = 0;
+  int64_t supportPressure = 0;
+  int64_t effectiveEnd = 0;
+  int64_t netRelief = 0;
 
   void clear() {
     target = nullptr;
     pressureSet.reset();
+    bundleOriginalIndices.clear();
+    targetValues.clear();
     units.clear();
+    witness.clear();
     peak.clear();
     end.clear();
     steps = 0;
+    supportPressure = 0;
+    effectiveEnd = 0;
+    netRelief = 0;
   }
 };
 
@@ -548,6 +560,14 @@ static FailureOr<bool> populatePressureClosureGroup(
 
   group.clear();
   group.pressureSet = pressureSet;
+  group.targetValues.assign(targetValues.begin(), targetValues.end());
+  for (Value value : targetValues) {
+    Operation *definingOp = value.getDefiningOp();
+    VPTOSUnit *definingUnit = definingOp ? dag.lookup(definingOp) : nullptr;
+    group.bundleOriginalIndices.push_back(
+        definingUnit ? definingUnit->getOriginalIndex()
+                     : std::numeric_limits<unsigned>::max());
+  }
   group.peak.assign(initialPressure.begin(), initialPressure.end());
   group.end.assign(initialPressure.begin(), initialPressure.end());
   for (unsigned step = 0;
@@ -584,6 +604,7 @@ static FailureOr<bool> populatePressureClosureGroup(
     }
     simulation.scheduled.insert(selected);
     group.units.insert(selected);
+    group.witness.push_back(selected);
     group.target = selected;
     ++group.steps;
     group.end.assign(simulatedTracker.getCurrent().begin(),
@@ -608,6 +629,9 @@ static FailureOr<bool> populatePressureClosureGroup(
       bool closesWithoutNetGrowth =
           group.end[pressureSet] - *supportPressure <= start;
       if (closesWithoutNetGrowth) {
+        group.supportPressure = *supportPressure;
+        group.effectiveEnd = group.end[pressureSet] - *supportPressure;
+        group.netRelief = start - group.effectiveEnd;
         return true;
       }
     }
@@ -722,6 +746,95 @@ buildCandidates(const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
   return candidates;
 }
 
+static VPTOSUnit *getNextClosureWitness(
+    const PressureClosureGroup &closureGroup,
+    const VPTOSchedBoundary &boundary) {
+  for (VPTOSUnit *unit : closureGroup.witness) {
+    if (!boundary.isScheduled(unit)) {
+      return unit;
+    }
+  }
+  return nullptr;
+}
+
+static bool exceedsPressureLimit(const VPTORegPressureTracker &tracker,
+                                 const VPTOSchedModel &model) {
+  ArrayRef<int64_t> current = tracker.getCurrent();
+  for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
+    if (pressureSet.limit &&
+        current[index] > static_cast<int64_t>(*pressureSet.limit)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static FailureOr<bool> extendZeroReliefRecovery(
+    const VPTOSchedCandidate &candidate,
+    const PressureClosureGroup &closureGroup,
+    const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
+    const VPTOSchedDAG &dag, VPTOSchedulingBudget &budget,
+    PressureClosureGroup &extendedGroup) {
+  if (!closureGroup.pressureSet) {
+    return failure();
+  }
+  SmallVector<Value, 4> jointTargets(closureGroup.targetValues.begin(),
+                                     closureGroup.targetValues.end());
+  VPTOPressureSetID pressureSetID =
+      model.getPressureSets()[*closureGroup.pressureSet].id;
+  bool addsPressureTarget = false;
+  for (Value result : candidate.unit->getOperation()->getResults()) {
+    if (!budget.consume()) {
+      return failure();
+    }
+    if (valueContributesToPressureSet(model, result, pressureSetID)) {
+      jointTargets.push_back(result);
+      addsPressureTarget = true;
+    }
+  }
+  if (addsPressureTarget) {
+    FailureOr<bool> built = populatePressureClosureGroup(
+        jointTargets, boundary, model, dag, *closureGroup.pressureSet, budget,
+        extendedGroup);
+    if (failed(built)) {
+      return built;
+    }
+    if (!*built) {
+      return built;
+    }
+    if (!extendedGroup.units.contains(candidate.unit)) {
+      return false;
+    }
+  } else {
+    extendedGroup = closureGroup;
+  }
+  VPTORegPressureTracker simulatedTracker = boundary.getPressureTracker();
+  if (!budget.consume()) {
+    return failure();
+  }
+  if (failed(simulatedTracker.commit(*candidate.unit))) {
+    return failure();
+  }
+  if (exceedsPressureLimit(simulatedTracker, model)) {
+    return false;
+  }
+  for (VPTOSUnit *unit : extendedGroup.witness) {
+    if (unit == candidate.unit || boundary.isScheduled(unit)) {
+      continue;
+    }
+    if (!budget.consume()) {
+      return failure();
+    }
+    if (failed(simulatedTracker.commit(*unit))) {
+      return failure();
+    }
+    if (exceedsPressureLimit(simulatedTracker, model)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool increasesPressureRisk(
     const VPTOSchedModel &model, ArrayRef<int64_t> currentPressure,
     const VPTOSchedCandidate &candidate) {
@@ -819,6 +932,38 @@ static LogicalResult replayPressureDrivenIdle(
   return success();
 }
 
+static LogicalResult replayRecoveryDrivenIdle(
+    const VPTOScheduleEntry &entry, VPTOSchedBoundary &boundary,
+    VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
+  if (!entry.recoveryDrivenIdle) {
+    return success();
+  }
+  bool advancedAtLeastOnce = false;
+  while (true) {
+    unsigned currentCycle = boundary.getCurrentCycle();
+    if (currentCycle >= entry.issueCycle) {
+      break;
+    }
+    FailureOr<bool> advanced = boundary.advanceToNextPendingCycle(budget);
+    if (failed(advanced)) {
+      setWorkBudgetFailure(failure, budget);
+      return mlir::failure();
+    }
+    if (!*advanced) {
+      setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
+                 "recovery idle has no pending dependency event");
+      return mlir::failure();
+    }
+    advancedAtLeastOnce = true;
+  }
+  if (!advancedAtLeastOnce) {
+    setFailure(failure, VPTOScheduleFailureKind::ModelReplay,
+               "recovery idle does not advance the logical cycle");
+    return mlir::failure();
+  }
+  return success();
+}
+
 static LogicalResult replayMandatoryDependencyIdle(
     const VPTOScheduleEntry &entry, VPTOSchedBoundary &boundary,
     VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
@@ -886,9 +1031,12 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
   PressureClosureGroup closureGroup;
   VPTOScheduleResult result;
   result.entries.reserve(dag.getUnits().size());
+  bool carriedPressureDrivenIdle = false;
+  bool carriedRecoveryDrivenIdle = false;
 
   while (!boundary.isComplete()) {
-    bool pressureDrivenIdle = false;
+    bool pressureDrivenIdle = std::exchange(carriedPressureDrivenIdle, false);
+    bool recoveryDrivenIdle = std::exchange(carriedRecoveryDrivenIdle, false);
     SmallVector<VPTOSchedCandidate> candidates;
     while (true) {
       if (boundary.getAvailable().empty()) {
@@ -911,14 +1059,30 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
         setWorkBudgetFailure(failure, budget);
         return mlir::failure();
       }
+      bool hasZeroReliefClosure =
+          closureGroup.target && closureGroup.netRelief == 0;
+      const PressureClosureGroup *rankingClosure =
+          hasZeroReliefClosure ? nullptr : &closureGroup;
       FailureOr<SmallVector<VPTOSchedCandidate>> builtCandidates =
-          buildCandidates(boundary, model, budget, failure, &closureGroup);
+          buildCandidates(boundary, model, budget, failure, rankingClosure);
       if (failed(builtCandidates)) {
         return mlir::failure();
       }
       candidates = std::move(*builtCandidates);
-      FailureOr<bool> advanced =
-          advanceForPressure(boundary, candidates, model, budget, failure);
+      if (hasZeroReliefClosure) {
+        VPTOSUnit *nextWitness =
+            getNextClosureWitness(closureGroup, boundary);
+        if (!nextWitness) {
+          setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                     "zero-relief closure has no remaining recovery witness");
+          return mlir::failure();
+        }
+      }
+      FailureOr<bool> advanced = hasZeroReliefClosure
+                                     ? FailureOr<bool>(false)
+                                     : advanceForPressure(boundary, candidates,
+                                                          model, budget,
+                                                          failure);
       if (failed(advanced)) {
         return mlir::failure();
       }
@@ -928,16 +1092,94 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
       pressureDrivenIdle = true;
     }
 
-    VPTOScheduleContext context{model, dag, boundary.getDirection(),
-                                boundary.getCurrentCycle(),
-                                boundary.getPressureTracker().getCurrent(),
-                                closureGroup.pressureSet};
+    bool hasZeroReliefClosure =
+        closureGroup.target && closureGroup.netRelief == 0;
+    std::optional<unsigned> rankingClosurePressureSet =
+        hasZeroReliefClosure ? std::nullopt : closureGroup.pressureSet;
+    VPTOScheduleContext context{
+        model, dag, boundary.getDirection(), boundary.getCurrentCycle(),
+        boundary.getPressureTracker().getCurrent(), rankingClosurePressureSet};
     std::string detail;
     FailureOr<VPTOSchedDecision> decision =
         strategy.pickCandidate(context, candidates, detail);
     if (failed(decision)) {
       setFailure(failure, VPTOScheduleFailureKind::InvalidModel, detail);
       return mlir::failure();
+    }
+    if (hasZeroReliefClosure) {
+      if (!closureGroup.pressureSet) {
+        setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                   "zero-relief closure has no pressure set");
+        return mlir::failure();
+      }
+      VPTOSUnit *nextWitness =
+          getNextClosureWitness(closureGroup, boundary);
+      if (!nextWitness) {
+        setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                   "zero-relief closure lost its recovery witness");
+        return mlir::failure();
+      }
+      bool selectsWitness = decision->unit == nextWitness;
+      if (selectsWitness) {
+        decision->reason = "zero-closure-recovery";
+      } else {
+        auto selectedPosition = llvm::find_if(
+            candidates, [&](const VPTOSchedCandidate &candidate) {
+              return candidate.unit == decision->unit;
+            });
+        if (selectedPosition == candidates.end()) {
+          setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                     "zero-relief closure selected an unknown candidate");
+          return mlir::failure();
+        }
+        auto witnessPosition = llvm::find_if(
+            candidates, [&](const VPTOSchedCandidate &candidate) {
+              return candidate.unit == nextWitness;
+            });
+        bool witnessIsCandidate = witnessPosition != candidates.end();
+        bool hasCriticalPathAdvantage =
+            !witnessIsCandidate ||
+            selectedPosition->criticalPath > witnessPosition->criticalPath;
+        if (!hasCriticalPathAdvantage) {
+          decision = VPTOSchedDecision{nextWitness, context.direction,
+                                       context.issueCycle,
+                                       "zero-closure-recovery"};
+          selectsWitness = true;
+        } else {
+          PressureClosureGroup extendedGroup;
+          FailureOr<bool> preservesRecovery = extendZeroReliefRecovery(
+              *selectedPosition, closureGroup, boundary, model, dag, budget,
+              extendedGroup);
+          if (failed(preservesRecovery)) {
+            setWorkBudgetFailure(failure, budget);
+            return mlir::failure();
+          }
+          if (*preservesRecovery) {
+            closureGroup = std::move(extendedGroup);
+            decision->reason = "zero-closure-safe-interleave";
+          } else if (witnessIsCandidate) {
+            decision = VPTOSchedDecision{nextWitness, context.direction,
+                                         context.issueCycle,
+                                         "zero-closure-recovery"};
+            selectsWitness = true;
+          } else {
+            FailureOr<bool> advanced =
+                boundary.advanceToNextPendingCycle(budget);
+            if (failed(advanced)) {
+              setWorkBudgetFailure(failure, budget);
+              return mlir::failure();
+            }
+            if (!*advanced) {
+              setFailure(
+                  failure, VPTOScheduleFailureKind::Scheduling,
+                  "zero-relief closure recovery witness is unavailable");
+              return mlir::failure();
+            }
+            carriedRecoveryDrivenIdle = true;
+            continue;
+          }
+        }
+      }
     }
     bool selectsCandidate =
         llvm::any_of(candidates, [&](const VPTOSchedCandidate &candidate) {
@@ -950,6 +1192,11 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
                  "strategy returned an invalid scheduling decision");
       return mlir::failure();
     }
+    SmallVector<int64_t, 2> currentPressureBeforeCommit;
+    if (collectDiagnostics) {
+      currentPressureBeforeCommit.assign(context.currentPressure.begin(),
+                                         context.currentPressure.end());
+    }
     if (failed(boundary.commit(*decision->unit, decision->issueCycle, budget,
                                detail))) {
       if (budget.hasExceeded()) {
@@ -959,9 +1206,85 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
       setFailure(failure, VPTOScheduleFailureKind::Scheduling, detail);
       return mlir::failure();
     }
+    std::optional<VPTOScheduleDiagnostic> entryDiagnostic;
+    if (collectDiagnostics) {
+      VPTOScheduleDiagnostic diagnostic;
+      diagnostic.currentPressure.assign(currentPressureBeforeCommit.begin(),
+                                        currentPressureBeforeCommit.end());
+      diagnostic.candidateCount = candidates.size();
+      diagnostic.closurePressureSet = closureGroup.pressureSet;
+      diagnostic.closureBundleOriginalIndices.assign(
+          closureGroup.bundleOriginalIndices.begin(),
+          closureGroup.bundleOriginalIndices.end());
+      if (closureGroup.target) {
+        diagnostic.closureTargetOriginalIndex =
+            closureGroup.target->getOriginalIndex();
+      }
+      diagnostic.closureGroupSize = closureGroup.units.size();
+      diagnostic.closureSteps = closureGroup.steps;
+      diagnostic.closureSupportPressure = closureGroup.supportPressure;
+      diagnostic.closureEffectiveEnd = closureGroup.effectiveEnd;
+      diagnostic.closureNetRelief = closureGroup.netRelief;
+      diagnostic.closurePeak.assign(closureGroup.peak.begin(),
+                                    closureGroup.peak.end());
+      diagnostic.closureEnd.assign(closureGroup.end.begin(),
+                                   closureGroup.end.end());
+
+      const VPTOSchedCandidate *selected = nullptr;
+      const VPTOSchedCandidate *safeAlternative = nullptr;
+      for (const VPTOSchedCandidate &candidate : candidates) {
+        if (candidate.unit == decision->unit) {
+          selected = &candidate;
+          continue;
+        }
+        bool isSafe = llvm::all_of(
+            candidate.pressure.projectedExcess,
+            [](int64_t excess) { return excess == 0; });
+        if (candidate.advancesPressureClosure || !isSafe) {
+          continue;
+        }
+        bool isBetterAlternative =
+            !safeAlternative ||
+            candidate.criticalPath > safeAlternative->criticalPath ||
+            (candidate.criticalPath == safeAlternative->criticalPath &&
+             candidate.originalIndex < safeAlternative->originalIndex);
+        if (isBetterAlternative) {
+          safeAlternative = &candidate;
+        }
+      }
+      if (selected) {
+        diagnostic.selectedCriticalPath = selected->criticalPath;
+        diagnostic.selectedAdvancesClosure =
+            selected->advancesPressureClosure;
+        diagnostic.selectedProjectedPressure.assign(
+            selected->pressure.projected.begin(),
+            selected->pressure.projected.end());
+        diagnostic.selectedReleasedPressure.assign(
+            selected->pressure.released.begin(),
+            selected->pressure.released.end());
+      }
+      if (safeAlternative) {
+        diagnostic.safeAlternativeOriginalIndex =
+            safeAlternative->originalIndex;
+        diagnostic.safeAlternativeCriticalPath =
+            safeAlternative->criticalPath;
+        diagnostic.safeAlternativeOpensPressureFrontier =
+            safeAlternative->opensPressureFrontier;
+        diagnostic.safeAlternativeProjectedPressure.assign(
+            safeAlternative->pressure.projected.begin(),
+            safeAlternative->pressure.projected.end());
+        diagnostic.safeAlternativeReleasedPressure.assign(
+            safeAlternative->pressure.released.begin(),
+            safeAlternative->pressure.released.end());
+      }
+      entryDiagnostic = std::move(diagnostic);
+    }
     result.entries.push_back({decision->unit, decision->direction,
                               decision->issueCycle, decision->reason,
-                              pressureDrivenIdle});
+                              pressureDrivenIdle, recoveryDrivenIdle});
+    if (collectDiagnostics) {
+      result.diagnostics.push_back(std::move(entryDiagnostic));
+    }
   }
 
   ArrayRef<int64_t> peakPressure = boundary.getPressureTracker().getPeak();
@@ -1072,6 +1395,9 @@ LogicalResult mlir::pto::replayVPTOScheduleResult(
     if (failed(
             replayPressureDrivenIdle(entry, boundary, model, budget,
                                      failure))) {
+      return mlir::failure();
+    }
+    if (failed(replayRecoveryDrivenIdle(entry, boundary, budget, failure))) {
       return mlir::failure();
     }
     if (boundary.getAvailable().empty()) {
