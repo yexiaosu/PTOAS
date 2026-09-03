@@ -529,8 +529,8 @@ static FailureOr<int64_t> getLiveSupportPressure(
 static FailureOr<bool> populatePressureClosureGroup(
     ArrayRef<Value> targetValues, const VPTOSchedBoundary &boundary,
     const VPTOSchedModel &model, const VPTOSchedDAG &dag,
-    unsigned pressureSet, VPTOSchedulingBudget &budget,
-    PressureClosureGroup &group) {
+    unsigned pressureSet, int64_t pressureAllowance,
+    VPTOSchedulingBudget &budget, PressureClosureGroup &group) {
   VPTORegPressureTracker simulatedTracker = boundary.getPressureTracker();
   ArrayRef<int64_t> initialPressure = simulatedTracker.getCurrent();
   ArrayRef<VPTORegPressureSet> pressureSets = model.getPressureSets();
@@ -616,7 +616,14 @@ static FailureOr<bool> populatePressureClosureGroup(
     bool targetsAreDead = llvm::all_of(targetValues, [&](Value value) {
       return !simulatedTracker.isLive(value);
     });
-    bool avoidsNewExcess = group.peak[pressureSet] <= std::max(start, limit);
+    // An interleaved producer may temporarily add exactly its introduced
+    // pressure while the joint closure retires both the old and new targets.
+    int64_t allowedPeak = 0;
+    if (llvm::AddOverflow(std::max(start, limit), pressureAllowance,
+                          allowedPeak)) {
+      return failure();
+    }
+    bool avoidsNewExcess = group.peak[pressureSet] <= allowedPeak;
     if (targetsAreDead && avoidsNewExcess) {
       FailureOr<int64_t> supportPressure = getLiveSupportPressure(
           simulation, simulatedTracker, model, pressureSet, budget);
@@ -709,7 +716,7 @@ refreshPressureClosureGroup(PressureClosureGroup &closureGroup,
   for (ArrayRef<Value> bundle : bundles) {
     PressureClosureGroup candidate;
     FailureOr<bool> built = populatePressureClosureGroup(
-        bundle, boundary, model, dag, *pressureSet, budget, candidate);
+        bundle, boundary, model, dag, *pressureSet, 0, budget, candidate);
     if (failed(built)) {
       return failure();
     }
@@ -757,12 +764,20 @@ static VPTOSUnit *getNextClosureWitness(
   return nullptr;
 }
 
-static bool exceedsPressureLimit(const VPTORegPressureTracker &tracker,
-                                 const VPTOSchedModel &model) {
+static bool exceedsPressureAllowance(
+    const VPTORegPressureTracker &tracker, const VPTOSchedModel &model,
+    ArrayRef<int64_t> initialPressure,
+    ArrayRef<int64_t> pressureAllowance) {
   ArrayRef<int64_t> current = tracker.getCurrent();
   for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
-    if (pressureSet.limit &&
-        current[index] > static_cast<int64_t>(*pressureSet.limit)) {
+    if (!pressureSet.limit) {
+      continue;
+    }
+    int64_t allowedPeak = 0;
+    int64_t baseline = std::max(
+        initialPressure[index], static_cast<int64_t>(*pressureSet.limit));
+    if (llvm::AddOverflow(baseline, pressureAllowance[index], allowedPeak) ||
+        current[index] > allowedPeak) {
       return true;
     }
   }
@@ -793,9 +808,11 @@ static FailureOr<bool> extendZeroReliefRecovery(
     }
   }
   if (addsPressureTarget) {
+    int64_t pressureAllowance =
+        candidate.pressure.introduced[*closureGroup.pressureSet];
     FailureOr<bool> built = populatePressureClosureGroup(
-        jointTargets, boundary, model, dag, *closureGroup.pressureSet, budget,
-        extendedGroup);
+        jointTargets, boundary, model, dag, *closureGroup.pressureSet,
+        pressureAllowance, budget, extendedGroup);
     if (failed(built)) {
       return built;
     }
@@ -809,13 +826,17 @@ static FailureOr<bool> extendZeroReliefRecovery(
     extendedGroup = closureGroup;
   }
   VPTORegPressureTracker simulatedTracker = boundary.getPressureTracker();
+  SmallVector<int64_t, 2> initialPressure(
+      simulatedTracker.getCurrent().begin(),
+      simulatedTracker.getCurrent().end());
   if (!budget.consume()) {
     return failure();
   }
   if (failed(simulatedTracker.commit(*candidate.unit))) {
     return failure();
   }
-  if (exceedsPressureLimit(simulatedTracker, model)) {
+  if (exceedsPressureAllowance(simulatedTracker, model, initialPressure,
+                               candidate.pressure.introduced)) {
     return false;
   }
   for (VPTOSUnit *unit : extendedGroup.witness) {
@@ -828,7 +849,8 @@ static FailureOr<bool> extendZeroReliefRecovery(
     if (failed(simulatedTracker.commit(*unit))) {
       return failure();
     }
-    if (exceedsPressureLimit(simulatedTracker, model)) {
+    if (exceedsPressureAllowance(simulatedTracker, model, initialPressure,
+                                 candidate.pressure.introduced)) {
       return false;
     }
   }
