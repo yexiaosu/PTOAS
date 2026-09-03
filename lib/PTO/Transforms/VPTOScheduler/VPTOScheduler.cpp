@@ -417,14 +417,12 @@ static bool isBetterClosureGroup(const PressureClosureGroup &candidate,
 }
 
 struct ReadyFanoutUsers {
-  unsigned operandUses = 0;
   SmallVector<VPTOSUnit *, kMaxFanoutClosureUnits> units;
 };
 
 static LogicalResult collectReadyFanoutUsers(
     const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
-    VPTOPressureSetID pressureSet, VPTOSchedulingBudget &budget,
-    DenseMap<Value, ReadyFanoutUsers> &users) {
+    VPTOSchedulingBudget &budget, DenseMap<Value, ReadyFanoutUsers> &users) {
   const VPTORegPressureTracker &tracker = boundary.getPressureTracker();
   for (VPTOSUnit *unit : boundary.getAvailable()) {
     DenseSet<Value> unitValues;
@@ -433,13 +431,16 @@ static LogicalResult collectReadyFanoutUsers(
         return failure();
       }
       Value representative = tracker.getPressureRepresentative(operand);
-      if (!tracker.isLive(representative) ||
-          !valueContributesToPressureSet(model, representative, pressureSet)) {
+      bool contributes =
+          llvm::any_of(model.getPressure(representative),
+                       [](const VPTORegPressureContribution &item) {
+                         return item.units > 0;
+                       });
+      if (!tracker.isLive(representative) || !contributes) {
         continue;
       }
-      ReadyFanoutUsers &readyUsers = users[representative];
-      ++readyUsers.operandUses;
-      if (unitValues.insert(representative).second &&
+      ReadyFanoutUsers &readyUsers = users[operand];
+      if (unitValues.insert(operand).second &&
           readyUsers.units.size() <= kMaxFanoutClosureUnits) {
         readyUsers.units.push_back(unit);
       }
@@ -448,20 +449,36 @@ static LogicalResult collectReadyFanoutUsers(
   return success();
 }
 
-static bool fanoutPressureIsBounded(
-    ArrayRef<int64_t> initialPressure, const PressureClosureGroup &group,
-    Value targetValue, const VPTOSchedModel &model) {
-  SmallVector<int64_t, 2> targetPressure(model.getPressureSets().size(), 0);
-  for (const VPTORegPressureContribution &contribution :
-       model.getPressure(targetValue)) {
-    for (auto [index, pressureSet] :
-         llvm::enumerate(model.getPressureSets())) {
-      if (pressureSet.id == contribution.pressureSet) {
-        targetPressure[index] += contribution.units;
-        break;
-      }
+static FailureOr<unsigned>
+countUnscheduledUserUnits(Value value, const VPTOSchedBoundary &boundary,
+                          const VPTOSchedDAG &dag,
+                          VPTOSchedulingBudget &budget) {
+  DenseSet<VPTOSUnit *> users;
+  for (Operation *user : value.getUsers()) {
+    if (!budget.consume()) {
+      return failure();
+    }
+    VPTOSUnit *unit = dag.lookup(user);
+    if (unit && !boundary.isScheduled(unit)) {
+      users.insert(unit);
     }
   }
+  return users.size();
+}
+
+static bool haveSameOperationName(ArrayRef<VPTOSUnit *> units) {
+  if (units.empty()) {
+    return false;
+  }
+  StringRef name = units.front()->getOperation()->getName().getStringRef();
+  return llvm::all_of(llvm::drop_begin(units), [&](VPTOSUnit *unit) {
+    return unit->getOperation()->getName().getStringRef() == name;
+  });
+}
+
+static bool fanoutPressureIsBounded(ArrayRef<int64_t> initialPressure,
+                                    const PressureClosureGroup &group,
+                                    const VPTOSchedModel &model) {
   for (auto [index, pressureSet] :
        llvm::enumerate(model.getPressureSets())) {
     if (!pressureSet.limit) {
@@ -469,32 +486,78 @@ static bool fanoutPressureIsBounded(
     }
     int64_t limit = static_cast<int64_t>(*pressureSet.limit);
     int64_t baseline = std::max(initialPressure[index], limit);
-    if (group.end[index] > baseline ||
-        group.peak[index] > baseline + targetPressure[index]) {
+    if (group.peak[index] > baseline + static_cast<int64_t>(group.steps)) {
       return false;
     }
   }
   return true;
 }
 
-static VPTOSUnit *selectFanoutReadyUnit(
-    ArrayRef<VPTOSUnit *> ready, const VPTORegPressureTracker &tracker,
-    ArrayRef<VPTORegPressureSet> pressureSets) {
-  return *llvm::min_element(ready, [&](VPTOSUnit *lhs, VPTOSUnit *rhs) {
-    VPTORegPressureEvaluation lhsEvaluation = tracker.evaluate(*lhs);
-    VPTORegPressureEvaluation rhsEvaluation = tracker.evaluate(*rhs);
-    int64_t lhsExcess = getEvaluationExcess(lhsEvaluation, pressureSets);
-    int64_t rhsExcess = getEvaluationExcess(rhsEvaluation, pressureSets);
-    if (lhsExcess != rhsExcess) {
-      return lhsExcess < rhsExcess;
+static FailureOr<bool>
+buildFanoutClosureUnits(Value seedValue, ArrayRef<VPTOSUnit *> seedUsers,
+                        const DenseMap<Value, ReadyFanoutUsers> &readyUsers,
+                        const VPTOSchedBoundary &boundary,
+                        const VPTOSchedDAG &dag, VPTOSchedulingBudget &budget,
+                        SmallVectorImpl<VPTOSUnit *> &closureUnits) {
+  DenseSet<VPTOSUnit *> closureSet;
+  DenseSet<VPTOSUnit *> supportedSeeds;
+  for (VPTOSUnit *seedUser : seedUsers) {
+    closureSet.insert(seedUser);
+  }
+  StringRef operationName =
+      seedUsers.front()->getOperation()->getName().getStringRef();
+  for (VPTOSUnit *seedUser : seedUsers) {
+    for (Value operand : seedUser->getOperation()->getOperands()) {
+      if (!budget.consume()) {
+        return failure();
+      }
+      if (operand == seedValue) {
+        continue;
+      }
+      auto found = readyUsers.find(operand);
+      if (found == readyUsers.end()) {
+        continue;
+      }
+      ArrayRef<VPTOSUnit *> supportUsers = found->second.units;
+      StringRef supportOperationName =
+          supportUsers.empty()
+              ? StringRef()
+              : supportUsers.front()->getOperation()->getName().getStringRef();
+      bool usableSupport = supportUsers.size() >= 2 &&
+                           supportUsers.size() <= kMaxFanoutClosureUnits &&
+                           haveSameOperationName(supportUsers) &&
+                           supportOperationName == operationName;
+      if (!usableSupport || !llvm::is_contained(supportUsers, seedUser)) {
+        continue;
+      }
+      FailureOr<unsigned> unscheduled =
+          countUnscheduledUserUnits(operand, boundary, dag, budget);
+      if (failed(unscheduled)) {
+        return failure();
+      }
+      if (*unscheduled != supportUsers.size()) {
+        continue;
+      }
+      supportedSeeds.insert(seedUser);
+      for (VPTOSUnit *supportUser : supportUsers) {
+        if (closureSet.contains(supportUser)) {
+          continue;
+        }
+        if (closureSet.size() == kMaxFanoutClosureUnits) {
+          return false;
+        }
+        closureSet.insert(supportUser);
+      }
     }
-    int64_t lhsPressure = getEvaluationPressure(lhsEvaluation, pressureSets);
-    int64_t rhsPressure = getEvaluationPressure(rhsEvaluation, pressureSets);
-    if (lhsPressure != rhsPressure) {
-      return lhsPressure < rhsPressure;
-    }
+  }
+  if (supportedSeeds.size() != seedUsers.size()) {
+    return false;
+  }
+  closureUnits.assign(closureSet.begin(), closureSet.end());
+  llvm::sort(closureUnits, [](VPTOSUnit *lhs, VPTOSUnit *rhs) {
     return lhs->getOriginalIndex() < rhs->getOriginalIndex();
   });
+  return true;
 }
 
 static FailureOr<bool> populateBoundedFanoutClosureGroup(
@@ -512,15 +575,10 @@ static FailureOr<bool> populateBoundedFanoutClosureGroup(
       getValueOriginalIndex(targetValue, dag));
   group.peak = initialPressure;
   group.end = initialPressure;
-  SmallVector<VPTOSUnit *, kMaxFanoutClosureUnits> ready(users.begin(),
-                                                         users.end());
-  while (!ready.empty()) {
-    if (!budget.consume(ready.size())) {
+  for (VPTOSUnit *selected : users) {
+    if (!budget.consume()) {
       return failure();
     }
-    VPTOSUnit *selected =
-        selectFanoutReadyUnit(ready, tracker, model.getPressureSets());
-    ready.erase(llvm::find(ready, selected));
     if (failed(tracker.commit(*selected))) {
       return failure();
     }
@@ -534,10 +592,7 @@ static FailureOr<bool> populateBoundedFanoutClosureGroup(
     }
   }
   int64_t start = initialPressure[pressureSet];
-  bool closesTarget = !tracker.isLive(targetValue);
-  bool improvesOrPreserves = group.end[pressureSet] <= start;
-  if (!closesTarget || !improvesOrPreserves ||
-      !fanoutPressureIsBounded(initialPressure, group, targetValue, model)) {
+  if (!fanoutPressureIsBounded(initialPressure, group, model)) {
     return false;
   }
   group.effectiveEnd = group.end[pressureSet];
@@ -553,38 +608,58 @@ static FailureOr<bool> selectBoundedFanoutClosureGroup(
   if (boundary.getDirection() != VPTOSchedDirection::Top) {
     return false;
   }
-  VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
   DenseMap<Value, ReadyFanoutUsers> readyUsers;
-  if (failed(collectReadyFanoutUsers(boundary, model, pressureSetID, budget,
-                                     readyUsers))) {
+  if (failed(collectReadyFanoutUsers(boundary, model, budget, readyUsers))) {
     return failure();
   }
   const VPTORegPressureTracker &tracker = boundary.getPressureTracker();
-  SmallVector<Value> liveValues(tracker.getLiveValues().begin(),
-                                tracker.getLiveValues().end());
-  llvm::sort(liveValues, [&](Value lhs, Value rhs) {
+  VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
+  SmallVector<Value> readyValues;
+  readyValues.reserve(readyUsers.size());
+  for (const auto &entry : readyUsers) {
+    readyValues.push_back(entry.first);
+  }
+  llvm::sort(readyValues, [&](Value lhs, Value rhs) {
     return isValueBefore(lhs, rhs, dag);
   });
-  for (Value value : liveValues) {
+  for (Value value : readyValues) {
     if (!budget.consume()) {
       return failure();
     }
-    auto found = readyUsers.find(value);
-    if (found == readyUsers.end()) {
+    Value representative = tracker.getPressureRepresentative(value);
+    if (!valueContributesToPressureSet(model, representative, pressureSetID)) {
       continue;
     }
-    const ReadyFanoutUsers &fanout = found->second;
-    unsigned unitCount = fanout.units.size();
-    bool isBoundedFanout = unitCount >= 2 &&
-                           unitCount <= kMaxFanoutClosureUnits &&
-                           fanout.operandUses == tracker.getRemainingUses(value);
-    if (!isBoundedFanout) {
+    ArrayRef<VPTOSUnit *> seedUsers = readyUsers.find(value)->second.units;
+    bool isFanoutPair =
+        seedUsers.size() == 2 && haveSameOperationName(seedUsers);
+    if (!isFanoutPair) {
+      continue;
+    }
+    FailureOr<unsigned> unscheduled =
+        countUnscheduledUserUnits(value, boundary, dag, budget);
+    if (failed(unscheduled)) {
+      return failure();
+    }
+    if (*unscheduled <= seedUsers.size()) {
+      continue;
+    }
+    // Close only a symmetric, ready subset of the same operation kind. This
+    // keeps an eager chain from stretching a sibling interval without
+    // bundling unrelated consumers that merely share an operand.
+    SmallVector<VPTOSUnit *, kMaxFanoutClosureUnits> closureUnits;
+    FailureOr<bool> expanded = buildFanoutClosureUnits(
+        value, seedUsers, readyUsers, boundary, dag, budget, closureUnits);
+    if (failed(expanded)) {
+      return failure();
+    }
+    if (!*expanded) {
       continue;
     }
     PressureClosureGroup candidate;
-    FailureOr<bool> built = populateBoundedFanoutClosureGroup(
-        value, fanout.units, boundary, model, dag, pressureSet, budget,
-        candidate);
+    FailureOr<bool> built =
+        populateBoundedFanoutClosureGroup(value, closureUnits, boundary, model,
+                                          dag, pressureSet, budget, candidate);
     if (failed(built)) {
       return failure();
     }
@@ -1257,7 +1332,8 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
         return mlir::failure();
       }
       bool hasZeroReliefClosure =
-          closureGroup.target && closureGroup.netRelief == 0;
+          closureGroup.target &&
+          (closureGroup.netRelief == 0 || closureGroup.boundedFanout);
       const PressureClosureGroup *rankingClosure =
           hasZeroReliefClosure ? nullptr : &closureGroup;
       FailureOr<SmallVector<VPTOSchedCandidate>> builtCandidates =
@@ -1290,7 +1366,8 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
     }
 
     bool hasZeroReliefClosure =
-        closureGroup.target && closureGroup.netRelief == 0;
+        closureGroup.target &&
+        (closureGroup.netRelief == 0 || closureGroup.boundedFanout);
     std::optional<unsigned> rankingClosurePressureSet =
         hasZeroReliefClosure ? std::nullopt : closureGroup.pressureSet;
     VPTOScheduleContext context{
