@@ -50,6 +50,7 @@ public:
   ArrayRef<int64_t> getPeak() const { return peak; }
   const DenseSet<Value> &getLiveValues() const { return liveValues; }
   Value getPressureRepresentative(Value value) const;
+  unsigned getRemainingUses(Value value) const;
   bool isLive(Value value) const;
 
 private:

@@ -29,6 +29,7 @@ using namespace mlir::pto;
 namespace {
 
 constexpr unsigned kMaxClosureGroupNodes = 96;
+constexpr unsigned kMaxFanoutClosureUnits = 4;
 
 struct PressureClosureGroup {
   VPTOSUnit *target = nullptr;
@@ -43,6 +44,7 @@ struct PressureClosureGroup {
   int64_t supportPressure = 0;
   int64_t effectiveEnd = 0;
   int64_t netRelief = 0;
+  bool boundedFanout = false;
 
   void clear() {
     target = nullptr;
@@ -57,6 +59,7 @@ struct PressureClosureGroup {
     supportPressure = 0;
     effectiveEnd = 0;
     netRelief = 0;
+    boundedFanout = false;
   }
 };
 
@@ -476,6 +479,173 @@ static bool isBetterClosureGroup(const PressureClosureGroup &candidate,
          selected.target->getOriginalIndex();
 }
 
+static void initializeClosureGroup(ArrayRef<Value> targetValues,
+                                   ArrayRef<int64_t> initialPressure,
+                                   const VPTOSchedDAG &dag,
+                                   unsigned pressureSet,
+                                   PressureClosureGroup &group);
+
+static VPTOSUnit *
+selectClosureReadyUnit(ArrayRef<VPTOSUnit *> ready,
+                       const VPTORegPressureTracker &tracker,
+                       ArrayRef<VPTORegPressureSet> pressureSets);
+
+struct ReadyFanoutUsers {
+  unsigned operandUses = 0;
+  SmallVector<VPTOSUnit *, kMaxFanoutClosureUnits> units;
+};
+
+static LogicalResult collectReadyFanoutUsers(
+    const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
+    VPTOPressureSetID pressureSet, VPTOSchedulingBudget &budget,
+    DenseMap<Value, ReadyFanoutUsers> &users) {
+  const VPTORegPressureTracker &tracker = boundary.getPressureTracker();
+  for (VPTOSUnit *unit : boundary.getAvailable()) {
+    DenseSet<Value> unitValues;
+    for (Value operand : unit->getOperation()->getOperands()) {
+      if (!budget.consume()) {
+        return failure();
+      }
+      Value representative = tracker.getPressureRepresentative(operand);
+      if (!tracker.isLive(representative) ||
+          !valueContributesToPressureSet(model, representative, pressureSet)) {
+        continue;
+      }
+      ReadyFanoutUsers &readyUsers = users[representative];
+      ++readyUsers.operandUses;
+      if (unitValues.insert(representative).second &&
+          readyUsers.units.size() <= kMaxFanoutClosureUnits) {
+        readyUsers.units.push_back(unit);
+      }
+    }
+  }
+  return success();
+}
+
+static bool fanoutPressureIsBounded(
+    ArrayRef<int64_t> initialPressure, const PressureClosureGroup &group,
+    Value targetValue, const VPTOSchedModel &model) {
+  SmallVector<int64_t, 2> targetPressure(model.getPressureSets().size(), 0);
+  for (const VPTORegPressureContribution &contribution :
+       model.getPressure(targetValue)) {
+    for (auto [index, pressureSet] :
+         llvm::enumerate(model.getPressureSets())) {
+      if (pressureSet.id == contribution.pressureSet) {
+        targetPressure[index] += contribution.units;
+        break;
+      }
+    }
+  }
+  for (auto [index, pressureSet] :
+       llvm::enumerate(model.getPressureSets())) {
+    if (!pressureSet.limit) {
+      continue;
+    }
+    int64_t limit = static_cast<int64_t>(*pressureSet.limit);
+    int64_t baseline = std::max(initialPressure[index], limit);
+    if (group.end[index] > baseline ||
+        group.peak[index] > baseline + targetPressure[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static FailureOr<bool> populateBoundedFanoutClosureGroup(
+    Value targetValue, ArrayRef<VPTOSUnit *> users,
+    const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
+    const VPTOSchedDAG &dag, unsigned pressureSet,
+    VPTOSchedulingBudget &budget, PressureClosureGroup &group) {
+  VPTORegPressureTracker tracker = boundary.getPressureTracker();
+  SmallVector<int64_t, 2> initialPressure(tracker.getCurrent().begin(),
+                                          tracker.getCurrent().end());
+  initializeClosureGroup({targetValue}, initialPressure, dag, pressureSet,
+                         group);
+  SmallVector<VPTOSUnit *, kMaxFanoutClosureUnits> ready(users.begin(),
+                                                         users.end());
+  while (!ready.empty()) {
+    if (!budget.consume(ready.size())) {
+      return failure();
+    }
+    VPTOSUnit *selected = selectClosureReadyUnit(
+        ready, tracker, model.getPressureSets());
+    ready.erase(llvm::find(ready, selected));
+    if (failed(tracker.commit(*selected))) {
+      return failure();
+    }
+    group.units.insert(selected);
+    group.witness.push_back(selected);
+    group.target = selected;
+    ++group.steps;
+    group.end.assign(tracker.getCurrent().begin(), tracker.getCurrent().end());
+    for (auto [index, pressure] : llvm::enumerate(group.end)) {
+      group.peak[index] = std::max(group.peak[index], pressure);
+    }
+  }
+  int64_t start = initialPressure[pressureSet];
+  bool closesTarget = !tracker.isLive(targetValue);
+  bool improvesOrPreserves = group.end[pressureSet] <= start;
+  if (!closesTarget || !improvesOrPreserves ||
+      !fanoutPressureIsBounded(initialPressure, group, targetValue, model)) {
+    return false;
+  }
+  group.effectiveEnd = group.end[pressureSet];
+  group.netRelief = start - group.effectiveEnd;
+  group.boundedFanout = true;
+  return true;
+}
+
+static FailureOr<bool> selectBoundedFanoutClosureGroup(
+    const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
+    const VPTOSchedDAG &dag, unsigned pressureSet,
+    VPTOSchedulingBudget &budget, PressureClosureGroup &selected) {
+  if (boundary.getDirection() != VPTOSchedDirection::Top) {
+    return false;
+  }
+  VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
+  DenseMap<Value, ReadyFanoutUsers> readyUsers;
+  if (failed(collectReadyFanoutUsers(boundary, model, pressureSetID, budget,
+                                     readyUsers))) {
+    return failure();
+  }
+  const VPTORegPressureTracker &tracker = boundary.getPressureTracker();
+  SmallVector<Value> liveValues(tracker.getLiveValues().begin(),
+                                tracker.getLiveValues().end());
+  llvm::sort(liveValues, [&](Value lhs, Value rhs) {
+    return isValueBefore(lhs, rhs, dag);
+  });
+  for (Value value : liveValues) {
+    if (!budget.consume()) {
+      return failure();
+    }
+    auto found = readyUsers.find(value);
+    if (found == readyUsers.end()) {
+      continue;
+    }
+    const ReadyFanoutUsers &fanout = found->second;
+    unsigned unitCount = fanout.units.size();
+    bool isBoundedFanout = unitCount >= 2 &&
+                           unitCount <= kMaxFanoutClosureUnits &&
+                           fanout.operandUses == tracker.getRemainingUses(value);
+    if (!isBoundedFanout) {
+      continue;
+    }
+    PressureClosureGroup candidate;
+    FailureOr<bool> built = populateBoundedFanoutClosureGroup(
+        value, fanout.units, boundary, model, dag, pressureSet, budget,
+        candidate);
+    if (failed(built)) {
+      return failure();
+    }
+    if (*built &&
+        (!selected.target ||
+         isBetterClosureGroup(candidate, selected, pressureSet))) {
+      selected = std::move(candidate);
+    }
+  }
+  return selected.target != nullptr;
+}
+
 struct PressureClosureSimulation {
   SmallVector<VPTOSUnit *, 8> ready;
   DenseMap<VPTOSUnit *, unsigned> remaining;
@@ -819,6 +989,17 @@ refreshPressureClosureGroup(PressureClosureGroup &closureGroup,
   closureGroup.clear();
 
   if (!pressureSet) {
+    return success();
+  }
+
+  PressureClosureGroup fanoutClosure;
+  FailureOr<bool> foundFanout = selectBoundedFanoutClosureGroup(
+      boundary, model, dag, *pressureSet, budget, fanoutClosure);
+  if (failed(foundFanout)) {
+    return failure();
+  }
+  if (*foundFanout) {
+    closureGroup = std::move(fanoutClosure);
     return success();
   }
 
@@ -1303,7 +1484,9 @@ static FailureOr<bool> adjustZeroReliefDecision(
     return mlir::failure();
   }
   if (decision.unit == witness) {
-    decision.reason = "zero-closure-recovery";
+    decision.reason = closureGroup.boundedFanout
+                          ? "bounded-fanout-closure"
+                          : "zero-closure-recovery";
     return false;
   }
   const VPTOSchedCandidate *selected = findCandidate(candidates, decision.unit);
@@ -1314,6 +1497,25 @@ static FailureOr<bool> adjustZeroReliefDecision(
   }
   const VPTOSchedCandidate *witnessCandidate =
       findCandidate(candidates, witness);
+  if (closureGroup.boundedFanout) {
+    if (!witnessCandidate) {
+      FailureOr<bool> advanced =
+          boundary.advanceToNextPendingCycle(budget);
+      if (failed(advanced)) {
+        setWorkBudgetFailure(failure, budget);
+        return mlir::failure();
+      }
+      if (!*advanced) {
+        setFailure(failure, VPTOScheduleFailureKind::Scheduling,
+                   "bounded fan-out closure witness is unavailable");
+        return mlir::failure();
+      }
+      return true;
+    }
+    decision = {witness, context.direction, context.issueCycle,
+                "bounded-fanout-closure"};
+    return false;
+  }
   return preserveOrDelayZeroRelief(decision, context, *selected,
                                    witnessCandidate, *witness, closureGroup,
                                    boundary, model, dag, budget, failure);
