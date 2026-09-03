@@ -1139,7 +1139,7 @@ VPTOScheduler::schedule(VPTOScheduleFailure &failure) const {
         bool witnessIsCandidate = witnessPosition != candidates.end();
         bool hasCriticalPathAdvantage =
             !witnessIsCandidate ||
-            selectedPosition->criticalPath > witnessPosition->criticalPath;
+            selectedPosition->criticalPath >= witnessPosition->criticalPath;
         if (!hasCriticalPathAdvantage) {
           decision = VPTOSchedDecision{nextWitness, context.direction,
                                        context.issueCycle,
