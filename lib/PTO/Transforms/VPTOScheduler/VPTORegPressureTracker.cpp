@@ -55,10 +55,6 @@ bool VPTORegPressureTracker::isLive(Value value) const {
   return liveValues.contains(getPressureRepresentative(value));
 }
 
-unsigned VPTORegPressureTracker::getRemainingUses(Value value) const {
-  return remainingUses.lookup(getPressureRepresentative(value));
-}
-
 void VPTORegPressureTracker::addValuePressure(
     Value value, int sign, MutableArrayRef<int64_t> values) const {
   value = getPressureRepresentative(value);
