@@ -105,8 +105,12 @@ def main():
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--block", type=int, default=3)
+    parser.add_argument("--template", type=Path)
+    parser.add_argument("--name-prefix", default="")
     args = parser.parse_args()
     dag = LoopDAG(args.ir.read_text(), args.trace.read_text(), args.block)
+    if args.template:
+        dag.set_template(args.template.read_text())
     args.output.mkdir(parents=True, exist_ok=True)
     variants = {"off": (dag.original, []), "current": (dag.current, [])}
     for extra, steps, budget in ((1, 6, 4), (1, 12, 8), (2, 12, 12)):
@@ -117,10 +121,10 @@ def main():
     variants["selected-with-original-fallback"] = variants[best]
     report = {"selected": best, "variants": {}}
     for name, (order, changes) in variants.items():
-        (args.output / f"{name}.pto").write_text(dag.render(order))
+        (args.output / f"{args.name_prefix}{name}.pto").write_text(dag.render(order))
         report["variants"][name] = {"metrics": dag.metrics(order), "changes": changes, "order": order}
         print(name, json.dumps(report["variants"][name]["metrics"]), "changes", len(changes), flush=True)
-    (args.output / "candidates.json").write_text(json.dumps(report, indent=2) + "\n")
+    (args.output / f"{args.name_prefix}candidates.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 if __name__ == "__main__":

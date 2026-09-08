@@ -83,6 +83,39 @@ class LoopDAG:
             if states[position].pressure() != (int(vector), int(predicate)):
                 raise ValueError(f"pressure replay mismatch at {position}: {states[position].pressure()} vs {(vector, predicate)}")
         self.reference_spans = self.spans(self.original)
+        self.template = None
+
+    def set_template(self, ir):
+        """Keep ON's surrounding regions, translating SSA names by the traced permutation."""
+        lines = ir.splitlines()
+        starts = [i for i, line in enumerate(lines) if "scf.for" in line and "iter_args(" in line]
+        matches = []
+        for start in starts:
+            end = next(i for i in range(start + 1, len(lines)) if "scf.yield" in lines[i])
+            if end - start - 1 == len(self.ops):
+                matches.append((start + 1, end))
+        if len(matches) != 1:
+            raise ValueError("expected exactly one corresponding template loop")
+        start, end = matches[0]
+        mapping = {}
+        for node, line in zip(self.current, lines[start:end]):
+            result, operands, _ = self.ops[node]
+            new_result, new_operands, _ = parse_op(line)
+            before = ([result] if result else []) + operands
+            after = ([new_result] if new_result else []) + new_operands
+            if len(before) != len(after):
+                raise ValueError("template operand count mismatch")
+            for old, new in zip(before, after):
+                if old in mapping and mapping[old] != new:
+                    raise ValueError("template SSA mapping is inconsistent")
+                mapping[old] = new
+        if len(set(mapping.values())) != len(mapping):
+            raise ValueError("template SSA mapping is not bijective")
+        translated = [VALUE.sub(lambda match: mapping[match.group()], line)
+                      for line in self.lines[self.start:self.end]]
+        if [translated[n] for n in self.current] != lines[start:end]:
+            raise ValueError("current schedule does not exactly match template body")
+        self.template = (lines, start, end, translated)
 
     def validate(self, order):
         if sorted(order) != self.original:
@@ -125,6 +158,9 @@ class LoopDAG:
 
     def render(self, order):
         self.validate(order)
+        if self.template is not None:
+            lines, start, end, translated = self.template
+            return "\n".join(lines[:start] + [translated[n] for n in order] + lines[end:]) + "\n"
         body = [self.lines[self.start + n] for n in order]
         return "\n".join(self.lines[:self.start] + body + self.lines[self.end:]) + "\n"
 
