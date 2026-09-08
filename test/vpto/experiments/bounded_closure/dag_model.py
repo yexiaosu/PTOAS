@@ -16,9 +16,9 @@ VALUE = re.compile(r"%[\w]+")
 
 
 def parse_op(line):
-    parts = line.strip().split(" = ", 1)
-    result = parts[0] if len(parts) == 2 else None
-    rhs = parts[-1]
+    assignment = re.match(r"^(%\w+(?::\d+)?) = (.*)", line.strip())
+    result = assignment.group(1) if assignment else None
+    rhs = assignment.group(2) if assignment else line.strip()
     head = rhs.split(" : ", 1)[0]
     operands = VALUE.findall(head)
     result_type = rhs.rsplit(" -> ", 1)[-1].rsplit(" : ", 1)[-1]
