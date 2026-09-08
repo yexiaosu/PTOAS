@@ -15,8 +15,10 @@ from pathlib import Path
 from dag_model import LoopDAG
 
 
-def closure(dag, state, target, extra, steps, budget):
-    required = set(dag.users[target]) - state.done
+def closure(dag, state, target, extra, steps, budget, finish=False, forced=()):
+    required = (set(dag.users[target]) | set(forced)) - state.done
+    if len(required) > steps:
+        return None
     work = list(required)
     while work:
         node = work.pop()
@@ -48,6 +50,23 @@ def closure(dag, state, target, extra, steps, budget):
     relief = start_v - sim.pressure()[0]
     if target in sim.live or relief < 1:
         return None
+    if finish:
+        while len(witness) < steps:
+            frontier = [dag.ops[n][0] for n in witness
+                        if dag.ops[n][2] == "V" and dag.ops[n][0] in sim.live]
+            if not frontier:
+                break
+            follow = set(dag.users[frontier[-1]]) - sim.done
+            if not follow:
+                break
+            expanded = closure(dag, state, target, extra, steps, budget,
+                               forced=set(witness) | follow)
+            if expanded is None or len(expanded[0]) <= len(witness):
+                break
+            witness, relief, area = expanded
+            sim = state.copy()
+            for n in witness:
+                sim.commit(n)
     return witness, relief, area
 
 
@@ -56,7 +75,7 @@ def rank(metrics):
             metrics["peak_v"], metrics["excess_v"])
 
 
-def optimize(dag, extra, steps, budget, span_guard):
+def optimize(dag, extra, steps, budget, span_guard, finish=False):
     order = dag.current.copy()
     changes = []
     for iteration in range(8):
@@ -68,7 +87,7 @@ def optimize(dag, extra, steps, budget, span_guard):
             for target in sorted(state.live & set(dag.defs)):
                 if dag.kinds.get(target) != "V" or target in dag.liveout:
                     continue
-                found = closure(dag, state, target, extra, steps, budget)
+                found = closure(dag, state, target, extra, steps, budget, finish)
                 if found is None:
                     continue
                 witness, relief, area = found
@@ -117,6 +136,9 @@ def main():
         for guarded in (False, True):
             name = f"bounded-e{extra}-s{steps}-a{budget}" + ("-span" if guarded else "")
             variants[name] = optimize(dag, extra, steps, budget, guarded)
+    for guarded in (False, True):
+        name = "follow-result-e1-s12-a8" + ("-span" if guarded else "")
+        variants[name] = optimize(dag, 1, 12, 8, guarded, finish=True)
     best = min(variants, key=lambda name: rank(dag.metrics(variants[name][0])))
     variants["selected-with-original-fallback"] = variants[best]
     report = {"selected": best, "variants": {}}
