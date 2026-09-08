@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--runner", type=Path, required=True)
     parser.add_argument("--names", nargs="+")
+    parser.add_argument("--experts", type=int, choices=(512, 768), default=768)
     args = parser.parse_args()
     output = args.output.resolve()
     inputs = output / "candidates"
@@ -43,7 +44,10 @@ def main():
         case_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(sources[name], case_dir / "kernel.pto")
         for filename in ("main.cpp", "launch.cpp", "golden.py", "compare.py"):
-            shutil.copyfile(host / filename, case_dir / filename)
+            source = (host / filename).read_text(encoding="utf-8")
+            if args.experts == 512:
+                source = source.replace("4U * 768U", "4U * 512U").replace("E = 768", "E = 512")
+            (case_dir / filename).write_text(source, encoding="utf-8")
         env = os.environ.copy()
         env.update({"DEVICE": "SIM", "COMPILE_ONLY": "0", "COMPARE_STRICT": "1",
                     "CASES_ROOT": str(cases), "CASE_NAME": name,
