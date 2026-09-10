@@ -310,9 +310,13 @@ ptoas test/lit/vmi_new/vmi_ptoas_cli_pipeline.pto --pto-arch=a5 --pto-backend=vp
 ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
   --vpto-scheduler=analyze -o output.cpp
 
-# off（默认）完全禁用；on 执行相同分析，不重排 IR
+# A5 默认启用 on；显式 off 禁用，on 会检查并应用合法的新顺序
 ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
   --vpto-scheduler=on -o output.cpp
+
+# 在 on 模式中选择性启用“调度 → 有界重物化 → 再调度”，并输出决策信息
+ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
+  --vpto-scheduler=on --vpto-scheduler-remat --vpto-scheduler-trace -o output.cpp
 
 # 查看当前 ptoas release 版本号
 ptoas --version
@@ -325,6 +329,8 @@ ptoas --version
 `analyze`/`on` 的确定性报告写入标准错误，包括区域边界、依赖 DAG、关键路径、
 目标资源占用和寄存器压力；生成代码仍写入正常输出。设计与分析格式详见
 [`docs/designs/vpto-scheduler-framework.md`](docs/designs/vpto-scheduler-framework.md)。
+
+`--vpto-scheduler-remat` 是默认关闭的 A5 Vector 优化，只能与 `--vpto-scheduler=on` 配合。它仅在首次调度后静态 vector 峰值超过模型上限时，按固定白名单和预算克隆循环携带的 `vci → vadds` 索引链，再重新构建分析并调度一次；第二次调度失败或没有降低静态峰值时会回滚全部克隆、use 替换和首次调度顺序。
 
 ### 5.2 Python 接口 (Python API)
 

@@ -101,6 +101,20 @@ Pass 自身默认 `off`。`ptoas` driver 的默认行为是：
 
 `--vpto-scheduler=on` 与 `--enable-bisheng-vec-misched` 可以同时配置：前者在 VPTO IR 层应用调度结果，后者在 device object 编译阶段保留 Bisheng 默认的 vector MI scheduler 行为。`analyze` 不修改 IR，也可以与 Bisheng vector MISched 同时配置。
 
+### 可选的高压重物化
+
+`--vpto-scheduler-remat`（Pass 选项 `rematerialize=true`）默认关闭且只能与 `on` 配合。启用后，每个函数执行一次“首次调度 → 高压分析 → 有界重物化 → 完整重建 DAG/存活性/压力信息 → 第二次调度”；不会循环尝试，也不会切换到 `off`。
+
+“高压”严格定义为首次调度后的静态 vector 峰值大于 A5 模型的 vector limit。规划目标为 `limit - 1`，给后续临时值保留一个静态 headroom；该预测只用于触发和候选排序，不代表 Bisheng 已产生或消除了真实 spill。
+
+第一版白名单仅包含结果跨静态可计数 `scf.for` 使用的原有 `pto.vci → pto.vadds` 两级链。实现克隆原操作及全部原 operand，因此保留 `vci` 输入、`vadds` scalar offset、mask、inactive-lane 和执行上下文；load、随机值、同步、原子、store、任意纯操作以及未知 trip count 循环均不进入白名单。每个替换点还要通过 dominance 检查，候选存在任何未覆盖 use 时会整体拒绝，只有全部消费者都替换后才删除循环外原定义。
+
+同一指令类型、原始位置间隔不超过 64 且最多两个 use 的邻近消费者共享一个局部 clone。每个候选最多四组；一次函数规划最多选择 16 个候选、克隆 64 个操作，固定链深为 2，按穿越循环的静态 trip count 估算新增动态 micro-op 且总量不得超过 2048。候选先比较仍需降压的覆盖区域数，再比较 live-range 覆盖收益，最后优先较低动态成本；这些常量是防止代码膨胀和分析失控的保守首版预算，不是硬件性能结论。
+
+重物化 transaction 在第二次调度验收前保留原定义、原 use 和首次调度后的操作顺序。第二次 DAG 对每个局部 `vci` clone 增加只存在于本次 transaction 的 Must cluster anchor，防止调度器把链重新提前到消费区间入口；该信息不写入 IR attribute。只有第二次调度成功且重新计算的函数最大静态 vector 峰值低于首次调度结果时才提交并清理已死原定义，否则恢复全部 use、删除 clone，并恢复首次调度顺序。
+
+trace 使用 `remat-region`、`remat-candidate`、`remat-select`、`remat-fallback`、`remat-summary` 和 `remat-result` 记录触发区间、候选拒绝原因、消费分组、clone 数、估计动态成本、压力前后变化与第二次调度结果。降低的是模型压力；是否改善 RA spill、SMEM_BAR 或执行周期必须通过同工具链的 Bisheng 与 CA-model A/B 验证。
+
 ## 整体结构
 
 ```text
@@ -698,6 +712,7 @@ SemanticVerification, ModelReplay, Apply
 - 模型未知、预算超限和内部检查失败只影响当前调度区间；
 - 静态报告使用独立预算，打开报告不会改变 `on` 的调度预算和结果；
 - 逻辑周期、压力代价和预算计算都有整数溢出或上限检查。
+- 可选重物化只提交通过第二次调度且确实降低静态 vector 峰值的 transaction；失败时恢复首次调度结果。
 
 当前实现限制：
 
@@ -708,7 +723,7 @@ SemanticVerification, ModelReplay, Apply
 - pressure-driven idle 只在所有当前候选都会增加已知有界集合的压力风险时触发，仍依赖当前未校准的逻辑 latency，不代表真实硬件空转周期；
 - 多用户 closure group 当前每轮只评价最早的一个低 fan-out bundle，并使用 8 个直接用户和 96 个模拟节点的固定上限；
 - 不支持跨基本块调度、双向调度、指令捆绑/配对、bank conflict、NOP、软件流水或 Cube kernel 调度；
-- 修改 IR 时没有独立事务回滚，因为当前移动操作不可失败；
+- 普通单次调度的操作移动仍不需要独立 transaction；可选重物化路径会保存首次调度顺序，并对 clone 和 use 替换执行显式 rollback；
 - 不设置额外的收益门槛；新顺序合法且通过重放就会应用，即使新旧顺序相同也允许执行移动流程。
 
 ## 测试覆盖
@@ -725,6 +740,9 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_generic_op_coverage.pto` | vcvt/vmul/vdiv/vexp/vmula/vcadd 等通用 Vector micro-op 使用统一 sched class，on 不因 opcode 未登记而跳过 region |
 | `vpto_scheduler_multi_user_closure.pto` | near-limit 多用户 predicate closure group 可接受安全的瞬时压力增加，并在打开无关 producer 前关闭完整 fan-out live range |
 | `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/closure-group/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending cycle buckets、verify/replay、随机 DAG differential test |
+| `vpto_scheduler_rematerialization.pto` | 超限触发、局部 `vci → vadds` clone、原定义清理、静态压力下降、load 白名单排除和低压力不触发 |
+| `vpto_scheduler_rematerialization_budget.pto` | 候选数预算不足时拒绝整项计划并保持原 IR |
+| `vpto_scheduler_rematerialization_rollback.pto` | 第二次调度成功但峰值未下降时回滚 clone/use，并恢复首次调度后的原定义和顺序 |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |
 
 随机 DAG differential test 使用 8 个固定 seed，覆盖完整 permutation、Must edge、ready cycle、独立 pressure oracle、decision metadata、非法结果拒绝、精确/不足预算以及最终 apply 顺序。

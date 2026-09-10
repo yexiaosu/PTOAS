@@ -135,6 +135,12 @@ llvm::cl::opt<bool> vptoSchedulerTrace(
     llvm::cl::desc("Print detailed VPTO on-mode scheduling results"),
     llvm::cl::init(false));
 
+llvm::cl::opt<bool> vptoSchedulerRemat(
+    "vpto-scheduler-remat",
+    llvm::cl::desc(
+        "Enable bounded high-pressure VPTO rematerialization and rescheduling"),
+    llvm::cl::init(false));
+
 llvm::cl::opt<bool> enableInsertSync("enable-insert-sync",
                                             llvm::cl::desc("Enable automatic synchronization insertion pass"),
                                             llvm::cl::init(false));

@@ -747,6 +747,7 @@ static void prepareVPTOForEmission(PassManager &pm,
     schedulerOptions.mode =
         schedulerMode == VPTOSchedulerCLIMode::Analyze ? "analyze" : "on";
     schedulerOptions.trace = vptoSchedulerTrace;
+    schedulerOptions.rematerialize = vptoSchedulerRemat;
     kernelModulePM.addPass(pto::createVPTOSchedulerPass(schedulerOptions));
   }
   kernelModulePM.addPass(pto::createPTOValidateVPTOEmissionIRPass());
@@ -998,6 +999,11 @@ static LogicalResult validateCompileBackendFlags(PTOBackend backend,
   }
   if (vptoSchedulerTrace && schedulerMode != VPTOSchedulerCLIMode::On) {
     llvm::errs() << "Error: --vpto-scheduler-trace requires "
+                    "--vpto-scheduler=on.\n";
+    return failure();
+  }
+  if (vptoSchedulerRemat && schedulerMode != VPTOSchedulerCLIMode::On) {
+    llvm::errs() << "Error: --vpto-scheduler-remat requires "
                     "--vpto-scheduler=on.\n";
     return failure();
   }

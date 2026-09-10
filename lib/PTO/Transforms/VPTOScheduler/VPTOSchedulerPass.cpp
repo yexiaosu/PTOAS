@@ -12,6 +12,7 @@
 #include "PTO/Transforms/VPTOScheduler/VPTORegPressureTracker.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOScheduler.h"
+#include "PTO/Transforms/VPTOScheduler/VPTOSchedulerRematerialization.h"
 
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -335,13 +336,13 @@ static bool reportUnknownClasses(func::FuncOp func, unsigned blockIndex,
   return foundUnknown;
 }
 
-static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
-                           unsigned blockIndex, const VPTOSchedRegion &region,
-                           VPTOSchedDAG &dag, const VPTOSchedModel &model,
-                           const VPTOSchedulerLimits &limits,
-                           VPTOSchedulingBudget &budget, bool trace) {
+static LogicalResult
+scheduleRegion(func::FuncOp func, llvm::raw_ostream &os, unsigned blockIndex,
+               const VPTOSchedRegion &region, VPTOSchedDAG &dag,
+               const VPTOSchedModel &model, const VPTOSchedulerLimits &limits,
+               VPTOSchedulingBudget &budget, bool trace) {
   if (reportUnknownClasses(func, blockIndex, region, dag, model)) {
-    return;
+    return failure();
   }
 
   VPTOScheduleFailure failure;
@@ -352,47 +353,50 @@ static void scheduleRegion(func::FuncOp func, llvm::raw_ostream &os,
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
-    return;
+    return mlir::failure();
   }
   if (failed(verifyVPTOScheduleResult(dag, *result, budget, failure))) {
     if (trace) {
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
-    return;
+    return mlir::failure();
   }
   if (failed(replayVPTOScheduleResult(model, dag, *result, budget, failure))) {
     if (trace) {
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
-    return;
+    return mlir::failure();
   }
   if (failed(applyVPTOScheduleResult(dag, *result, budget, failure))) {
     if (trace) {
       printRegionFailure(os, blockIndex, region, failure);
     }
     emitRegionFailure(func, blockIndex, region, failure);
-    return;
+    return mlir::failure();
   }
   if (trace) {
     printScheduleResult(os, blockIndex, region, *result, model,
                         budget.getUsed());
   }
+  return success();
 }
 
 class FunctionSchedulerRunner {
 public:
   FunctionSchedulerRunner(func::FuncOp func, llvm::raw_ostream &os,
                           const VPTOSchedModel &model, StringRef mode,
-                          bool trace)
+                          bool trace,
+                          const llvm::DenseSet<Operation *> *rematAnchors)
       : func(func), os(os), model(model), mode(mode), trace(trace),
-        liveness(func) {}
+        rematAnchors(rematAnchors), liveness(func) {}
 
-  void run(ArrayRef<Operation *> vecScopes) {
+  bool run(ArrayRef<Operation *> vecScopes) {
     for (Operation *vecScope : vecScopes) {
       processRegion(vecScope->getRegion(0));
     }
+    return schedulingSucceeded;
   }
 
   const VPTOSchedulingCoverage &getCoverage() const { return coverage; }
@@ -408,9 +412,11 @@ private:
   const VPTOSchedModel &model;
   StringRef mode;
   bool trace;
+  const llvm::DenseSet<Operation *> *rematAnchors;
   VPTOSchedulingCoverage coverage;
   Liveness liveness;
   unsigned blockIndex = 0;
+  bool schedulingSucceeded = true;
 };
 
 void FunctionSchedulerRunner::processSchedulingRegion(
@@ -418,11 +424,13 @@ void FunctionSchedulerRunner::processSchedulingRegion(
   VPTOSchedulerLimits limits;
   VPTOSchedulingBudget schedulingBudget(limits.maxWorkUnits);
   VPTOScheduleFailure failure;
-  VPTOSchedDAGBuilder dagBuilder(&model, limits, schedulingBudget);
+  VPTOSchedDAGBuilder dagBuilder(&model, limits, schedulingBudget,
+                                 rematAnchors);
   FailureOr<std::unique_ptr<VPTOSchedDAG>> dag =
       dagBuilder.build(region, failure);
   if (failed(dag)) {
     emitRegionFailure(func, currentBlockIndex, region, failure);
+    schedulingSucceeded = false;
     return;
   }
   if (mode == "analyze" || trace) {
@@ -430,8 +438,10 @@ void FunctionSchedulerRunner::processSchedulingRegion(
     printRegionReport(os, region, **dag, model, reportBudget);
   }
   if (mode != "analyze") {
-    scheduleRegion(func, os, currentBlockIndex, region, **dag, model, limits,
-                   schedulingBudget, trace);
+    if (failed(scheduleRegion(func, os, currentBlockIndex, region, **dag,
+                              model, limits, schedulingBudget, trace))) {
+      schedulingSucceeded = false;
+    }
   }
 }
 
@@ -462,9 +472,11 @@ void FunctionSchedulerRunner::processRegion(Region &parentRegion) {
   }
 }
 
-static void runFunction(func::FuncOp func, llvm::raw_ostream &os,
+static bool runFunction(func::FuncOp func, llvm::raw_ostream &os,
                         const VPTOSchedModel &model, StringRef mode,
-                        bool trace) {
+                        bool trace,
+                        const llvm::DenseSet<Operation *> *rematAnchors =
+                            nullptr) {
   SmallVector<Operation *> vecScopes;
   func.walk([&](Operation *op) {
     if (isa<VecScopeOp, StrictVecScopeOp>(op)) {
@@ -472,7 +484,7 @@ static void runFunction(func::FuncOp func, llvm::raw_ostream &os,
     }
   });
   if (vecScopes.empty()) {
-    return;
+    return true;
   }
 
   const VPTOSchedMachineModel &machine = model.getMachineModel();
@@ -480,11 +492,95 @@ static void runFunction(func::FuncOp func, llvm::raw_ostream &os,
     os << "vpto-scheduler: function=" << func.getSymName() << " mode=" << mode
        << " target=" << machine.target << " model=" << machine.version << '\n';
   }
-  FunctionSchedulerRunner runner(func, os, model, mode, trace);
-  runner.run(vecScopes);
+  FunctionSchedulerRunner runner(func, os, model, mode, trace,
+                                 rematAnchors);
+  bool succeeded = runner.run(vecScopes);
   if (mode == "analyze" || trace) {
     printCoverage(os, runner.getCoverage());
   }
+  return succeeded;
+}
+
+struct BlockOrderSnapshot {
+  Block *block = nullptr;
+  SmallVector<Operation *> operations;
+};
+
+static void snapshotRegionOrder(Region &region,
+                                SmallVectorImpl<BlockOrderSnapshot> &order) {
+  for (Block &block : region) {
+    BlockOrderSnapshot snapshot;
+    snapshot.block = &block;
+    for (Operation &op : block) {
+      snapshot.operations.push_back(&op);
+    }
+    order.push_back(std::move(snapshot));
+    for (Operation &op : block) {
+      for (Region &nestedRegion : op.getRegions()) {
+        snapshotRegionOrder(nestedRegion, order);
+      }
+    }
+  }
+}
+
+static SmallVector<BlockOrderSnapshot> snapshotFunctionOrder(func::FuncOp func) {
+  SmallVector<BlockOrderSnapshot> order;
+  snapshotRegionOrder(func.getBody(), order);
+  return order;
+}
+
+static void restoreFunctionOrder(ArrayRef<BlockOrderSnapshot> order) {
+  for (const BlockOrderSnapshot &snapshot : order) {
+    for (Operation *op : snapshot.operations) {
+      bool belongsToBlock = op->getBlock() == snapshot.block;
+      if (belongsToBlock) {
+        op->moveBefore(snapshot.block, snapshot.block->end());
+      }
+    }
+  }
+}
+
+static void runFunctionWithRematerialization(func::FuncOp func,
+                                             llvm::raw_ostream &os,
+                                             const VPTOSchedModel &model,
+                                             bool trace) {
+  if (!runFunction(func, os, model, "on", trace)) {
+    if (trace) {
+      os << "vpto-scheduler: remat-summary function=" << func.getSymName()
+         << " changed=false reason=initial-schedule-failed\n";
+    }
+    return;
+  }
+
+  SmallVector<BlockOrderSnapshot> initialOrder = snapshotFunctionOrder(func);
+  VPTORematerializationTransaction transaction =
+      prepareVPTORematerialization(func, model, os, trace);
+  if (!transaction.changed()) {
+    return;
+  }
+
+  bool secondScheduleSucceeded = runFunction(
+      func, os, model, "on", trace, &transaction.getAnchors());
+  int64_t finalPressure = secondScheduleSucceeded
+                              ? evaluateVPTOMaxVectorPressure(func, model)
+                              : -1;
+  const VPTORematerializationStats &stats = transaction.getStats();
+  bool accepted = secondScheduleSucceeded && finalPressure >= 0 &&
+                  finalPressure < stats.initialMaxVectorPressure;
+  if (trace) {
+    os << "vpto-scheduler: remat-result function=" << func.getSymName()
+       << " accepted=" << (accepted ? "true" : "false")
+       << " initial-peak=" << stats.initialMaxVectorPressure
+       << " final-peak=" << finalPressure
+       << " second-schedule="
+       << (secondScheduleSucceeded ? "success" : "failed") << '\n';
+  }
+  if (accepted) {
+    transaction.commit();
+    return;
+  }
+  transaction.rollback();
+  restoreFunctionOrder(initialOrder);
 }
 
 static StringAttr findTargetArchitecture(ModuleOp module) {
@@ -502,10 +598,16 @@ struct VPTOSchedulerPass
   using Base::Base;
 
   void runOnOperation() override {
-    if (mode == "off")
+    if (mode == "off") {
       return;
+    }
     if (mode != "analyze" && mode != "on") {
       getOperation().emitError("unknown VPTO scheduler mode '") << mode << "'";
+      return signalPassFailure();
+    }
+    if (rematerialize && mode != "on") {
+      getOperation().emitError(
+          "VPTO scheduler rematerialization requires mode 'on'");
       return signalPassFailure();
     }
     StringAttr target = findTargetArchitecture(getOperation());
@@ -529,8 +631,13 @@ struct VPTOSchedulerPass
     VPTOGenericA5SchedModel model;
     std::string report;
     llvm::raw_string_ostream os(report);
-    getOperation().walk(
-        [&](func::FuncOp func) { runFunction(func, os, model, mode, trace); });
+    getOperation().walk([&](func::FuncOp func) {
+      if (rematerialize) {
+        runFunctionWithRematerialization(func, os, model, trace);
+      } else {
+        (void)runFunction(func, os, model, mode, trace);
+      }
+    });
     os.flush();
 
     // Nested module pass adaptors may execute sibling kernel modules in
