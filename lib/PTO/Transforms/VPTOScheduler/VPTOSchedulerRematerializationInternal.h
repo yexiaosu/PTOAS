@@ -32,6 +32,7 @@ class VPTOSchedModel;
 namespace mlir::pto::remat {
 
 constexpr unsigned kMaxCandidates = 16;
+constexpr unsigned kMaxPredecessorDepth = 2;
 constexpr unsigned kMaxGroupsPerCandidate = 4;
 constexpr unsigned kMaxUsesPerGroup = 2;
 constexpr unsigned kMaxUseGap = 64;
@@ -66,8 +67,7 @@ struct UseGroup {
 struct RematCandidate {
     unsigned diagnosticId = 0;
     Value value;
-    Operation* producer = nullptr;
-    Operation* root = nullptr;
+    SmallVector<Operation*> recipeOperations;
     SmallVector<UseGroup> groups;
     SmallVector<unsigned> affectedRegions;
     uint64_t coverageBenefit = 0;
@@ -78,7 +78,7 @@ struct RematCandidate {
 SmallVector<PressureRegion, 0> collectHighPressureRegions(
     func::FuncOp func, const VPTOSchedModel& model, llvm::raw_ostream& os, bool trace, int64_t& initialMaxPressure);
 
-SmallVector<RematCandidate> collectCandidates(
+SmallVector<RematCandidate, 0> collectCandidates(
     ArrayRef<PressureRegion> regions, const VPTOSchedModel& model, func::FuncOp func, llvm::raw_ostream& os,
     bool trace);
 

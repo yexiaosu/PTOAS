@@ -45,7 +45,7 @@ VPTORematerializationTransaction mlir::pto::prepareVPTORematerialization(
         return transaction;
     }
 
-    SmallVector<RematCandidate> candidates = collectCandidates(regions, model, func, os, trace);
+    SmallVector<RematCandidate, 0> candidates = collectCandidates(regions, model, func, os, trace);
     unsigned cloneOperations = 0;
     uint64_t dynamicMicroOps = 0;
     SmallVector<unsigned> selected = selectCandidates(candidates, regions, os, trace, cloneOperations, dynamicMicroOps);
@@ -61,31 +61,34 @@ VPTORematerializationTransaction mlir::pto::prepareVPTORematerialization(
         const RematCandidate& candidate = candidates[candidateIndex];
         if (trace) {
             os << "vpto-scheduler: remat-select id=" << candidate.diagnosticId << " groups=" << candidate.groups.size()
-               << " clones=" << candidate.cloneOperations << " dynamic-micro-ops=" << candidate.dynamicMicroOps
+               << " recipe-ops=" << candidate.recipeOperations.size() << " clones=" << candidate.cloneOperations
+               << " dynamic-micro-ops=" << candidate.dynamicMicroOps
                << " coverage-benefit=" << candidate.coverageBenefit << '\n';
         }
+        transaction.stats.cloneGroups += candidate.groups.size();
         for (const UseGroup& group : candidate.groups) {
             OpBuilder builder(group.insertionPoint);
             IRMapping mapping;
-            Operation* rootClone = builder.clone(*candidate.root);
-            mapping.map(candidate.root->getResult(0), rootClone->getResult(0));
-            builder.setInsertionPoint(group.insertionPoint);
-            Operation* producerClone = builder.clone(*candidate.producer, mapping);
+            Operation* firstClone = nullptr;
+            for (Operation* operation : candidate.recipeOperations) {
+                Operation* clone = builder.clone(*operation, mapping);
+                firstClone = firstClone ? firstClone : clone;
+                transaction.clones.push_back(clone);
+            }
+            Value replacement = mapping.lookup(candidate.value);
             for (OpOperand* use : group.uses) {
                 transaction.replacedUses.push_back({use, candidate.value});
-                use->set(producerClone->getResult(0));
+                use->set(replacement);
             }
-            transaction.clones.push_back(rootClone);
-            transaction.clones.push_back(producerClone);
-            transaction.anchors.insert(rootClone);
+            transaction.anchors.insert(firstClone);
         }
-        appendUniqueOperation(transaction.originalProducers, candidate.producer);
-        appendUniqueOperation(transaction.originalRoots, candidate.root);
+        for (Operation* operation : candidate.recipeOperations) {
+            appendUniqueOperation(transaction.originalOperations, operation);
+        }
     }
     transaction.stats.changed = true;
     transaction.stats.selectedCandidates = selected.size();
     transaction.stats.cloneOperations = cloneOperations;
-    transaction.stats.cloneGroups = cloneOperations / 2;
     transaction.stats.estimatedDynamicMicroOps = dynamicMicroOps;
     if (trace) {
         os << "vpto-scheduler: remat-summary function=" << func.getSymName()
@@ -98,21 +101,15 @@ VPTORematerializationTransaction mlir::pto::prepareVPTORematerialization(
 
 void VPTORematerializationTransaction::commit()
 {
-    for (Operation* producer : originalProducers) {
-        if (producer->use_empty()) {
-            producer->erase();
-        }
-    }
-    for (Operation* root : originalRoots) {
-        if (root->use_empty()) {
-            root->erase();
+    for (Operation* operation : llvm::reverse(originalOperations)) {
+        if (operation->use_empty()) {
+            operation->erase();
         }
     }
     replacedUses.clear();
     clones.clear();
     anchors.clear();
-    originalProducers.clear();
-    originalRoots.clear();
+    originalOperations.clear();
 }
 
 void VPTORematerializationTransaction::rollback()
@@ -126,8 +123,7 @@ void VPTORematerializationTransaction::rollback()
     replacedUses.clear();
     clones.clear();
     anchors.clear();
-    originalProducers.clear();
-    originalRoots.clear();
+    originalOperations.clear();
     stats.changed = false;
 }
 

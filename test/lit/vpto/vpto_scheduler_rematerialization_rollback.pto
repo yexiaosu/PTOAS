@@ -21,7 +21,7 @@
 // IR-NOT: pto.vci
 
 // TRACE: vpto-scheduler: remat-summary function=remat_no_pressure_improvement changed=true
-// TRACE-SAME: selected=2 groups=2 clones=4 dynamic-micro-ops=8
+// TRACE-SAME: selected=2 groups=3 clones=4 dynamic-micro-ops=7
 // TRACE: vpto-scheduler: remat-result function=remat_no_pressure_improvement accepted=false initial-peak=33 final-peak=33 second-schedule=success
 
 module attributes {pto.target_arch = "a5"} {

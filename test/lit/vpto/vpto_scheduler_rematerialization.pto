@@ -18,11 +18,13 @@
 // IR: pto.vadds
 // IR: pto.vci
 // IR: pto.vadds
+// IR: pto.vadds
 // IR: pto.vci
 // IR: pto.vadds
 // IR: pto.vlds
 // IR: scf.for
 // IR: pto.vci
+// IR: pto.vadds
 // IR: pto.vadds
 // IR: pto.vci
 // IR: pto.vadds
@@ -38,8 +40,9 @@
 
 // TRACE-LABEL: vpto-scheduler: remat-region
 // TRACE-SAME: peak=34 limit=32 trigger=true
+// TRACE: vpto-scheduler: remat-candidate id={{[0-9]+}} selected=pending groups=2 recipe-ops=3
 // TRACE: vpto-scheduler: remat-summary function=remat_over_limit changed=true
-// TRACE-SAME: selected=3 groups=6 clones=12 dynamic-micro-ops=18
+// TRACE-SAME: selected=3 groups=6 clones=14 dynamic-micro-ops=21
 // TRACE: vpto-scheduler: remat-result function=remat_over_limit accepted=true initial-peak=34 final-peak=32 second-schedule=success
 // TRACE: vpto-scheduler: remat-summary function=remat_below_limit changed=false reason=no-high-pressure-region
 
@@ -87,7 +90,8 @@ module attributes {pto.target_arch = "a5"} {
       %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
       %loaded = pto.vlds %source[%offset] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
       %root = pto.vci %zero : i32 -> !pto.vreg<64xi32>
-      %index0 = pto.vadds %root, %zero, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %index0_base = pto.vadds %root, %zero, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+      %index0 = pto.vadds %index0_base, %zero, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %index1 = pto.vadds %root, %c64, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %index2 = pto.vadds %root, %c128, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %pre0 = pto.vcmp %index0, %index0, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>

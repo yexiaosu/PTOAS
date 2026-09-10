@@ -9,9 +9,10 @@
 //===- VPTOSchedulerRematerialization.h - Bounded VPTO remat ---*- C++ -*-===//
 //
 // This file defines the transactional rematerialization step used between two
-// scheduler runs. Only explicitly whitelisted VPTO index-generation chains are
-// cloned. The transaction keeps original definitions until the second schedule
-// is accepted, so callers can restore the first schedule without rebuilding IR.
+// scheduler runs. Target-approved cheap producer DAGs are cloned within fixed
+// depth and cost budgets. The transaction keeps original definitions until the
+// second schedule is accepted, so callers can restore the first schedule
+// without rebuilding IR.
 //
 //===----------------------------------------------------------------------===//
 
@@ -76,8 +77,7 @@ private:
     SmallVector<ReplacedUse> replacedUses;
     SmallVector<Operation*> clones;
     llvm::DenseSet<Operation*> anchors;
-    SmallVector<Operation*> originalProducers;
-    SmallVector<Operation*> originalRoots;
+    SmallVector<Operation*> originalOperations;
 };
 
 VPTORematerializationTransaction prepareVPTORematerialization(

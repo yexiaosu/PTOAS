@@ -330,7 +330,7 @@ ptoas --version
 目标资源占用和寄存器压力；生成代码仍写入正常输出。设计与分析格式详见
 [`docs/designs/vpto-scheduler-framework.md`](docs/designs/vpto-scheduler-framework.md)。
 
-`--vpto-scheduler-remat` 是默认关闭的 A5 Vector 优化，只能与 `--vpto-scheduler=on` 配合。它仅在首次调度后静态 vector 峰值超过模型上限时，按固定白名单和预算克隆循环携带的 `vci → vadds` 索引链，再重新构建分析并调度一次；第二次调度失败或没有降低静态峰值时会回滚全部克隆、use 替换和首次调度顺序。
+`--vpto-scheduler-remat` 是默认关闭的 A5 Vector 优化，只能与 `--vpto-scheduler=on` 配合。它仅在首次调度后静态 vector 峰值超过模型上限时，从循环携带值递归构造由目标模型认可的 cheap producer DAG，在前驱深度和代码膨胀预算内于消费点附近重建计算，再重新分析并调度一次；第二次调度失败或没有降低静态峰值时会回滚全部克隆、use 替换和首次调度顺序。
 
 ### 5.2 Python 接口 (Python API)
 

@@ -1366,12 +1366,13 @@ def VPTOScheduler : Pass<"pto-vpto-scheduler", "ModuleOp"> {
     exceed a limit. Validation and fresh replay precede application of each
     verified result.
     The opt-in `rematerialize` path runs that scheduler first, then considers
-    only over-limit regions for bounded cloning of loop-carried `vci` to
-    `vadds` index-generation chains. It groups nearby equivalent consumers,
-    accounts for static loop trip counts, anchors clones near their first use,
-    rebuilds all scheduling analyses, and runs the scheduler once more. The
-    first schedule is restored if the second schedule fails or does not reduce
-    modeled vector pressure.
+    only over-limit regions for bounded cloning of loop-carried cheap producer
+    DAGs approved by the target scheduling model. It limits recursive vector
+    predecessor depth, groups nearby equivalent consumers, accounts for static
+    loop trip counts, anchors clones near their first use, rebuilds all
+    scheduling analyses, and runs the scheduler once more. The first schedule
+    is restored if the second schedule fails or does not reduce modeled vector
+    pressure.
   }];
   let constructor = "mlir::pto::createVPTOSchedulerPass()";
   let options = [

@@ -107,11 +107,13 @@ Pass 自身默认 `off`。`ptoas` driver 的默认行为是：
 
 “高压”严格定义为首次调度后的静态 vector 峰值大于 A5 模型的 vector limit。规划目标为 `limit - 1`，给后续临时值保留一个静态 headroom；该预测只用于触发和候选排序，不代表 Bisheng 已产生或消除了真实 spill。
 
-第一版白名单仅包含至少一组结果使用跨越静态可计数 `scf.for` 的原有 `pto.vci → pto.vadds` 两级链。同一值在循环外的其他使用也必须局部重物化，该类消费组的动态倍数按 1 计；从而所有消费者替换后才能删除循环外的长寿命原定义。实现克隆原操作及全部原 operand，因此保留 `vci` 输入、`vadds` scalar offset、mask、inactive-lane 和执行上下文；load、随机值、同步、原子、store、任意纯操作以及未知 trip count 循环均不进入白名单。每个替换点还要通过 dominance 检查，候选存在任何未覆盖 use 时会整体拒绝。
+候选首先通过 `VPTOSchedModel::isCheapToRematerialize` 查询目标是否认可其单操作复制成本；A5 当前保守认可 `vbr`、`vdup`、`vci`、`vmuls`、`vadds`、`vmaxs` 和 `vmins`，而不是在 remat 实现中匹配某条固定链。通过目标门槛后，从循环携带的 vector 值沿 vector-pressure producer 递归构造 DAG，要求每层 producer 同样得到目标认可、无 region、单结果、pure 且具有已知 sched class；vector block argument 可以作为外部叶子，scalar 和 mask operand 不被复制但必须支配每个插入点。这样 `vci → vadds` 仍是合法特例，也可以处理其他满足同一规则的 cheap 链；load、随机值、同步、原子、store、高代价计算和未知 trip count 循环均不会进入 recipe。
 
-同一指令类型、原始位置间隔不超过 64 且最多两个 use 的邻近消费者共享一个局部 clone。每个候选最多四组；一次函数规划最多选择 16 个候选、克隆 96 个操作，固定链深为 2，按每个消费组穿越循环的静态 trip count（未穿越则为 1）估算新增动态 micro-op，且总量不得超过 2048。96 个操作的上限容纳 16 个候选每个平均三个消费组，但仍受每候选四组和动态成本双重限制。候选先比较仍需降压的覆盖区域数，再比较 live-range 覆盖收益，最后优先较低动态成本；这些常量是防止代码膨胀和分析失控的保守首版预算，不是硬件性能结论。
+同一值在循环外的其他使用也必须局部重物化，该类消费组的动态倍数按 1 计；从而所有消费者替换后才能删除循环外的长寿命原定义。实现按拓扑序克隆 recipe 操作并复用其原有外部 operand，因此保留 scalar offset、mask、inactive-lane 和执行上下文。每个替换点还要通过 dominance 检查，候选存在任何未覆盖 use 时会整体拒绝。
 
-重物化 transaction 在第二次调度验收前保留原定义、原 use 和首次调度后的操作顺序。第二次 DAG 对每个局部 `vci` clone 增加只存在于本次 transaction 的 Must cluster anchor，防止调度器把链重新提前到消费区间入口；该信息不写入 IR attribute。只有第二次调度成功且重新计算的函数最大静态 vector 峰值低于首次调度结果时才提交并清理已死原定义，否则恢复全部 use、删除 clone，并恢复首次调度顺序。
+同一指令类型、原始位置间隔不超过 64 且最多两个 use 的邻近消费者共享一个局部 clone。每个候选最多四组；一次函数规划最多选择 16 个候选、克隆 96 个操作。候选本身记为深度 0，vector producer 前驱最多递归两层，因此单链最多包含三个操作；分支 DAG 的实际操作数计入 clone 预算。新增动态 micro-op 按 recipe 操作数乘每个消费组穿越循环的静态 trip count（未穿越则为 1）估算，且总量不得超过 2048。候选先比较仍需降压的覆盖区域数，再比较 live-range 覆盖收益，最后优先较低动态成本；这些常量是防止代码膨胀和分析失控的保守预算，不是硬件性能结论。
+
+重物化 transaction 在第二次调度验收前保留原定义、原 use 和首次调度后的操作顺序。第二次 DAG 对每组局部 recipe 的第一个 clone 增加只存在于本次 transaction 的 Must cluster anchor，防止调度器把整条计算重新提前到消费区间入口；该信息不写入 IR attribute。只有第二次调度成功且重新计算的函数最大静态 vector 峰值低于首次调度结果时才提交并按逆拓扑顺序清理已死原定义，否则恢复全部 use、删除 clone，并恢复首次调度顺序。
 
 trace 使用 `remat-region`、`remat-candidate`、`remat-select`、`remat-fallback`、`remat-summary` 和 `remat-result` 记录触发区间、候选拒绝原因、消费分组、clone 数、估计动态成本、压力前后变化与第二次调度结果。降低的是模型压力；是否改善 RA spill、SMEM_BAR 或执行周期必须通过同工具链的 Bisheng 与 CA-model A/B 验证。
 
@@ -740,7 +742,8 @@ SemanticVerification, ModelReplay, Apply
 | `vpto_scheduler_generic_op_coverage.pto` | vcvt/vmul/vdiv/vexp/vmula/vcadd 等通用 Vector micro-op 使用统一 sched class，on 不因 opcode 未登记而跳过 region |
 | `vpto_scheduler_multi_user_closure.pto` | near-limit 多用户 predicate closure group 可接受安全的瞬时压力增加，并在打开无关 producer 前关闭完整 fan-out live range |
 | `vpto_scheduler_trackers.pto` | live-through 与无上限 pressure、near-limit/closure-group/低压力/紧急 critical-path/tie-break 策略、Predicate limit 7、无 pending 进展、非法 idle replay、独立 top/bottom Boundary、fan-out commit 原子预算、pending cycle buckets、verify/replay、随机 DAG differential test |
-| `vpto_scheduler_rematerialization.pto` | 超限触发、局部 `vci → vadds` clone、原定义清理、静态压力下降、load 白名单排除和低压力不触发 |
+| `vpto_scheduler_rematerialization.pto` | 超限触发、两层前驱的通用 cheap recipe clone、原定义清理、静态压力下降、load 目标成本排除和低压力不触发 |
+| `vpto_scheduler_rematerialization_legality.pto` | 超过两层 vector producer 前驱时拒绝，以及 A5 目标模型拒绝高代价 `vexp` |
 | `vpto_scheduler_rematerialization_budget.pto` | 候选数预算不足时拒绝整项计划并保持原 IR |
 | `vpto_scheduler_rematerialization_rollback.pto` | 第二次调度成功但峰值未下降时回滚 clone/use，并恢复首次调度后的原定义和顺序 |
 | `bisheng_vec_misched_cli.pto` | Bisheng vector MISched 选项存在性 |

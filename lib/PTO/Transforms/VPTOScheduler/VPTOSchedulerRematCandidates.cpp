@@ -17,6 +17,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
@@ -133,6 +134,48 @@ static bool isVectorPressureValue(Value value, const VPTOSchedModel& model)
     });
 }
 
+static bool collectRecipeOperations(
+    Value value, const VPTOSchedModel& model, unsigned predecessorDepth, DenseSet<Operation*>& visited,
+    SmallVectorImpl<Operation*>& operations, std::string& rejection)
+{
+    Operation* op = value.getDefiningOp();
+    if (!op) {
+        return true;
+    }
+    if (predecessorDepth > kMaxPredecessorDepth) {
+        rejection = "producer-depth-limit";
+        return false;
+    }
+    bool validShape = op->getNumRegions() == 0 && op->getNumResults() == 1 && !op->hasTrait<OpTrait::IsTerminator>();
+    if (!validShape) {
+        rejection = "unsupported-producer-shape";
+        return false;
+    }
+    if (!model.isCheapToRematerialize(op)) {
+        rejection = "target-cost-rejected";
+        return false;
+    }
+    bool isPureSchedulable = isPure(op) && model.getSchedClass(op).known;
+    if (!isPureSchedulable) {
+        rejection = "producer-not-pure-schedulable";
+        return false;
+    }
+    if (!visited.insert(op).second) {
+        return true;
+    }
+    for (Value operand : op->getOperands()) {
+        bool hasVectorProducer = isVectorPressureValue(operand, model) && operand.getDefiningOp();
+        if (!hasVectorProducer) {
+            continue;
+        }
+        if (!collectRecipeOperations(operand, model, predecessorDepth + 1, visited, operations, rejection)) {
+            return false;
+        }
+    }
+    operations.push_back(op);
+    return true;
+}
+
 static DenseMap<Operation*, TargetPosition> buildTargetPositions(ArrayRef<PressureRegion> regions)
 {
     DenseMap<Operation*, TargetPosition> positions;
@@ -183,16 +226,15 @@ static std::optional<RematCandidate> buildCandidate(
     Value value, ArrayRef<PressureRegion> regions, const DenseMap<Operation*, TargetPosition>& positions,
     const VPTOSchedModel& model, DominanceInfo& dominance, std::string& rejection)
 {
-    auto producer = dyn_cast_or_null<VaddsOp>(value.getDefiningOp());
-    bool validProducer = producer && producer->getNumResults() == 1 && isVectorPressureValue(value, model);
-    if (!validProducer) {
-        rejection = "not-whitelisted-vadds";
+    bool hasVectorProducer = value.getDefiningOp() && isVectorPressureValue(value, model);
+    if (!hasVectorProducer) {
+        rejection = "not-vector-pressure-producer";
         return std::nullopt;
     }
-    auto root = dyn_cast_or_null<VciOp>(producer.getInput().getDefiningOp());
-    bool validRoot = root && root->getNumResults() == 1 && producer->getNumRegions() == 0 && root->getNumRegions() == 0;
-    if (!validRoot) {
-        rejection = "not-whitelisted-vci-vadds-chain";
+
+    DenseSet<Operation*> recipeSet;
+    SmallVector<Operation*> recipeOperations;
+    if (!collectRecipeOperations(value, model, 0, recipeSet, recipeOperations, rejection)) {
         return std::nullopt;
     }
 
@@ -212,8 +254,7 @@ static std::optional<RematCandidate> buildCandidate(
 
     RematCandidate candidate;
     candidate.value = value;
-    candidate.producer = producer.getOperation();
-    candidate.root = root.getOperation();
+    candidate.recipeOperations = std::move(recipeOperations);
     for (OpOperand* use : uses) {
         appendUseToGroups(use, positions, candidate.groups);
     }
@@ -224,25 +265,26 @@ static std::optional<RematCandidate> buildCandidate(
     }
 
     DenseSet<unsigned> affected;
-    auto producerPosition = positions.find(producer.getOperation());
-    if (producerPosition != positions.end()) {
-        affected.insert(producerPosition->second.regionIndex);
+    for (Operation* operation : candidate.recipeOperations) {
+        auto position = positions.find(operation);
+        if (position != positions.end()) {
+            affected.insert(position->second.regionIndex);
+        }
     }
     bool hasLoopCarriedGroup = false;
     for (UseGroup& group : candidate.groups) {
-        for (Value operand : root->getOperands()) {
-            if (!dominance.dominates(operand, group.insertionPoint)) {
-                rejection = "vci-operand-does-not-dominate";
-                return std::nullopt;
+        for (Operation* operation : candidate.recipeOperations) {
+            for (Value operand : operation->getOperands()) {
+                if (recipeSet.contains(operand.getDefiningOp())) {
+                    continue;
+                }
+                if (!dominance.dominates(operand, group.insertionPoint)) {
+                    rejection = "external-operand-does-not-dominate";
+                    return std::nullopt;
+                }
             }
         }
-        for (Value operand : producer->getOperands().drop_front()) {
-            if (!dominance.dominates(operand, group.insertionPoint)) {
-                rejection = "vadds-context-does-not-dominate";
-                return std::nullopt;
-            }
-        }
-        std::optional<LoopCost> loopCost = getLoopCost(producer, group.insertionPoint);
+        std::optional<LoopCost> loopCost = getLoopCost(value.getDefiningOp(), group.insertionPoint);
         if (!loopCost) {
             rejection = "unknown-loop-cost";
             return std::nullopt;
@@ -251,7 +293,7 @@ static std::optional<RematCandidate> buildCandidate(
         group.dynamicMultiplier = loopCost->multiplier;
         uint64_t groupCost = 0;
         uint64_t updatedCost = 0;
-        bool validGroupCost = checkedMultiply(group.dynamicMultiplier, uint64_t{2}, groupCost);
+        bool validGroupCost = checkedMultiply(group.dynamicMultiplier, candidate.recipeOperations.size(), groupCost);
         bool validTotalCost = validGroupCost && checkedAdd(candidate.dynamicMicroOps, groupCost, updatedCost);
         if (!validTotalCost) {
             rejection = "dynamic-cost-overflow";
@@ -264,7 +306,7 @@ static std::optional<RematCandidate> buildCandidate(
         rejection = "no-loop-carried-use";
         return std::nullopt;
     }
-    candidate.cloneOperations = static_cast<unsigned>(candidate.groups.size()) * 2;
+    candidate.cloneOperations = static_cast<unsigned>(candidate.groups.size() * candidate.recipeOperations.size());
     candidate.affectedRegions.append(affected.begin(), affected.end());
     llvm::sort(candidate.affectedRegions);
 
@@ -288,18 +330,19 @@ static std::optional<RematCandidate> buildCandidate(
 
 } // namespace
 
-SmallVector<RematCandidate> mlir::pto::remat::collectCandidates(
+SmallVector<RematCandidate, 0> mlir::pto::remat::collectCandidates(
     ArrayRef<PressureRegion> regions, const VPTOSchedModel& model, func::FuncOp func, llvm::raw_ostream& os, bool trace)
 {
     DenseMap<Operation*, TargetPosition> positions = buildTargetPositions(regions);
     DenseSet<Value> visited;
-    SmallVector<RematCandidate> candidates;
+    SmallVector<RematCandidate, 0> candidates;
     DominanceInfo dominance(func);
     unsigned candidateIndex = 0;
     for (const PressureRegion& region : regions) {
         for (Value liveIn : region.liveIns) {
-            bool isNewVadds = visited.insert(liveIn).second && isa_and_nonnull<VaddsOp>(liveIn.getDefiningOp());
-            if (!isNewVadds) {
+            bool isNewProducer =
+                visited.insert(liveIn).second && liveIn.getDefiningOp() && isVectorPressureValue(liveIn, model);
+            if (!isNewProducer) {
                 continue;
             }
             std::string rejection;
@@ -317,7 +360,8 @@ SmallVector<RematCandidate> mlir::pto::remat::collectCandidates(
             if (trace) {
                 os << "vpto-scheduler: remat-candidate id=" << diagnosticId
                    << " selected=pending groups=" << candidate->groups.size()
-                   << " clones=" << candidate->cloneOperations << " dynamic-micro-ops=" << candidate->dynamicMicroOps
+                   << " recipe-ops=" << candidate->recipeOperations.size() << " clones=" << candidate->cloneOperations
+                   << " dynamic-micro-ops=" << candidate->dynamicMicroOps
                    << " coverage-benefit=" << candidate->coverageBenefit << '\n';
             }
             candidates.push_back(std::move(*candidate));
