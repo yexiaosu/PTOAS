@@ -107,11 +107,11 @@ Pass 自身默认 `off`。`ptoas` driver 的默认行为是：
 
 “高压”严格定义为首次调度后的静态 vector 峰值大于 A5 模型的 vector limit。规划目标为 `limit - 1`，给后续临时值保留一个静态 headroom；该预测只用于触发和候选排序，不代表 Bisheng 已产生或消除了真实 spill。
 
-候选首先通过 `VPTOSchedModel::isCheapToRematerialize` 查询目标是否认可其单操作复制成本；A5 当前保守认可 `vdup`、`vci`、`vmuls`、`vadds`、`vmaxs` 和 `vmins`，而不是在 remat 实现中匹配某条固定链。`vbr` 即使是单指令也暂不认可，因为当前 A5 实测表明它会与更有利的索引 recipe 竞争并引入额外同步。通过目标门槛后，从循环携带的 vector 值沿 vector-pressure producer 递归构造 DAG，要求每层 producer 同样得到目标认可、无 region、单结果、pure 且具有已知 sched class；vector block argument 可以作为外部叶子，scalar 和 mask operand 不被复制但必须支配每个插入点。这样 `vci → vadds` 仍是合法特例，也可以处理其他满足同一规则的 cheap 链；load、随机值、同步、原子、store、高代价计算和未知 trip count 循环均不会进入 recipe。
+候选首先通过 `VPTOSchedModel::isCheapToRematerialize` 查询目标是否认可其单操作复制成本；A5 当前保守认可 `vbr`、`vdup`、`vci`、`vmuls`、`vadds`、`vmaxs` 和 `vmins`，而不是在 remat 实现中匹配某条固定链。通过目标门槛后，从循环携带的 vector 值沿 vector-pressure producer 递归构造 DAG，要求每层 producer 同样得到目标认可、无 region、单结果、pure 且具有已知 sched class；vector block argument 可以作为外部叶子，scalar 和 mask operand 不被复制但必须支配每个插入点。这样 `vci → vadds` 仍是合法特例，也可以处理其他满足同一规则的 cheap 链；load、随机值、同步、原子、store、高代价计算和未知 trip count 循环均不会进入 recipe。
 
 同一值在循环外的其他使用也必须局部重物化，该类消费组的动态倍数按 1 计；从而所有消费者替换后才能删除循环外的长寿命原定义。实现按拓扑序克隆 recipe 操作并复用其原有外部 operand，因此保留 scalar offset、mask、inactive-lane 和执行上下文。每个替换点还要通过 dominance 检查，候选存在任何未覆盖 use 时会整体拒绝。
 
-同一指令类型、原始位置间隔不超过 64 且最多两个 use 的邻近消费者共享一个局部 clone。每个候选最多四组；一次函数规划最多选择 16 个候选、克隆 96 个操作。候选本身记为深度 0，vector producer 前驱最多递归两层，因此单链最多包含三个操作；分支 DAG 的实际操作数计入 clone 预算。新增动态 micro-op 按 recipe 操作数乘每个消费组穿越循环的静态 trip count（未穿越则为 1）估算，且总量不得超过 2048。候选先比较仍需降压的覆盖区域数，再比较 live-range 覆盖收益，最后优先较低动态成本；这些常量是防止代码膨胀和分析失控的保守预算，不是硬件性能结论。
+同一指令类型、原始位置间隔不超过 64 且最多两个 use 的邻近消费者共享一个局部 clone。每个候选最多四组；一次函数规划最多选择 16 个候选、克隆 96 个操作。候选本身记为深度 0，vector producer 前驱最多递归两层，因此单链最多包含三个操作；分支 DAG 的实际操作数计入 clone 预算。新增动态 micro-op 按 recipe 操作数乘每个消费组穿越循环的静态 trip count（未穿越则为 1）估算，且总量不得超过 2048。候选先比较仍需降压的覆盖区域数和 live-range 覆盖收益；两者相同时，优先选择能够让更多原 recipe 操作变为无用户的候选，从而识别“补全最后一个用户后可同时删除共享 cheap 前驱”的边际收益；最后优先较低动态成本。这些常量是防止代码膨胀和分析失控的保守预算，不是硬件性能结论。
 
 重物化 transaction 在第二次调度验收前保留原定义、原 use 和首次调度后的操作顺序。第二次 DAG 对每组局部 recipe 的第一个 clone 增加只存在于本次 transaction 的 Must cluster anchor，防止调度器把整条计算重新提前到消费区间入口；该信息不写入 IR attribute。只有第二次调度成功且重新计算的函数最大静态 vector 峰值低于首次调度结果时才提交并按逆拓扑顺序清理已死原定义，否则恢复全部 use、删除 clone，并恢复首次调度顺序。
 

@@ -36,14 +36,51 @@ static bool candidateFitsBudget(
     return candidate.dynamicMicroOps <= kMaxDynamicMicroOps - dynamicMicroOps;
 }
 
+static unsigned countDeadRecipeOperations(
+    ArrayRef<RematCandidate> candidates, ArrayRef<unsigned> selected, std::optional<unsigned> additional)
+{
+    DenseSet<Operation*> recipeOperations;
+    DenseSet<Operation*> deadOperations;
+    auto addCandidate = [&](const RematCandidate& candidate) {
+        recipeOperations.insert(candidate.recipeOperations.begin(), candidate.recipeOperations.end());
+        deadOperations.insert(candidate.value.getDefiningOp());
+    };
+    for (unsigned index : selected) {
+        addCandidate(candidates[index]);
+    }
+    if (additional) {
+        addCandidate(candidates[*additional]);
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (Operation* operation : recipeOperations) {
+            if (deadOperations.contains(operation)) {
+                continue;
+            }
+            bool allUsersDead = llvm::all_of(
+                operation->getUsers(), [&](Operation* user) { return deadOperations.contains(user); });
+            if (allUsersDead) {
+                changed |= deadOperations.insert(operation).second;
+            }
+        }
+    }
+    return deadOperations.size();
+}
+
 static bool isBetterCandidate(
-    const RematCandidate& candidate, const RematCandidate& best, unsigned help, unsigned bestHelp)
+    const RematCandidate& candidate, const RematCandidate& best, unsigned help, unsigned bestHelp,
+    unsigned marginalDeadOperations, unsigned bestMarginalDeadOperations)
 {
     if (help != bestHelp) {
         return help > bestHelp;
     }
     if (candidate.coverageBenefit != best.coverageBenefit) {
         return candidate.coverageBenefit > best.coverageBenefit;
+    }
+    if (marginalDeadOperations != bestMarginalDeadOperations) {
+        return marginalDeadOperations > bestMarginalDeadOperations;
     }
     return candidate.dynamicMicroOps < best.dynamicMicroOps;
 }
@@ -83,6 +120,8 @@ SmallVector<unsigned> mlir::pto::remat::selectCandidates(
     while (llvm::any_of(remaining, [](int64_t value) { return value > 0; })) {
         std::optional<unsigned> best;
         unsigned bestHelp = 0;
+        unsigned bestMarginalDeadOperations = 0;
+        unsigned currentDeadOperations = countDeadRecipeOperations(candidates, selected, std::nullopt);
         for (auto [index, candidate] : llvm::enumerate(candidates)) {
             bool alreadySelected = selectedSet.contains(index);
             bool fitsBudget = candidateFitsBudget(candidate, selected.size(), cloneOperations, dynamicMicroOps);
@@ -93,9 +132,14 @@ SmallVector<unsigned> mlir::pto::remat::selectCandidates(
             if (help == 0) {
                 continue;
             }
-            if (!best || isBetterCandidate(candidate, candidates[*best], help, bestHelp)) {
+            unsigned deadOperations = countDeadRecipeOperations(candidates, selected, index);
+            unsigned marginalDeadOperations = deadOperations - currentDeadOperations;
+            if (!best || isBetterCandidate(
+                             candidate, candidates[*best], help, bestHelp, marginalDeadOperations,
+                             bestMarginalDeadOperations)) {
                 best = index;
                 bestHelp = help;
+                bestMarginalDeadOperations = marginalDeadOperations;
             }
         }
         if (!best) {

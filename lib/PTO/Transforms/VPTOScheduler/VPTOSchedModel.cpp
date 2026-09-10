@@ -169,7 +169,7 @@ VPTOGenericA5SchedModel::getSchedParameters(Operation *op) const {
 }
 
 bool VPTOGenericA5SchedModel::isCheapToRematerialize(Operation *op) const {
-  return isa<VdupOp, VciOp, VmulsOp, VaddsOp, VmaxsOp, VminsOp>(op);
+  return isa<VbrOp, VdupOp, VciOp, VmulsOp, VaddsOp, VmaxsOp, VminsOp>(op);
 }
 
 Value

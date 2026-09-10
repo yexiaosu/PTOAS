@@ -18,11 +18,10 @@
 // IR: pto.vadds
 // IR: pto.vci
 // IR: pto.vadds
-// IR: pto.vadds
-// IR: pto.vci
-// IR: pto.vadds
 // IR: pto.vlds
+// IR: pto.vdup
 // IR: scf.for
+// IR-NOT: pto.vdup
 // IR: pto.vci
 // IR: pto.vadds
 // IR: pto.vadds
@@ -40,9 +39,13 @@
 
 // TRACE-LABEL: vpto-scheduler: remat-region
 // TRACE-SAME: peak=34 limit=32 trigger=true
-// TRACE: vpto-scheduler: remat-candidate id={{[0-9]+}} selected=pending groups=2 recipe-ops=3
+// TRACE: vpto-scheduler: remat-candidate id=0 selected=pending groups=1 recipe-ops=1
+// TRACE: vpto-scheduler: remat-candidate id=1 selected=pending groups=1 recipe-ops=3
+// TRACE-SAME: coverage-benefit=30
+// TRACE: vpto-scheduler: remat-candidate id=4 selected=false reason=target-cost-rejected
+// TRACE: vpto-scheduler: remat-candidate id=0 selected=false reason=pressure-target-satisfied
 // TRACE: vpto-scheduler: remat-summary function=remat_over_limit changed=true
-// TRACE-SAME: selected=3 groups=6 clones=14 dynamic-micro-ops=21
+// TRACE-SAME: selected=3 groups=5 clones=11 dynamic-micro-ops=18
 // TRACE: vpto-scheduler: remat-result function=remat_over_limit accepted=true initial-peak=34 final-peak=32 second-schedule=success
 // TRACE: vpto-scheduler: remat-summary function=remat_below_limit changed=false reason=no-high-pressure-region
 
@@ -77,7 +80,6 @@ module attributes {pto.target_arch = "a5"} {
       %x26: !pto.vreg<64xi32>,
       %x27: !pto.vreg<64xi32>,
       %x28: !pto.vreg<64xi32>,
-      %x29: !pto.vreg<64xi32>,
       %source: !pto.ptr<i32, ub>) {
     %zero = arith.constant 0 : i32
     %c64 = arith.constant 64 : i32
@@ -89,14 +91,17 @@ module attributes {pto.target_arch = "a5"} {
     pto.vecscope {
       %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
       %loaded = pto.vlds %source[%offset] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %cheap = pto.vdup %zero, %mask : i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %root = pto.vci %zero : i32 -> !pto.vreg<64xi32>
       %index0_base = pto.vadds %root, %zero, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %index0 = pto.vadds %index0_base, %zero, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %index1 = pto.vadds %root, %c64, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
       %index2 = pto.vadds %root, %c128, %mask : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
-      %pre0 = pto.vcmp %index0, %index0, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
       %pre1 = pto.vcmp %index1, %index1, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
       %pre2 = pto.vcmp %index2, %index2, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+      %pre_loaded = pto.vcmp %loaded, %loaded, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+      // The one-op and three-op candidates have equal coverage. Completing the
+      // cheap recipe DAG wins because it also makes predecessors dead.
       scf.for %i = %lower to %upper step %step {
         %score0 = pto.vmax %x0, %x0, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
         %score1 = pto.vmax %x1, %x1, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
@@ -127,11 +132,10 @@ module attributes {pto.target_arch = "a5"} {
         %score26 = pto.vmax %x26, %x26, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
         %score27 = pto.vmax %x27, %x27, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
         %score28 = pto.vmax %x28, %x28, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
-        %score29 = pto.vmax %x29, %x29, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
-        %loaded_use = pto.vmax %loaded, %loaded, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
-        %use0 = pto.vcmp %index0, %index0, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %use0 = pto.vmax %cheap, %index0, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
         %use1 = pto.vcmp %index1, %index1, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
         %use2 = pto.vcmp %index2, %index2, %mask, "eq" : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.mask<b32>
+        %loaded_use = pto.vmax %loaded, %loaded, %mask : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
       }
     }
     return
