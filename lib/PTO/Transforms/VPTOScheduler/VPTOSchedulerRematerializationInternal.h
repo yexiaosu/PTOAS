@@ -35,7 +35,7 @@ constexpr unsigned kMaxCandidates = 16;
 constexpr unsigned kMaxGroupsPerCandidate = 4;
 constexpr unsigned kMaxUsesPerGroup = 2;
 constexpr unsigned kMaxUseGap = 64;
-constexpr unsigned kMaxCloneOperations = 64;
+constexpr unsigned kMaxCloneOperations = 96;
 constexpr uint64_t kMaxDynamicMicroOps = 2048;
 constexpr int64_t kPressureHeadroom = 1;
 

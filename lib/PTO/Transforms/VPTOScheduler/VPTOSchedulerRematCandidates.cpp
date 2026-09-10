@@ -228,6 +228,7 @@ static std::optional<RematCandidate> buildCandidate(
     if (producerPosition != positions.end()) {
         affected.insert(producerPosition->second.regionIndex);
     }
+    bool hasLoopCarriedGroup = false;
     for (UseGroup& group : candidate.groups) {
         for (Value operand : root->getOperands()) {
             if (!dominance.dominates(operand, group.insertionPoint)) {
@@ -242,10 +243,11 @@ static std::optional<RematCandidate> buildCandidate(
             }
         }
         std::optional<LoopCost> loopCost = getLoopCost(producer, group.insertionPoint);
-        if (!loopCost || !loopCost->crossedLoop) {
-            rejection = loopCost ? "not-loop-carried" : "unknown-loop-cost";
+        if (!loopCost) {
+            rejection = "unknown-loop-cost";
             return std::nullopt;
         }
+        hasLoopCarriedGroup |= loopCost->crossedLoop;
         group.dynamicMultiplier = loopCost->multiplier;
         uint64_t groupCost = 0;
         uint64_t updatedCost = 0;
@@ -257,6 +259,10 @@ static std::optional<RematCandidate> buildCandidate(
         }
         candidate.dynamicMicroOps = updatedCost;
         affected.insert(group.regionIndex);
+    }
+    if (!hasLoopCarriedGroup) {
+        rejection = "no-loop-carried-use";
+        return std::nullopt;
     }
     candidate.cloneOperations = static_cast<unsigned>(candidate.groups.size()) * 2;
     candidate.affectedRegions.append(affected.begin(), affected.end());
