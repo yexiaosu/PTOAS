@@ -60,6 +60,18 @@ def _normalize_generated_ptodsl(source: str) -> str:
     )
 
 
+def _mark_generated_pto_vector_kernel(pto_path: Path) -> None:
+    source = pto_path.read_text(encoding="utf-8")
+    marker = 'module attributes {pto.backend = "vpto", pto.target_arch = "a5"}'
+    replacement = (
+        'module attributes {pto.backend = "vpto", '
+        'pto.kernel_kind = #pto.kernel_kind<vector>, pto.target_arch = "a5"}'
+    )
+    if marker not in source:
+        raise RuntimeError("generated PTO is missing the expected VPTO child module")
+    pto_path.write_text(source.replace(marker, replacement, 1), encoding="utf-8")
+
+
 def _install_fixture_frontend_compat(dump_pto: Path) -> None:
     from pto_compile_patch import install_pto_compile_patch
     from tilelang.jit.adapter import libgen
@@ -74,6 +86,7 @@ def _install_fixture_frontend_compat(dump_pto: Path) -> None:
             src_path,
             out_path,
         )
+        _mark_generated_pto_vector_kernel(Path(out_path))
         dump_pto.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(out_path, dump_pto)
         return result
