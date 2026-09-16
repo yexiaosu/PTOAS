@@ -274,12 +274,6 @@ discoverCppIncludeDirs(llvm::StringRef ascendHome,
   return includeDirs;
 }
 
-static bool compileDeviceLLVMToObject(llvm::StringRef llPath,
-                                      llvm::StringRef outObjPath,
-                                      llvm::StringRef targetCPU,
-                                      llvm::StringRef bishengPath,
-                                      llvm::StringRef stderrPath,
-                                      llvm::raw_ostream &diagOS);
 static bool compileHostStubToObject(llvm::StringRef stubPath,
                                     llvm::StringRef outObjPath,
                                     llvm::StringRef moduleId,
