@@ -1441,7 +1441,9 @@ createDriverContext(DialectRegistry &registry, MLIRContext *borrowedContext,
   auto mode = mlir::pto::bishengSchedulerMode.getValue();
   bool explicitLegacy = mlir::pto::enableBishengVecMISched.getNumOccurrences() != 0;
   if (explicitLegacy) {
-      mode = mlir::pto::enableBishengVecMISched ? BishengSchedulerMode::On : BishengSchedulerMode::Off;
+      mode = mlir::pto::enableBishengVecMISched
+                 ? mlir::pto::BishengSchedulerMode::On
+                 : mlir::pto::BishengSchedulerMode::Off;
   }
   context->setBishengSchedulerMode(mode);
   context->setVFSIMTSizeFixMode(mlir::pto::vptoFixVFSIMTSize);
