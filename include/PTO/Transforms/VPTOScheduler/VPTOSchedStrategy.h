@@ -52,6 +52,8 @@ struct VPTOSchedCandidate {
   SmallVector<int64_t, mlir::pto::kValue2> lookaheadPeak;
   SmallVector<int64_t, mlir::pto::kValue2> lookaheadEnd;
   unsigned lookaheadSteps = 0;
+  /// Introduces a live range without releasing one in the same pressure set.
+  /// A release in another register class cannot close this frontier.
   bool opensPressureFrontier = false;
   bool advancesPressureClosure = false;
 };

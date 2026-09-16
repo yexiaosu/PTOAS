@@ -128,11 +128,15 @@ initializeCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
                                pressure.projected,
                                0,
                                false};
-  candidate.opensPressureFrontier =
-      llvm::any_of(pressure.introduced,
-                   [](int64_t value) { return value > 0; }) &&
-      llvm::all_of(pressure.released,
-                   [](int64_t value) { return value == 0; });
+  // Register classes are not interchangeable: consuming a vector while
+  // producing a predicate still opens a new predicate live range. Treating
+  // any release as relief can hoist live-out masks across a pressure peak.
+  for (auto [index, introduced] : llvm::enumerate(pressure.introduced)) {
+    if (introduced > 0 && pressure.released[index] == 0) {
+      candidate.opensPressureFrontier = true;
+      break;
+    }
+  }
   candidate.advancesPressureClosure =
       closureGroup && closureGroup->units.contains(&unit);
   return candidate;
