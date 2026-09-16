@@ -1,0 +1,11 @@
+# Issue 1506 simulator fixture
+
+`kernel.pto` is unchanged from https://gist.github.com/erhsh/6b90ba807d0d16a29a7b23fb9f5dc79b at gist revision `53d2cc302bceec97867ac7c40783d8b56aa8e3b8`. The issue is https://github.com/hw-native-sys/PTOAS/issues/1506. Neither host launch arguments nor input/golden data were supplied in the gist. This fixture reconstructs a valid workload from the IR; it does not claim to reproduce the issue's original input data or hardware timing.
+
+The kernel computes attention with logits `Q K^T / 8 + Rh[..., key // 14] + Rw[..., key % 14]`, then softmax and multiplication by V. Q, K, V and output use contiguous `[2,196,12,64]` storage, with batch/head/token element strides `150528,64,768`. Relative biases use contiguous `[2,12,196,16]` storage with 14 active columns and two padding columns; their batch/head/token strides are `37632,3136,16`. The batch count is 2. Launch uses the issue's BlockDim 28 (56 AIV blocks).
+
+Input uses NumPy seed 1506, Q/K/V normal standard deviation 0.25 and bias standard deviation 0.125, rounded to BF16. Output is initialized to NaN to detect unwritten elements. Golden uses float32 attention followed by BF16 rounding. Strict comparison checks all 301056 outputs for finiteness and `abs(actual - expected) <= 0.001 + 0.02 * abs(expected)`; no mismatching elements are allowed. Four-way output bitwise equality is reported separately from this numerical tolerance.
+
+The matrix runner is `test/vpto/scripts/run_issue1506_matrix.sh`. It first runs the repository vadd smoke case, then runs the original kernel with `(PTOAS scheduler, Bisheng scheduler)` equal to `(off,false)`, `(on,false)`, `(off,true)`, and `(on,true)`, three times each. All other PTOAS options use the selected base's defaults, including Bisheng VF auto-sync. `true` for Bisheng preserves that compiler's default vector MI scheduler behavior, exactly as the PTOAS option defines it.
+
+Only this test fixture is added to source base `9d3bd3323ab48fdb1cf199d9a2e10d848afb5b0d`; no compiler source or scheduling defaults are changed. The host's two `reinterpret_cast<char *>` uses access the object representation of bounded uint16 arrays for binary file I/O, as permitted by C++.
