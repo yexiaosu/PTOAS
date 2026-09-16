@@ -151,7 +151,7 @@ pto.tcolmax ins(%src : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=16,
 ### `pto.tcolargmax` — 列最大值索引规约
 
 ```mlir
-pto.tcolargmax ins(<src>, <tmp> : <src_type>, <tmp_type>)
+pto.tcolargmax ins(<src>[, <tmp>] : <src_type>[, <tmp_type>])
                outs(<dst> : <dst_type>)
 ```
 
@@ -167,22 +167,29 @@ For each column j:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
-| `tmp` | `pto.tile_buf` | 临时缓冲区，与 `src` 同 shape 和元素类型 |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区，容量和类型要求见下文 |
 | `dst` | `pto.tile_buf` | 目标 tile，存储每列最大值的行索引 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
 
 **约束：**
 
-- **实现检查（A2A3/A5）**
-  - `src`、`tmp`、`dst` 必须使用 `loc=vec`
-  - 所有 tile 使用 ND-style 布局（`blayout=row_major`, `slayout=none_box`）
-  - `tmp` 必须与 `src` 具有相同的 shape、valid shape 和元素类型
-  - `src` 元素类型必须为 `f16` 或 `f32`
-  - `dst` 元素类型必须为 `i32` 或 `ui32`
-  - `src valid row != 0` 且 `src valid column != 0`
-  - `dst valid row == 1`
-  - `src valid column == dst valid column`
+- **公共约束（A2A3/A5）**
+  - `src`、`dst` 必须使用 `loc=vec` 和 ND-style 布局（`blayout=row_major`、`slayout=none_box`）。
+  - `src` 支持 8、16、32 位整数以及 `f16`、`bf16`、`f32`；`dst` 为 32 位整数索引，例如 `i32` 或 `ui32`。
+  - `src` 的有效行数、有效列数必须非零；`dst valid_shape[0] == 1`，源和目标的有效列数相等。
+  - `tmp` 可省略。显式提供时必须是 `loc=vec`、`blayout=row_major` 的 tile。
+  - 动态有效维度在运行时满足相同条件。
+
+- **显式临时缓冲区（A2A3）**
+  - `tmp` 与 `src` 的元素类型相同，容量至少为 32 字节；不要求物理 shape 相同。
+  - 若二者的 valid shape 完全相同，满足上述容量条件即可。
+  - 否则，`tmp` 的有效行数至少为 1。设源有效列数为 `C`，每个元素占 `E` 字节，
+    `R = ceil(C / (256 / E))`，`B = 32 / E`，则临时缓冲区的有效列数至少为
+    `(ceil(2 * R / B) + ceil(R / B)) * B`。动态 `C` 的缓冲区大小需由调用方保证。
+
+- **显式临时缓冲区（A5）**
+  - `tmp` 保留为可选缓冲区参数，不要求与 `src` 的物理 shape、valid shape 或元素类型相同。
 
 **示例：**
 
@@ -255,7 +262,7 @@ pto.tcolmin ins(%src : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=16,
 ### `pto.tcolargmin` — 列最小值索引规约
 
 ```mlir
-pto.tcolargmin ins(<src>, <tmp> : <src_type>, <tmp_type>)
+pto.tcolargmin ins(<src>[, <tmp>] : <src_type>[, <tmp_type>])
                outs(<dst> : <dst_type>)
 ```
 
@@ -271,22 +278,29 @@ For each column j:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
-| `tmp` | `pto.tile_buf` | 临时缓冲区，与 `src` 同 shape 和元素类型 |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区，容量和类型要求见下文 |
 | `dst` | `pto.tile_buf` | 目标 tile，存储每列最小值的行索引 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
 
 **约束：**
 
-- **实现检查（A2A3/A5）**
-  - `src`、`tmp`、`dst` 必须使用 `loc=vec`
-  - 所有 tile 使用 ND-style 布局（`blayout=row_major`, `slayout=none_box`）
-  - `tmp` 必须与 `src` 具有相同的 shape、valid shape 和元素类型
-  - `src` 元素类型必须为 `f16` 或 `f32`
-  - `dst` 元素类型必须为 `i32` 或 `ui32`
-  - `src valid row != 0` 且 `src valid column != 0`
-  - `dst valid row == 1`
-  - `src valid column == dst valid column`
+- **公共约束（A2A3/A5）**
+  - `src`、`dst` 必须使用 `loc=vec` 和 ND-style 布局（`blayout=row_major`、`slayout=none_box`）。
+  - `src` 支持 8、16、32 位整数以及 `f16`、`bf16`、`f32`；`dst` 为 32 位整数索引，例如 `i32` 或 `ui32`。
+  - `src` 的有效行数、有效列数必须非零；`dst valid_shape[0] == 1`，源和目标的有效列数相等。
+  - `tmp` 可省略。显式提供时必须是 `loc=vec`、`blayout=row_major` 的 tile。
+  - 动态有效维度在运行时满足相同条件。
+
+- **显式临时缓冲区（A2A3）**
+  - `tmp` 与 `src` 的元素类型相同，容量至少为 32 字节；不要求物理 shape 相同。
+  - 若二者的 valid shape 完全相同，满足上述容量条件即可。
+  - 否则，`tmp` 的有效行数至少为 1。设源有效列数为 `C`，每个元素占 `E` 字节，
+    `R = ceil(C / (256 / E))`，`B = 32 / E`，则临时缓冲区的有效列数至少为
+    `(ceil(2 * R / B) + ceil(R / B)) * B`。动态 `C` 的缓冲区大小需由调用方保证。
+
+- **显式临时缓冲区（A5）**
+  - `tmp` 保留为可选缓冲区参数，不要求与 `src` 的物理 shape、valid shape 或元素类型相同。
 
 **示例：**
 
@@ -307,8 +321,12 @@ pto.tcolargmin ins(%src, %tmp : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=
 ### `pto.tcolsum` — 列求和规约
 
 ```mlir
-pto.tcolsum ins(<src>, <tmp> : <src_type>, <tmp_type>)
-            outs(<dst> : <dst_type>) isBinary = false
+// 不提供临时缓冲区
+pto.tcolsum ins(<src> : <src_type>) outs(<dst> : <dst_type>)
+
+// 显式临时缓冲区；属性字典位于 ins 内、类型列表之前
+pto.tcolsum ins(<src>, <tmp> {isBinary = <bool>} : <src_type>, <tmp_type>)
+            outs(<dst> : <dst_type>)
 ```
 
 **语义：**
@@ -323,7 +341,7 @@ For each column j:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
-| `tmp` | `pto.tile_buf` | 临时缓冲区，用于中间计算 |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区，用于中间计算 |
 | `dst` | `pto.tile_buf` | 目标 tile，行向量，存储每列的求和结果 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
@@ -334,27 +352,35 @@ For each column j:
   - `true` — 使用二叉规约树
   - `false` — 使用默认规约方式
 
+显式临时缓冲区形式中可写 `{isBinary = true}` 或 `{isBinary = false}`；省略属性时采用默认值 `false`。
+使用二叉规约形式时应同时提供 `tmp` 和 `{isBinary = true}`。
+
 **约束：**
 
 - **实现检查（A2A3）**
-  - `src`、`tmp`、`dst` 必须使用 `loc=vec`
+  - `src`、`dst` 和显式提供的 `tmp` 必须使用 `loc=vec`
   - 所有 tile 使用 ND-style 布局（`blayout=row_major`, `slayout=none_box`）
   - 数据类型：`f16`、`f32`、`i16`、`i32`
-  - 元素类型一致：`dst_type == tmp_type == src_type`
+  - 元素类型一致：`dst_type == src_type`；有 `tmp` 时其元素类型也必须相同
   - `src valid column == dst valid column`
 
 - **实现检查（A5）**
-  - `src`、`tmp`、`dst` 必须使用 `loc=vec`
+  - `src`、`dst` 和显式提供的 `tmp` 必须使用 `loc=vec`
   - 所有 tile 使用 ND-style 布局（`blayout=row_major`, `slayout=none_box`）
   - 数据类型：`i8`、`i16`、`i32`、`f16`、`bf16`、`f32`
-  - 元素类型一致：`dst_type == tmp_type == src_type`
+  - 元素类型一致：`dst_type == src_type`；有 `tmp` 时其元素类型也必须相同
   - `src valid row` 和 `src valid column` 必须非零
   - `src valid column == dst valid column`
+
+- **二叉规约临时缓冲区**
+  - 源 valid shape 和元素字节大小必须静态已知。
+  - `tmp` 的物理列数至少为源有效列数，容量至少为
+    `ceil(src valid_shape[0] / 2) * src valid_shape[1] * sizeof(dtype)` 字节。
 
 **示例：**
 
 ```mlir
-pto.tcolsum ins(%src, %tmp : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
+pto.tcolsum ins(%src, %tmp {isBinary = false} : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
                 v_row=16, v_col=16, blayout=row_major, slayout=none_box,
                 fractal=512, pad=0>,
                 !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
@@ -362,7 +388,7 @@ pto.tcolsum ins(%src, %tmp : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
                 fractal=512, pad=0>)
             outs(%dst : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=16,
                 v_row=1, v_col=16, blayout=row_major, slayout=none_box,
-                fractal=512, pad=0>) isBinary = false
+                fractal=512, pad=0>)
 ```
 
 ---
@@ -416,7 +442,7 @@ pto.trowexpand ins(%src : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=1,
 ### `pto.trowmax` — 行最大值规约
 
 ```mlir
-pto.trowmax ins(<src> : <src_type>) outs(<dst> : <dst_type>)
+pto.trowmax ins(<src>[, <tmp>] : <src_type>[, <tmp_type>]) outs(<dst> : <dst_type>)
 ```
 
 **语义：**
@@ -431,6 +457,7 @@ For each row i:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区；A2A3 要求与源元素类型相同且容量至少为 32 字节 |
 | `dst` | `pto.tile_buf` | 目标 tile，列向量，存储每行的最大值 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
@@ -445,6 +472,9 @@ For each row i:
   - 元素类型一致：`src_type == dst_type`
   - `src valid column != 0` 且 `src valid row != 0`
   - `src valid row == dst valid row`
+  - 非空目标满足 `dst valid_shape[1] == 1`，与物理列数及行/列主序无关
+  - 完全为空的 `dst valid_shape = [0, 0]` 表示不写入任何元素，此时跳过源非空、有效行相等及目标有效列为 1 的约束；只有一个有效维度为 0 不属于此情况
+  - 提供 `tmp` 时必须使用 `loc=vec`；A2A3 要求其元素类型与 `src` 相同、容量至少为 32 字节；A5 不要求其 shape、valid shape 或元素类型与源相同
 
 **示例：**
 
@@ -515,7 +545,7 @@ pto.trowargmax ins(%src, %tmp : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=
 ### `pto.trowmin` — 行最小值规约
 
 ```mlir
-pto.trowmin ins(<src>, <tmp> : <src_type>, <tmp_type>)
+pto.trowmin ins(<src>[, <tmp>] : <src_type>[, <tmp_type>])
             outs(<dst> : <dst_type>)
 ```
 
@@ -531,7 +561,7 @@ For each row i:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
-| `tmp` | `pto.tile_buf` | 临时缓冲区，用于中间计算 |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区；A2A3 要求与源元素类型相同且容量至少为 32 字节 |
 | `dst` | `pto.tile_buf` | 目标 tile，列向量，存储每行的最小值 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
@@ -546,6 +576,9 @@ For each row i:
   - 元素类型一致：`src_type == dst_type`
   - `src valid column != 0` 且 `src valid row != 0`
   - `src valid row == dst valid row`
+  - 非空目标满足 `dst valid_shape[1] == 1`，与物理列数及行/列主序无关
+  - 完全为空的 `dst valid_shape = [0, 0]` 表示不写入任何元素，此时跳过源非空、有效行相等及目标有效列为 1 的约束；只有一个有效维度为 0 不属于此情况
+  - 提供 `tmp` 时必须使用 `loc=vec`；A2A3 要求其元素类型与 `src` 相同、容量至少为 32 字节；A5 不要求其 shape、valid shape 或元素类型与源相同
 
 **示例：**
 
@@ -619,7 +652,7 @@ pto.trowargmin ins(%src, %tmp : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=
 ### `pto.trowsum` — 行求和规约
 
 ```mlir
-pto.trowsum ins(<src> : <src_type>) outs(<dst> : <dst_type>)
+pto.trowsum ins(<src>[, <tmp>] : <src_type>[, <tmp_type>]) outs(<dst> : <dst_type>)
 ```
 
 **语义：**
@@ -634,6 +667,7 @@ For each row i:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区；A2A3 要求与源元素类型相同且容量至少为 32 字节 |
 | `dst` | `pto.tile_buf` | 目标 tile，列向量，存储每行的求和结果 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
@@ -648,6 +682,9 @@ For each row i:
   - 元素类型一致：`src_type == dst_type`
   - `src valid column != 0` 且 `src valid row != 0`
   - `src valid row == dst valid row`
+  - 非空目标满足 `dst valid_shape[1] == 1`，与物理列数及行/列主序无关
+  - 完全为空的 `dst valid_shape = [0, 0]` 表示不写入任何元素，此时跳过源非空、有效行相等及目标有效列为 1 的约束；只有一个有效维度为 0 不属于此情况
+  - 提供 `tmp` 时必须使用 `loc=vec`；A2A3 要求其元素类型与 `src` 相同、容量至少为 32 字节；A5 不要求其 shape、valid shape 或元素类型与源相同
 
 **示例：**
 
@@ -689,7 +726,7 @@ For each column j:
 - **实现检查（A2A3）**
   - `src` 和 `dst` 必须使用 `loc=vec`
   - 所有 tile 使用 ND-style 布局（`blayout=row_major`, `slayout=none_box`）
-  - 数据类型：`f16`、`f32`、`i16`、`i32`
+  - 数据类型：`f16`、`f32`、`i16`、`ui16`、`i32`、`ui32`
   - 元素类型一致：`dst_type == src_type`
   - `src valid column == dst valid column`
 
@@ -716,7 +753,7 @@ pto.tcolprod ins(%src : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
 ### `pto.trowprod` — 行乘积规约
 
 ```mlir
-pto.trowprod ins(<src>, <tmp> : <src_type>, <tmp_type>)
+pto.trowprod ins(<src>[, <tmp>] : <src_type>[, <tmp_type>])
              outs(<dst> : <dst_type>)
 ```
 
@@ -732,7 +769,7 @@ For each row i:
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | `src` | `pto.tile_buf` | 源 tile |
-| `tmp` | `pto.tile_buf` | 临时缓冲区，与 `src` 同 shape 和元素类型 |
+| `tmp` | `pto.tile_buf` | 可选临时缓冲区；A2A3 要求与源元素类型相同且容量至少为 32 字节 |
 | `dst` | `pto.tile_buf` | 目标 tile，列向量，存储每行的乘积结果 |
 
 **返回值：** 无。以 DPS 的形式写入 `dst`。
@@ -742,12 +779,14 @@ For each row i:
 - **实现检查（A2A3/A5）**
   - `src` 和 `dst` 必须使用 `loc=vec`
   - `src` 使用 ND-style 布局（`blayout=row_major`, `slayout=none_box`）
-  - `tmp` 必须与 `src` 具有相同的 shape 和元素类型
   - `dst` 布局：推荐使用 DN-style 1D 列向量（`cols=1`, `blayout=col_major`）；也兼容 ND-style 2D tile（`valid column == 1`）
   - 数据类型：`i16`、`i32`、`f16`、`f32`
   - 元素类型一致：`src_type == dst_type`
   - `src valid column != 0` 且 `src valid row != 0`
   - `src valid row == dst valid row`
+  - 非空目标满足 `dst valid_shape[1] == 1`，与物理列数及行/列主序无关
+  - 完全为空的 `dst valid_shape = [0, 0]` 表示不写入任何元素，此时跳过源非空、有效行相等及目标有效列为 1 的约束；只有一个有效维度为 0 不属于此情况
+  - 提供 `tmp` 时必须使用 `loc=vec`；A2A3 要求其元素类型与 `src` 相同、容量至少为 32 字节；A5 不要求其 shape、valid shape 或元素类型与源相同
 
 **示例：**
 
@@ -791,19 +830,23 @@ For each element (i, j):
 
 **约束：**
 
-- **实现检查（A2A3）**
+- **使用约束（A2A3）**
   - `src0`、`src1`、`dst` 元素类型一致
   - 数据类型：`i16`、`i32`、`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
   - `src0` 与 `dst` 具有相同的 shape 和 valid_shape
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp`：A2A3 的显式临时缓冲区形式使用列主序、每行一个标量的广播源；缓冲区容量要求见下文
 
-- **实现检查（A5）**
+- **使用约束（A5）**
   - `src0`、`src1`、`dst` 元素类型一致
   - 数据类型：`i8`、`i16`、`i32`、`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
   - `src0` 与 `dst` 具有相同的 shape 和 valid_shape
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp` 可保留；不要求其 shape 与源相同
+
+A2A3 显式提供 `tmp` 时，它必须位于 `vec`，与目标元素类型相同。设目标有效行数为 `M`，
+所需容量为：`M < 256` 时 `ceil(M / 8) * 256` 字节，否则为 `7680` 字节；
+动态 `M` 按 `8192` 字节预留。
 
 **示例：**
 
@@ -812,7 +855,7 @@ pto.trowexpandsub ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
                       v_row=16, v_col=16, blayout=row_major, slayout=none_box,
                       fractal=512, pad=0>,
                       !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=1,
-                      v_row=16, v_col=1, blayout=row_major, slayout=none_box,
+                      v_row=16, v_col=1, blayout=col_major, slayout=none_box,
                       fractal=512, pad=0>,
                       !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
                       v_row=16, v_col=16, blayout=row_major, slayout=none_box,
@@ -850,11 +893,10 @@ For each element (i, j):
 
 **约束：**
 
-- **实现检查（A2A3/A5）**
-  - `src0`、`src1`、`dst` 元素类型一致
-  - 数据类型：`f16`、`f32`
-  - `dst` 使用 `blayout=row_major`
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+- `src0`、`src1`、`dst` 元素类型一致，`dst` 使用 `blayout=row_major`。
+- A2A3 支持 `i16`、`i32`、`f16`、`f32`；A5 还支持 `i8`。
+- `tmp` 可选；A2A3 显式提供时采用列主序、每行一个标量的广播源，临时缓冲区位于 `vec`，
+  与目标元素类型相同，容量要求与 `pto.trowexpandsub` 相同。A5 不要求 `tmp` 与源同 shape。
 
 **示例：**
 
@@ -863,7 +905,7 @@ pto.trowexpandmul ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
                       v_row=16, v_col=16, blayout=row_major, slayout=none_box,
                       fractal=512, pad=0>,
                       !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=1,
-                      v_row=16, v_col=1, blayout=row_major, slayout=none_box,
+                      v_row=16, v_col=1, blayout=col_major, slayout=none_box,
                       fractal=512, pad=0>,
                       !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
                       v_row=16, v_col=16, blayout=row_major, slayout=none_box,
@@ -913,11 +955,12 @@ For each element (i, j):
 
 **约束：**
 
-- **实现检查（A2A3/A5）**
+- **目标约束（A2A3/A5）**
   - `src0`、`src1`、`dst` 元素类型一致
-  - 仅支持浮点类型：`f16`、`f32`
+  - A2A3 支持 `f16`、`f32`；A5 的默认精度模式还支持 `i8`、`i16`、`i32`
   - `dst` 使用 `blayout=row_major`
-  - 高精度模式下 `tmp` 操作数必须提供
+  - 高精度模式用于 `f16`、`f32`，且必须提供 `tmp`
+  - A2A3 显式提供 `tmp` 时，广播源采用列主序、每行一个标量；缓冲区类型和容量要求与 `pto.trowexpandsub` 相同
 
 **示例：**
 
@@ -1210,7 +1253,7 @@ For each element (i, j):
 
 - **实现检查（A2A3/A5）**
   - `src0`、`src1`、`dst` 元素类型一致
-  - 仅支持浮点类型：`f16`、`f32`
+  - A2A3 支持 `f16`、`f32`；A5 的默认精度模式还支持 `i8`、`i16`、`i32`；高精度模式用于 `f16`、`f32`
   - `src0` 与 `dst` 具有相同的 shape 和 valid_shape
   - `src0`、`src1`、`dst` 使用 `blayout=row_major`
   - `src1 valid_shape[1] == dst valid_shape[1]`
@@ -1424,7 +1467,11 @@ For each element (i, j):
   - `src0`、`src1`、`dst` 元素类型一致
   - 仅支持浮点类型：`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp` 必须与目标元素类型相同；A5 接受该参数，不要求它与源具有相同的 shape 或 valid shape
+
+广播时，一个输入的有效区域与目标相同并使用行主序，另一个输入与目标有效行数相同。
+广播输入使用行主序时有效列数为 `32 / sizeof(dtype)`，使用列主序时有效列数为 1。
+A2A3 的显式 `tmp` 形式使用列主序广播输入。目标有效区域为 `[0, 0]` 时不写入数据。
 
 **示例：**
 
@@ -1472,13 +1519,17 @@ For each element (i, j):
   - `src0`、`src1`、`dst` 元素类型一致
   - 数据类型：`i16`、`i32`、`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp` 位于 `vec`，与目标元素类型相同；使用列主序的标量广播源，容量要求与 `pto.trowexpandsub` 相同
 
 - **实现检查（A5）**
   - `src0`、`src1`、`dst` 元素类型一致
-  - 数据类型：`i8`、`i16`、`i32`、`f16`、`bf16`、`f32`
+  - 数据类型：`i8`、`i16`、`i32`、`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp` 必须与目标元素类型相同；A5 接受该参数，不要求它与源具有相同的 shape 或 valid shape
+
+广播时，一个输入的有效区域与目标相同并使用行主序，另一个输入与目标有效行数相同。
+广播输入使用行主序时有效列数为 `32 / sizeof(dtype)`，使用列主序时有效列数为 1。
+A2A3 的显式 `tmp` 形式使用列主序广播输入。目标有效区域为 `[0, 0]` 时不写入数据。
 
 **示例：**
 
@@ -1526,13 +1577,17 @@ For each element (i, j):
   - `src0`、`src1`、`dst` 元素类型一致
   - 数据类型：`i16`、`i32`、`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp` 位于 `vec`，与目标元素类型相同；使用列主序的标量广播源，容量要求与 `pto.trowexpandsub` 相同
 
 - **实现检查（A5）**
   - `src0`、`src1`、`dst` 元素类型一致
-  - 数据类型：`i8`、`i16`、`i32`、`f16`、`bf16`、`f32`
+  - 数据类型：`i8`、`i16`、`i32`、`f16`、`f32`
   - `dst` 使用 `blayout=row_major`
-  - 可选 `tmp` 操作数：用于 pto-isa 中需要 tmp 的重载
+  - 可选 `tmp` 必须与目标元素类型相同；A5 接受该参数，不要求它与源具有相同的 shape 或 valid shape
+
+广播时，一个输入的有效区域与目标相同并使用行主序，另一个输入与目标有效行数相同。
+广播输入使用行主序时有效列数为 `32 / sizeof(dtype)`，使用列主序时有效列数为 1。
+A2A3 的显式 `tmp` 形式使用列主序广播输入。目标有效区域为 `[0, 0]` 时不写入数据。
 
 **示例：**
 

@@ -1,16 +1,16 @@
 # 核内 CV Pipe 通信操作
 
-本节描述了 PTO ISA 中用于 Cube（AIC）和 Vector（AIV）核心之间 FIFO 风格数据交换的前端 Pipe 通信接口。这些操作支持 MPMD（多程序多数据）执行模型，允许 Cube 核和 Vector 核通过管道进行异步数据交换。Pipe 条目可以是本地 tile buffer 或 GlobalTensor 风格的全局内存视图描述符。所有 Pipe 通信操作均需通过编译时属性 `id` 进行绑定，该属性将 `initialize_pipe` 与对应的 `tpush`/`tpop`/`tfree` 操作关联。
+本节描述 Cube（AIC）和 Vector（AIV）核心之间的 FIFO 数据交换接口。这些操作支持 MPMD（多程序多数据）执行模型，允许两端通过管道异步交换本地 tile。`aic_initialize_pipe`、`aiv_initialize_pipe` 通过编译时属性 `id` 与对应的数据操作关联；`initialize_l2g2l_pipe`、`initialize_l2l_pipe` 则返回用于后续操作的管线句柄。
 
 这一类操作的通用特性包括：
 
 - **dir_mask** 属性：控制 Pipe 通信方向，1 = C2V（Cube 到 Vector），2 = V2C（Vector 到 Cube），3 = 双向
 - **id** 属性：编译时整数常量，绑定初始化操作与生产/消费/释放操作
-- **slot_size** 属性：字节单位的逻辑 Pipe 总字节大小
+- **slot_size** 属性：单个逻辑 Pipe 条目的大小，单位为字节
 - **slot_num** 属性：可选，控制 FIFO 深度（默认 dir_mask=1/2 时为 8，dir_mask=3 时为 4）
-- **split** 属性：编译时属性（0=TILE_NO_SPLIT，1=TILE_UP_DOWN，2=TILE_LEFT_RIGHT）
+- **split** 属性：编译时属性，取值为 `0`、`1`、`2`、`3`、`4`；奇数尺寸分割的适用条件见 `pto.tpush_to_aiv`
 - **tpop 操作返回值**：`tpop_from_aic` 和 `tpop_from_aiv` 是有返回值的操作
-- **Pipe 条目类型**：tile entry（`!pto.tile_buf`）或全局条目（`!pto.tensor_view`）
+- **Pipe 条目类型**：本地条目（`!pto.tile_buf`）
 
 ---
 
@@ -30,8 +30,6 @@
 - [`pto.section.vector` — Vector 核代码区域](#ptosectionvector--vector-核代码区域)
 - [`pto.initialize_l2g2l_pipe` — 初始化 L2G2L 管线](#ptoinitialize_l2g2l_pipe--初始化-l2g2l-管线)
 - [`pto.initialize_l2l_pipe` — 初始化 L2L 管线](#ptoinitialize_l2l_pipe--初始化-l2l-管线)
-- [`pto.talloc_to_aiv` — C2V 生产者 FIFO 分配](#ptotalloc_to_aiv--c2v-生产者-fifo-分配)
-- [`pto.talloc_to_aic` — V2C 生产者 FIFO 分配](#ptotalloc_to_aic--v2c-生产者-fifo-分配)
 
 ---
 
@@ -40,20 +38,25 @@
 ### `pto.aic_initialize_pipe` — Cube 侧 Pipe 初始化
 
 ```mlir
-pto.aic_initialize_pipe {id = <id>, dir_mask = <dir>, slot_size = <size>,
-                         slot_num = <num>, local_slot_num = <local_num>,
-                         nosplit = <bool>,
-                         gm_slot_buffer = <buf>, gm_slot_tensor = <tensor>,
-                         c2v_consumer_buf = <c2v>, v2c_consumer_buf = <v2c>}
+pto.aic_initialize_pipe {[id = <id>,] dir_mask = <dir>, slot_size = <size>
+                         [, slot_num = <num>] [, local_slot_num = <local_num>]
+                         [, nosplit = <bool>]}
+    ([gm_slot_buffer = <buf> : <ptr_type>]
+     [, gm_slot_tensor = <tensor> : <tensor_view_type>]
+     [, c2v_consumer_buf = <c2v> : i32]
+     [, v2c_consumer_buf = <v2c> : i32])
 ```
+
+方括号表示可选项；操作数列表只在实际条目之间写逗号。属性放在 `{}` 中，SSA 操作数及其类型放在随后的 `()` 中。
+`slot_num` 可以直接写在前一组属性中，例如 `slot_num = 2`。
 
 **语义：**
 
-在 Cube 核中初始化 Pipe 通道，为双向或单向数据交换建立共享的 FIFO 缓冲区。该操作不产生返回值，仅完成初始化配置。对于本地缓冲区条目，Pipe 管理由运行时处理；对于全局内存条目，初始化绑定 GM FIFO 槽位描述符。
+在 Cube 核中初始化 Pipe 通道，为双向或单向的本地 tile 数据交换建立共享的 FIFO 缓冲区。该操作不产生返回值，仅完成初始化配置。
 
 **属性：**
 
-- `id` — Pipe 标识符。编译时整数常量，用于绑定此初始化操作与后续的 `tpush`/`tpop`/`tfree` 操作。必须在同一内核中唯一。
+- `id` — Pipe 标识符。非负 `i32` 常量，默认 `0`，用于绑定此初始化操作与后续的 `tpush`/`tpop`/`tfree` 操作。必须在同一内核中唯一。
 
 - `dir_mask` — 通信方向掩码。决定 Pipe 的通信模式：
   - `1` — C2V（Cube 到 Vector），仅允许 Cube 端推送，Vector 端消费
@@ -66,15 +69,15 @@ pto.aic_initialize_pipe {id = <id>, dir_mask = <dir>, slot_size = <size>,
 
 - `local_slot_num` — 可选，仅限 A2/A3。本地 Tile 缓冲区的 FIFO 深度。必须大于 0 且不超过 `slot_num`。A5 上必须省略此属性。
 
-- `nosplit` — 可选布尔属性。若为 `true`，禁用 Tile 分割，要求所有绑定的 `tpush`/`tpop`/`tfree` 操作的 `split` 属性为 0（`TILE_NO_SPLIT`）。
+- `nosplit` — 可选布尔属性，省略时不禁用分割。若为 `true`，禁用 Tile 分割，要求所有绑定的 `tpush`/`tpop`/`tfree` 操作的 `split` 属性为 0（`TILE_NO_SPLIT`）。
 
-- `gm_slot_buffer` — 可选，类型为 `!pto.ptr<T>`。全局内存 FIFO 插槽缓冲区指针。用于 GM 条目的 C2V 或 V2C 生产者推送。
+- `gm_slot_buffer` — 可选，类型为 `!pto.ptr<T>`。全局内存 FIFO 插槽缓冲区指针，用于本地 tile 的 GM 中转存储。
 
-- `gm_slot_tensor` — 可选，类型为 `!pto.tensor_view<...>`。全局内存 FIFO 的张量视图描述符。仅限 GM-only FIFO（全局条目专用）。
+- `gm_slot_tensor` — 可选，类型为 `!pto.tensor_view<...>`。描述本地 tile FIFO 的 GM 中转存储，与消费者缓冲区组合使用。
 
-- `c2v_consumer_buf` — 可选，类型为 `i32`。C2V 消费者计数缓冲区或导入值。用于同步 Vector 端的消费进度。
+- `c2v_consumer_buf` — 可选，类型为 `i32`。C2V 方向 Vector 消费者本地缓冲区的地址或导入地址值，单位为字节。
 
-- `v2c_consumer_buf` — 可选，类型为 `i32`。V2C 消费者计数缓冲区或导入值。用于同步 Cube 端的消费进度。
+- `v2c_consumer_buf` — 可选，类型为 `i32`。V2C 方向 Cube 消费者本地缓冲区的地址或导入地址值，单位为字节。
 
 **约束：**
 
@@ -91,6 +94,11 @@ pto.aic_initialize_pipe {id = <id>, dir_mask = <dir>, slot_size = <size>,
   - 必须出现在 Cube 内核中。
   - `local_slot_num` 必须省略（A5 不支持）。
   - 其他约束同 A2A3。
+
+- **缓冲区组合**
+  - `gm_slot_tensor` 与 `gm_slot_buffer` 互斥。
+  - 本地 tile FIFO 必须提供方向对应的消费者缓冲区：C2V 提供 `c2v_consumer_buf`，V2C 提供 `v2c_consumer_buf`，双向同时提供两者。
+  - `gm_slot_tensor` 与消费者缓冲区组合时，各目标都支持单向 C2V；V2C 和双向组合仅支持 A2A3。
 
 **示例：**
 
@@ -112,11 +120,13 @@ pto.aic_initialize_pipe {id = 0, dir_mask = 1, slot_size = 1024, nosplit = true}
 ### `pto.aiv_initialize_pipe` — Vector 侧 Pipe 初始化
 
 ```mlir
-pto.aiv_initialize_pipe {id = <id>, dir_mask = <dir>, slot_size = <size>,
-                         slot_num = <num>, local_slot_num = <local_num>,
-                         nosplit = <bool>,
-                         gm_slot_buffer = <buf>, gm_slot_tensor = <tensor>,
-                         c2v_consumer_buf = <c2v>, v2c_consumer_buf = <v2c>}
+pto.aiv_initialize_pipe {[id = <id>,] dir_mask = <dir>, slot_size = <size>
+                         [, slot_num = <num>] [, local_slot_num = <local_num>]
+                         [, nosplit = <bool>]}
+    ([gm_slot_buffer = <buf> : <ptr_type>]
+     [, gm_slot_tensor = <tensor> : <tensor_view_type>]
+     [, c2v_consumer_buf = <c2v> : i32]
+     [, v2c_consumer_buf = <v2c> : i32])
 ```
 
 **语义：**
@@ -158,18 +168,18 @@ pto.aiv_initialize_pipe {id = 0, dir_mask = 1, slot_size = 1024, nosplit = true}
 
 ```mlir
 pto.tpush_to_aiv(<pipe_entry> : <pipe_entry_type>)
-    {id = <id>, split = <split>}
+    {[id = <id>,] split = <split>}
 ```
 
 **语义：**
 
-从 Cube 核中推送一个 C2V Pipe 条目到 FIFO。对于 tile buffer 条目，执行 tile 传输；对于全局内存条目，提交 GM FIFO 槽位并推进生产者指针。该操作不产生返回值。
+从 Cube 核中推送一个本地 tile 条目到 C2V FIFO，执行 tile 传输。该操作不产生返回值。
 
 **参数：**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| `pipe_entry` | `!pto.tile_buf` 或 `!pto.tensor_view` | 要推送的 Pipe 条目，可为 tile buffer 或全局张量视图 |
+| `pipe_entry` | `!pto.tile_buf` | 要推送的本地 tile 条目 |
 
 **返回值：** 无。操作提交条目至 FIFO 后返回。
 
@@ -181,26 +191,27 @@ pto.tpush_to_aiv(<pipe_entry> : <pipe_entry_type>)
   - `0` — `TILE_NO_SPLIT`，不分割
   - `1` — `TILE_UP_DOWN`，按行分割
   - `2` — `TILE_LEFT_RIGHT`，按列分割
+  - `3` — 按奇数有效行数分割
+  - `4` — 按奇数有效列数分割
 
 **约束：**
 
 - **实现检查（A2A3/A5）**
-  - 必须出现在 Cube 内核中。
+  - 位于 Cube 内核或 `pto.section.cube` 中；`id` 为非负整数，默认 `0`。
   - `id` 必须匹配一个使用 `dir_mask=1` 或 `dir_mask=3` 的 `pto.aic_initialize_pipe` 操作。
-  - 对于全局内存条目，操作必须为对应的 `pto.talloc_to_aiv` 所支配（必须在该分配之后）。
+  - 输入类型不包括裸指针、`memref` 或 `partition_tensor_view`。本地 tile 的存储位置与传输方向匹配；Cube 累加结果通常使用 `loc=acc`。
+  - 对完整二维 tile，`split=1/2` 对应的有效行数/列数必须为偶数；`split=3/4` 则要求为奇数。
+  - `split=3/4` 仅用于经 GM 中转的本地 tile FIFO，初始化必须启用 C2V 并提供 `c2v_consumer_buf`。
+  - 当初始化配置 `acc_push_epilogue` 时，源为 `loc=acc` 的 tile，元素类型符合所选转换模式，且 `split=0`。
   - 若初始化操作的 `nosplit` 为 `true`，则 `split` 必须为 0。
 
 **示例：**
 
 ```mlir
 // Tile buffer 条目推送（按行分割）
-pto.tpush_to_aiv(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
-    v_row=16, v_col=16, blayout=row_major, slayout=none_box, fractal=1024, pad=0>)
+pto.tpush_to_aiv(%tile : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16,
+    v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
     {id = 0, split = 1}
-
-// 全局内存条目推送（无分割）
-pto.tpush_to_aiv(%entry : !pto.tensor_view<16x16xf32>)
-    {id = 0, split = 0}
 ```
 
 ---
@@ -209,7 +220,7 @@ pto.tpush_to_aiv(%entry : !pto.tensor_view<16x16xf32>)
 
 ```mlir
 pto.tpush_to_aic(<pipe_entry> : <pipe_entry_type>)
-    {id = <id>, split = <split>}
+    {[id = <id>,] split = <split>} [aiv_subblockid(<subblock_id>)]
 ```
 
 **语义：**
@@ -220,7 +231,9 @@ pto.tpush_to_aic(<pipe_entry> : <pipe_entry_type>)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| `pipe_entry` | `!pto.tile_buf` 或 `!pto.tensor_view` | 要推送的 Pipe 条目 |
+| `pipe_entry` | `!pto.tile_buf` | 要推送的本地 tile 条目 |
+
+`aiv_subblockid` 是可选 `i64` 操作数，用于提供 Vector 子块编号；仅适用于 `loc=vec` 的本地条目且 `split != 0`。
 
 **返回值：** 无。操作提交条目至 FIFO 后返回。
 
@@ -233,16 +246,18 @@ pto.tpush_to_aic(<pipe_entry> : <pipe_entry_type>)
 **约束：**
 
 - **实现检查（A2A3/A5）**
-  - 必须出现在 Vector 内核中。
+  - 位于 Vector 内核或 `pto.section.vector` 中；`id` 为非负整数，默认 `0`。
   - `id` 必须匹配一个使用 `dir_mask=2` 或 `dir_mask=3` 的 `pto.aiv_initialize_pipe` 操作。
-  - 其他约束同 `pto.tpush_to_aiv`。
+  - `split` 取 `0`、`1`、`2`、`3`、`4`；`nosplit=true` 时为 `0`。
+  - `split=3/4` 的 V2C 传输仅支持 A2A3，要求经 GM 中转的本地 tile FIFO、启用 V2C 且提供 `v2c_consumer_buf`；A5 V2C 不支持这两种模式。
+  - 输入为 Vector 生产者条目；分割时它表示本子块提供的部分，不能套用 Cube 完整输入 tile 的尺寸奇偶约束。
 
 **示例：**
 
 ```mlir
 // Vector 侧 V2C 推送
 pto.tpush_to_aic(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
-    v_row=16, v_col=16, blayout=row_major, slayout=none_box, fractal=1024, pad=0>)
+    v_row=16, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
     {id = 0, split = 1}
 ```
 
@@ -257,9 +272,9 @@ pto.tpush_to_aic(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
 
 **语义：**
 
-从 FIFO 中弹出一个 C2V Pipe 条目在 Vector 核中消费。该操作为 SSA 返回值操作，返回一个 tile buffer 或张量视图描述符，后续操作可使用该条目进行数据转移。
+从 FIFO 中弹出一个 C2V Pipe 条目在 Vector 核中消费。该操作返回一个本地 tile，供后续操作使用。
 
-**返回值：** 一个 Pipe 条目，类型为 `!pto.tile_buf<...>` 或 `!pto.tensor_view<...>`，取决于初始化配置。
+**返回值：** 一个本地 tile 条目，类型为 `!pto.tile_buf<...>`。
 
 **属性：**
 
@@ -281,10 +296,6 @@ pto.tpush_to_aic(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
 %tile = pto.tpop_from_aic {id = 0, split = 1}
     -> !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
                      v_row=16, v_col=16, blayout=row_major, slayout=none_box, fractal=1024, pad=0>
-
-// 张量视图返回值
-%entry = pto.tpop_from_aic {id = 0, split = 0}
-    -> !pto.tensor_view<16x16xf32>
 ```
 
 ---
@@ -300,7 +311,7 @@ pto.tpush_to_aic(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
 
 从 FIFO 中弹出一个 V2C Pipe 条目在 Cube 核中消费。结构与 `pto.tpop_from_aic` 相同，但方向相反（Cube 消费来自 Vector 的数据）。
 
-**返回值：** 一个 Pipe 条目，类型为 `!pto.tile_buf<...>` 或 `!pto.tensor_view<...>`。
+**返回值：** 一个本地 tile 条目，类型为 `!pto.tile_buf<...>`。
 
 **属性：**
 
@@ -329,21 +340,13 @@ pto.tpush_to_aic(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
 
 ```mlir
 pto.tfree_from_aic {id = <id>, split = <split>}
-
-// 或（针对全局内存条目）：
-pto.tfree_from_aic(<entry> : <pipe_entry_type>)
-    {id = <id>, split = <split>}
 ```
 
 **语义：**
 
-释放当前 C2V FIFO 消费者槽位在 Vector 核中。对于 tile buffer 条目，使用无操作数形式；对于全局内存条目，使用包含条目描述符的形式。该操作推进消费者指针，使下一个条目可用。
+在 Vector 核中释放当前 C2V FIFO 消费者槽位。该操作推进消费者指针，使下一个条目可用。
 
-**参数：**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| `entry` （可选） | `!pto.tensor_view<...>` | 针对全局内存条目的释放描述符（仅在释放 GM 条目时需要） |
+**参数：** 无操作数。
 
 **返回值：** 无。操作执行释放并返回。
 
@@ -358,17 +361,13 @@ pto.tfree_from_aic(<entry> : <pipe_entry_type>)
 - **实现检查（A2A3/A5）**
   - 必须出现在 Vector 内核中。
   - `id` 必须匹配一个使用 `dir_mask=1` 或 `dir_mask=3` 的 `pto.aiv_initialize_pipe` 操作。
-  - Tile buffer 释放使用无操作数形式；全局内存释放必须提供条目操作数。
+  - Tile buffer 释放使用无操作数形式。
 
 **示例：**
 
 ```mlir
 // Tile buffer 条目释放（无操作数）
 pto.tfree_from_aic {id = 0, split = 1}
-
-// 全局内存条目释放（带条目描述符）
-pto.tfree_from_aic(%entry : !pto.tensor_view<16x16xf32>)
-    {id = 0, split = 0}
 ```
 
 ---
@@ -377,21 +376,13 @@ pto.tfree_from_aic(%entry : !pto.tensor_view<16x16xf32>)
 
 ```mlir
 pto.tfree_from_aiv {id = <id>, split = <split>}
-
-// 或（针对全局内存条目）：
-pto.tfree_from_aiv(<entry> : <pipe_entry_type>)
-    {id = <id>, split = <split>}
 ```
 
 **语义：**
 
 释放当前 V2C FIFO 消费者槽位在 Cube 核中。结构与 `pto.tfree_from_aic` 相同，但方向相反。
 
-**参数：**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| `entry` （可选） | `!pto.tensor_view<...>` | 针对全局内存条目的释放描述符 |
+**参数：** 无操作数。
 
 **返回值：** 无。操作执行释放并返回。
 
@@ -412,10 +403,6 @@ pto.tfree_from_aiv(<entry> : <pipe_entry_type>)
 ```mlir
 // Cube 侧 V2C 释放（无操作数）
 pto.tfree_from_aiv {id = 0, split = 1}
-
-// Cube 侧 V2C 释放（全局内存条目）
-pto.tfree_from_aiv(%entry : !pto.tensor_view<16x16xf32>)
-    {id = 0, split = 0}
 ```
 
 ---
@@ -505,94 +492,6 @@ addr = import_peer_buffer(name, peer_func)
 %import_buf = pto.import_reserved_buffer
     {name = "c2v_slot_buffer",
      peer_func = @vector_kernel} -> i32
-```
-
----
-
-## 完整端到端示例
-
-以下示例展示了一个完整的 C2V Pipe 通信流程，其中 Cube 核生产数据并通过 Pipe 推送给 Vector 核消费：
-
-```mlir
-// Cube 核端（C2V 生产者）
-func.func @cube_kernel(%gm_slot_buffer : !pto.ptr<f32>,
-                       %src : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
-                                            v_row=16, v_col=16, blayout=row_major,
-                                            slayout=none_box, fractal=1024, pad=0>)
-    attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
-  %c0 = pto.constant 0 : index
-  %c1 = pto.constant 1 : index
-  %c16 = pto.constant 16 : index
-
-  // 创建全局内存 Pipe 的张量视图
-  %gm_slots = pto.make_tensor_view %gm_slot_buffer,
-    shape = [%c16, %c16], strides = [%c16, %c1]
-    : !pto.tensor_view<16x16xf32>
-
-  // 初始化 Pipe（C2V 模式）
-  pto.aic_initialize_pipe {id = 0, dir_mask = 1, slot_size = 1024}
-    (gm_slot_tensor = %gm_slots : !pto.tensor_view<16x16xf32>)
-
-  // 为推送分配全局内存条目
-  %entry = pto.talloc_to_aiv {id = 0, split = 0}
-    -> !pto.tensor_view<16x16xf32>
-
-  // 获取条目的分区视图并执行数据转移
-  %entry_partition = pto.partition_view %entry,
-    offsets = [%c0, %c0], sizes = [%c16, %c16]
-    : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
-
-  pto.tstore ins(%src : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
-                                      v_row=16, v_col=16, blayout=row_major,
-                                      slayout=none_box, fractal=1024, pad=0>)
-             outs(%entry_partition : !pto.partition_tensor_view<16x16xf32>)
-
-  // 推送条目到 Vector 核
-  pto.tpush_to_aiv(%entry : !pto.tensor_view<16x16xf32>)
-    {id = 0, split = 0}
-
-  func.return
-}
-
-// Vector 核端（C2V 消费者）
-func.func @vector_kernel(%gm_slot_buffer : !pto.ptr<f32>,
-                         %dst : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
-                                              v_row=16, v_col=16, blayout=row_major,
-                                              slayout=none_box, fractal=1024, pad=0>)
-    attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
-  %c0 = pto.constant 0 : index
-  %c1 = pto.constant 1 : index
-  %c16 = pto.constant 16 : index
-
-  // 创建全局内存 Pipe 的张量视图
-  %gm_slots = pto.make_tensor_view %gm_slot_buffer,
-    shape = [%c16, %c16], strides = [%c16, %c1]
-    : !pto.tensor_view<16x16xf32>
-
-  // 初始化 Pipe（C2V 消费者侧）
-  pto.aiv_initialize_pipe {id = 0, dir_mask = 1, slot_size = 1024}
-    (gm_slot_tensor = %gm_slots : !pto.tensor_view<16x16xf32>)
-
-  // 从 Pipe 弹出条目
-  %entry = pto.tpop_from_aic {id = 0, split = 0}
-    -> !pto.tensor_view<16x16xf32>
-
-  // 获取条目的分区视图并执行数据转移
-  %entry_partition = pto.partition_view %entry,
-    offsets = [%c0, %c0], sizes = [%c16, %c16]
-    : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
-
-  pto.tload ins(%entry_partition : !pto.partition_tensor_view<16x16xf32>)
-            outs(%dst : !pto.tile_buf<loc=vec, dtype=f32, rows=16, cols=16,
-                                      v_row=16, v_col=16, blayout=row_major,
-                                      slayout=none_box, fractal=1024, pad=0>)
-
-  // 释放消费者槽位
-  pto.tfree_from_aic(%entry : !pto.tensor_view<16x16xf32>)
-    {id = 0, split = 0}
-
-  func.return
-}
 ```
 
 ---
@@ -699,7 +598,7 @@ pipe = init_l2g2l_pipe(dir_mask, slot_size, slot_num, gm_addr, ...)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| `gm_addr` | `!pto.ptr<...>` | GM 空间中的中转缓冲区地址 |
+| `gm_addr` | 地址值或 GM 视图 | GM 中转存储的地址，可使用 `!pto.ptr`、GM `memref` 或相应地址表示 |
 | `local_addr` | 可选，本地缓冲区地址 | 本地 DMA 缓冲区（优化路径） |
 | `peer_local_addr` | 可选，对端本地缓冲区地址 | 对端核的本地缓冲区 |
 
@@ -716,9 +615,15 @@ pipe = init_l2g2l_pipe(dir_mask, slot_size, slot_num, gm_addr, ...)
 
 **约束：**
 
-- **实现检查（A2A3/A5）**
-  - `slot_size` 和 `slot_num` 必须大于 0。
-  - `gm_addr` 必须为合法的 GM 空间类型。
+- `dir_mask` 必须为 `1`（C2V）、`2`（V2C）或 `3`（双向）。
+- `slot_size`、`slot_num` 均为正 `i32` 整数，前者以字节计。
+- 若指定 `flag_base`，它必须非负；单向管线最多为 `14`，双向管线最多为 `12`。
+  多条管线使用的同步资源范围不能重叠。
+- 没有 `local_addr` 时，必须同时省略 `peer_local_addr` 和 `local_slot_num`。
+- 有 `local_addr` 时，`local_slot_num` 若提供必须满足 `1 <= local_slot_num <= slot_num`。
+- 有 `local_addr` 且 `dir_mask=3` 时必须提供 `peer_local_addr`；单向管线必须省略它。
+- 地址操作数的 IR 类型不被限定为单一指针类型；调用方应使 GM、本地和对端地址分别指向对应存储空间，
+  并保证底层缓冲区覆盖所配置的槽位。
 
 **示例：**
 
@@ -766,9 +671,13 @@ pipe = init_l2l_pipe(dir_mask, slot_size, slot_num, local_addr, ...)
 
 **约束：**
 
-- **实现检查（A2A3/A5）**
-  - `slot_size` 和 `slot_num` 必须大于 0。
-  - `local_addr` 必须为合法的本地空间类型。
+- `dir_mask` 必须为 `1`（C2V）、`2`（V2C）或 `3`（双向）。
+- `slot_size`、`slot_num` 均为正 `i32` 整数，前者以字节计。
+- 若指定 `flag_base`，它必须非负；单向管线最多为 `14`，双向管线最多为 `12`。
+  多条管线使用的同步资源范围不能重叠。
+- `local_addr` 必须提供；`dir_mask=3` 时还必须提供 `peer_local_addr`，单向管线必须省略对端地址。
+- 地址操作数可采用整数地址值等表示，不限于携带地址空间的类型；调用方应保证它们指向正确的本地存储，
+  且缓冲区覆盖所配置的槽位。
 
 **示例：**
 
@@ -776,78 +685,4 @@ pipe = init_l2l_pipe(dir_mask, slot_size, slot_num, local_addr, ...)
 %pipe = pto.initialize_l2l_pipe
     {dir_mask = 1, slot_size = 8192, slot_num = 2}
     (%local_buf : i64) -> !pto.pipe
-```
-
----
-
-### `pto.talloc_to_aiv` — C2V 生产者 FIFO 分配
-
-```mlir
-pto.talloc_to_aiv {(id = <N>,)? split = <S>} -> <entry_type>
-```
-
-**语义：**
-
-```text
-entry = alloc_c2v_producer_slot(id, split)
-// 在 Cube 侧为 C2V 方向分配一个 GlobalTensor FIFO 生产者条目
-```
-
-**参数：** 无操作数。
-
-**返回值：** `!pto.tensor_view<...>` — FIFO 条目描述符。
-
-**属性：**
-
-- `id` — 管线 ID（`i32`），默认值为 `0`。当存在多条管线时用于区分。
-- `split` — 分割因子（`i8`）。
-
-**约束：**
-
-- **实现检查（A2A3/A5）**
-  - 必须位于 `pto.section.cube` 或 Cube kernel 函数内部。
-  - 必须存在对应的 `pto.aic_initialize_pipe` 且 `dir_mask` 含 C2V 位。
-
-**示例：**
-
-```mlir
-%entry = pto.talloc_to_aiv {id = 0, split = 0}
-    -> !pto.tensor_view<16x16xf32>
-```
-
----
-
-### `pto.talloc_to_aic` — V2C 生产者 FIFO 分配
-
-```mlir
-pto.talloc_to_aic {(id = <N>,)? split = <S>} -> <entry_type>
-```
-
-**语义：**
-
-```text
-entry = alloc_v2c_producer_slot(id, split)
-// 在 Vector 侧为 V2C 方向分配一个 GlobalTensor FIFO 生产者条目
-```
-
-**参数：** 无操作数。
-
-**返回值：** `!pto.tensor_view<...>` — FIFO 条目描述符。
-
-**属性：**
-
-- `id` — 管线 ID（`i32`），默认值为 `0`。
-- `split` — 分割因子（`i8`）。
-
-**约束：**
-
-- **实现检查（A2A3/A5）**
-  - 必须位于 `pto.section.vector` 或 Vector kernel 函数内部。
-  - 必须存在对应的 `pto.aiv_initialize_pipe` 且 `dir_mask` 含 V2C 位。
-
-**示例：**
-
-```mlir
-%entry = pto.talloc_to_aic {id = 0, split = 0}
-    -> !pto.tensor_view<16x16xf16>
 ```

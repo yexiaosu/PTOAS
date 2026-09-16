@@ -12,3 +12,14 @@
 
 // CHECK: --enable-bisheng-vec-misched
 // CHECK-SAME: Use Bisheng's default vector MI scheduler behavior for VPTO device compilation instead of explicitly disabling the scheduler
+
+// RUN: ptoas --bisheng-vec-misched=auto --help > /dev/null
+// RUN: ptoas --bisheng-vec-misched=on --help > /dev/null
+// RUN: ptoas --bisheng-vec-misched=off --help > /dev/null
+// RUN: not ptoas --bisheng-vec-misched=invalid --help 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not ptoas --bisheng-vec-misched=auto --enable-bisheng-vec-misched=false %s 2>&1 | FileCheck %s --check-prefix=CONFLICT
+// RUN: pto-bisheng-scheduler-test | FileCheck %s --check-prefix=POLICY
+
+// INVALID: Cannot find option named 'invalid'
+// CONFLICT: --bisheng-vec-misched and --enable-bisheng-vec-misched cannot be combined
+// POLICY: Bisheng scheduler selection tests passed

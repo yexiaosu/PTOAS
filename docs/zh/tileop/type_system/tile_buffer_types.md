@@ -9,30 +9,36 @@
 ```mlir
 !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
 !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=16, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+!pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0, compact=1>
 ```
 
-现有样例中也可能看到兼容简写：
+也支持紧凑语法；物理尺寸和元素类型写在位置之后，其余字段按需指定：
 
 ```mlir
 !pto.tile_buf<vec, 1x64xi32>
+!pto.tile_buf<vec, 16x32xf16, valid=8x24, compact=1>
+!pto.tile_buf<vec, 16x32xf16, valid=?x?, blayout=row_major, slayout=none_box, fractal=512, pad=1>
 ```
 
-新文档和新样例更推荐显式 key-value 形式。
+紧凑语法中的 `valid=行数x列数` 对应 `v_row` / `v_col`，省略时等于物理尺寸。
+省略布局配置时使用 `blayout=row_major`、`slayout=none_box`、`fractal=512`、`pad=0`、
+`compact=0`。显式 key-value 语法中的可选 `compact` 位于 `pad` 之后。
 
 ## 参数
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| `loc` | 关键字 | 局部位置，如 `vec`、`mat`、`left`、`right`、`acc`、`bias` |
+| `loc` | 关键字 | 局部位置，如 `vec`、`mat`、`left`、`right`、`acc`、`bias`、`scaling` |
 | `dtype` | 元素类型 | tile 中元素的数据类型 |
 | `rows` | `int64` | 物理行数 |
 | `cols` | `int64` | 物理列数 |
 | `v_row` | `int64` 或 `?` | 有效行数 |
 | `v_col` | `int64` 或 `?` | 有效列数 |
-| `blayout` | 布局助记符 | 基础布局 |
-| `slayout` | 布局助记符 | 次级布局 |
-| `fractal` | `int32` | 分形相关参数 |
-| `pad` | 助记符或整数 | padding 策略或值 |
+| `blayout` | 布局助记符 | 基础布局：`row_major` 或 `col_major` |
+| `slayout` | 布局助记符 | 次级布局：`none_box`、`row_major` 或 `col_major` |
+| `fractal` | 整数 | 分形大小，单位为字节；支持 `32`、`512`、`1024` |
+| `pad` | 整数枚举 | `0`（`null`）表示不指定填充，`1`（`zero`）表示零，`2`（`max`）表示最大值，`3`（`min`）表示最小值；类型语法中填写整数 |
+| `compact` | 可选整数枚举 | `0`（`null`）关闭紧凑模式，`1`（`normal`）使用普通紧凑模式，`2`（`row_plus_one`）使用行数加一的紧凑模式；默认 `0` |
 
 ## 类型承载的信息
 
@@ -43,6 +49,7 @@
 - tile 的物理尺寸
 - tile 的有效区域
 - tile 的布局和 padding 语义
+- tile 的紧凑存储模式
 
 这使很多位置、布局和有效区域相关检查能够更早在类型层面完成。
 

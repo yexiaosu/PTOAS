@@ -59,6 +59,7 @@ llvm_config.with_system_environment(
 # MLIR Python runtime together with generated PTO dialect modules and the PTO
 # extension under one build-tree Python root.
 if getattr(config, 'enable_bindings_python', False):
+    config.available_features.add('pto-python-bindings')
     llvm_config.with_environment(
         'PYTHONPATH', [config.ptoas_python_dir], append_path=True)
 
@@ -78,6 +79,7 @@ tools = [
     'ptoas',
     'pto-test-opt',
     'pto-vpto-scheduler-tracker-test',
+    'pto-bisheng-scheduler-test',
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)

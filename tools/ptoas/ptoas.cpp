@@ -307,3 +307,21 @@ llvm::cl::opt<mlir::pto::VFSIMTSizeFixMode> mlir::pto::vptoFixVFSIMTSize(
         clEnumValN(mlir::pto::VFSIMTSizeFixMode::Verify, "verify",
                    "Validate VF_SIMT sizes without repairing them")),
     llvm::cl::init(mlir::pto::VFSIMTSizeFixMode::Auto));
+
+llvm::cl::opt<bool> mlir::pto::enableBishengVecMISched(
+    "enable-bisheng-vec-misched",
+    llvm::cl::desc(
+        "Use Bisheng's default vector MI scheduler behavior for "
+        "VPTO device compilation instead of explicitly disabling "
+        "the scheduler"),
+    llvm::cl::init(false));
+
+llvm::cl::opt<mlir::pto::BishengSchedulerMode> mlir::pto::bishengSchedulerMode(
+    "bisheng-vec-misched", llvm::cl::desc("Bisheng vector scheduling policy for device LLVM compilation"),
+    llvm::cl::value_desc("auto|on|off"),
+    llvm::cl::values(
+        clEnumValN(
+            BishengSchedulerMode::Auto, "auto", "Retry off for nonzero VF stack; select the smaller stack (default)"),
+        clEnumValN(BishengSchedulerMode::On, "on", "Keep Bisheng default scheduling without retry"),
+        clEnumValN(BishengSchedulerMode::Off, "off", "Disable Bisheng vector scheduling without retry")),
+    llvm::cl::init(BishengSchedulerMode::Auto));

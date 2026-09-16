@@ -71,3 +71,15 @@ target_link_libraries(pto-vfsimt-size-patcher-test PRIVATE
   LLVMSupport
   MLIRSupport
 )
+
+add_llvm_executable(pto-bisheng-scheduler-test
+  pto-bisheng-scheduler-test.cpp
+  "${CMAKE_SOURCE_DIR}/tools/ptoas/BishengScheduler.cpp"
+  PARTIAL_SOURCES_INTENDED
+)
+
+target_include_directories(pto-bisheng-scheduler-test PRIVATE
+  "${CMAKE_SOURCE_DIR}/tools/ptoas"
+)
+
+target_link_libraries(pto-bisheng-scheduler-test PRIVATE LLVMSupport)

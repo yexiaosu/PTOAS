@@ -39,6 +39,8 @@ extern llvm::cl::opt<bool> emitVPTOLLVMDialect;
 extern llvm::cl::opt<bool> ptoPrintSeamIR;
 extern llvm::cl::opt<std::string> ptoSeamIRFile;
 extern llvm::cl::opt<VFSIMTSizeFixMode> vptoFixVFSIMTSize;
+extern llvm::cl::opt<BishengSchedulerMode> bishengSchedulerMode;
+extern llvm::cl::opt<bool> enableBishengVecMISched;
 
 enum class PTOBackend {
   EmitC,
@@ -84,6 +86,8 @@ public:
 
   void setVFSIMTSizeFixMode(VFSIMTSizeFixMode value);
   VFSIMTSizeFixMode getVFSIMTSizeFixMode() const;
+  void setBishengSchedulerMode(BishengSchedulerMode value);
+  BishengSchedulerMode getBishengSchedulerMode() const;
 
   llvm::StringRef getOutputPath() const;
   std::string allocModuleId() const;
@@ -102,6 +106,7 @@ private:
   std::string arch;
   BackendInfo backendInfo;
   VFSIMTSizeFixMode vfsimtSizeFixMode = VFSIMTSizeFixMode::Auto;
+  BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto;
   CANNVersion cannVersion = kDefaultCANNVersion;
   std::optional<CANNToolchain> toolchain;
   TempFileRegistry tempFiles;

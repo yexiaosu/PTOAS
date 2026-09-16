@@ -46,7 +46,11 @@ PTO 通过两种视图类型描述全局内存中的张量对象：
 ### 常见构造路径
 
 - `pto.partition_view`
-- `pto.subview`
+
+`pto.partition_view` 接受 `tensor_view` 或已有的 `partition_tensor_view`，返回新的
+`partition_tensor_view`。对已有分区继续切分时仍使用这一操作。
+
+`pto.subview` 用于局部 `tile_buf` 的子视图，输入和结果都是 `tile_buf`，不构造分区张量视图。
 
 ## 视图类型与指针、Tile 的关系
 
