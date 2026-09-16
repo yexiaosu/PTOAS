@@ -34,6 +34,7 @@ def collect_run(run, evidence):
         "compare_passed": "compare passed" in text, "comparison": comparison,
         "output_sha256": digest(case / "output.bin"),
         "fatobj_sha256": digest(case / "kernel.fatobj.o"),
+        "sim_soc": sorted(set(re.findall(r"soc_version:(\w+)", text))),
         "input_sha256": {p.name: digest(p) for p in sorted(case.glob("input_*.bin"))},
     }
     target = evidence / run.parent.name / run.name
@@ -64,6 +65,23 @@ def summarize(records):
     return result
 
 
+def collect_analysis(root, evidence):
+    analysis = root / "analysis"
+    target = evidence / "analysis"
+    target.mkdir(exist_ok=True)
+    sizes = {}
+    for path in sorted(analysis.glob("*.symbols.txt")):
+        shutil.copy2(path, target / path.name)
+        sizes[path.name.removesuffix(".symbols.txt")] = {
+            name: int(size, 16) for size, name in re.findall(
+                r"\bF\s+\.text\s+([0-9a-f]+)\s+(\S+)", path.read_text(encoding="utf-8"))
+        }
+    trace = analysis / "scheduler-trace.log"
+    if trace.is_file():
+        shutil.copy2(trace, target / trace.name)
+    return sizes
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("result_root", type=Path)
@@ -72,7 +90,7 @@ def main():
     root, evidence = args.result_root.resolve(), args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     records = [collect_run(p.parent, evidence) for p in sorted(root.glob("ptoas-*/run*/runner.log"))]
-    summary = {"runs": records, "groups": summarize(records)}
+    summary = {"runs": records, "groups": summarize(records), "function_sizes": collect_analysis(root, evidence)}
     for name in ("smoke.log", "provenance.log", "matrix.log"):
         if (root / name).is_file():
             shutil.copy2(root / name, evidence / name)
