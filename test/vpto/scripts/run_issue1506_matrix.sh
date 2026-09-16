@@ -17,10 +17,25 @@ mkdir -p "${RESULT_ROOT}"
 export DEVICE=SIM COMPILE_ONLY=0 COMPARE_STRICT=1
 export PTO_ISA_PATH="${PTO_ISA_PATH:?Set PTO_ISA_PATH}"
 export PTOAS_FLAGS='--pto-arch=a5 --pto-backend=vpto --vpto-scheduler=off --enable-bisheng-vec-misched=false'
-WORK_SPACE="${RESULT_ROOT}/smoke" CASE_NAME=micro-op/binary-vector/vadd \
-    bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${RESULT_ROOT}/smoke.log" 2>&1
+if [[ "${SKIP_SMOKE:-0}" != 1 ]]; then
+    WORK_SPACE="${RESULT_ROOT}/smoke" CASE_NAME=micro-op/binary-vector/vadd \
+        bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${RESULT_ROOT}/smoke.log" 2>&1
+fi
 
-result=0
+run_case() {
+    local group="$1" repeat="$2" output="$3"
+    mkdir -p "${output}"
+    echo "START ${group} run${repeat}"
+    if WORK_SPACE="${output}" CASE_NAME=kernels/issue-1506-vec-misched \
+        timeout 1800 bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${output}/runner.log" 2>&1; then
+        echo "PASS ${group} run${repeat}"
+    else
+        echo "FAIL ${group} run${repeat}"
+        return 1
+    fi
+}
+
+pids=()
 for spec in off:false on:false off:true on:true; do
     scheduler="${spec%%:*}"
     bisheng="${spec##*:}"
@@ -28,17 +43,16 @@ for spec in off:false on:false off:true on:true; do
     export PTOAS_FLAGS="--pto-arch=a5 --pto-backend=vpto --vpto-scheduler=${scheduler}"
     PTOAS_FLAGS+=" --enable-bisheng-vec-misched=${bisheng}"
     for repeat in 1 2 3; do
-        output="${RESULT_ROOT}/${group}/run${repeat}"
-        mkdir -p "${output}"
-        echo "START ${group} run${repeat}"
-        if WORK_SPACE="${output}" CASE_NAME=kernels/issue-1506-vec-misched \
-            timeout 900 bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${output}/runner.log" 2>&1; then
-            echo "PASS ${group} run${repeat}"
-        else
-            echo "FAIL ${group} run${repeat}"
-            result=1
-            break
+        if [[ "${SKIP_BASELINE_RUN1:-0}" == 1 && "${spec}" == off:false && "${repeat}" == 1 ]]; then
+            continue
         fi
+        output="${RESULT_ROOT}/${group}/run${repeat}"
+        run_case "${group}" "${repeat}" "${output}" &
+        pids+=("$!")
     done
+done
+result=0
+for pid in "${pids[@]}"; do
+    wait "${pid}" || result=1
 done
 exit "${result}"
