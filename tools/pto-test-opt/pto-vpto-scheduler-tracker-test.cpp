@@ -777,6 +777,81 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
          testClosureAndTieBreakStrategy(model, *fixture->dag, units);
 }
 
+class FrontierCheckingStrategy final : public VPTOSchedStrategy {
+public:
+  FailureOr<VPTOSchedDecision>
+  pickCandidate(const VPTOScheduleContext &context,
+                ArrayRef<VPTOSchedCandidate> candidates,
+                std::string &detail) const override {
+    for (const VPTOSchedCandidate &candidate : candidates) {
+      Operation *op = candidate.unit->getOperation();
+      const VPTORegPressureEvaluation &pressure = candidate.pressure;
+      bool crossesClass = isa<VcmpOp>(op) && pressure.released[VectorPressure] > 0 &&
+                          pressure.introduced[PredicatePressure] > 0;
+      if (crossesClass) {
+        checkedCrossClass = true;
+        if (!candidate.opensPressureFrontier) {
+          detail = "vector release must not hide a new predicate frontier";
+          return failure();
+        }
+      }
+      bool replacesPredicate = isa<PnotOp>(op) && pressure.released[PredicatePressure] > 0 &&
+                               pressure.introduced[PredicatePressure] > 0;
+      if (replacesPredicate) {
+        checkedReplacement = true;
+        if (candidate.opensPressureFrontier) {
+          detail = "same-class replacement must retain its frontier";
+          return failure();
+        }
+      }
+    }
+    return getDefaultVPTOSchedStrategy().pickCandidate(context, candidates,
+                                                       detail);
+  }
+
+  bool checkedBoth() const { return checkedCrossClass && checkedReplacement; }
+
+private:
+  mutable bool checkedCrossClass = false;
+  mutable bool checkedReplacement = false;
+};
+
+static bool testRegisterClassFrontiers(MLIRContext &context,
+                                       const TrackerTestModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module {
+  func.func @frontiers(%x: !pto.vreg<64xf32>, %y: !pto.vreg<64xf32>,
+                       %active: !pto.mask<b32>, %ptr: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %v = pto.vmax %x, %y, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p = pto.vcmp %v, %y, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %q = pto.pnot %p, %active : !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+      %r = pto.vsel %x, %y, %q : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      pto.vsts %r, %ptr[%c0], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+}
+)mlir";
+  FailureOr<PressureFixture> fixture =
+      buildPressureFixtureFromSource(context, model, source, std::nullopt, true);
+  if (!check(succeeded(fixture), "cannot build register-class fixture")) {
+    return false;
+  }
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  FrontierCheckingStrategy strategy;
+  VPTOScheduler scheduler(model, *fixture->dag, limits, budget, false, strategy);
+  bool ok = check(succeeded(scheduler.schedule(failure)) && strategy.checkedBoth(),
+                  "scheduler must distinguish register-class frontiers");
+  if (ok) {
+    llvm::outs() << "scheduler register-class frontiers: pass\n";
+  }
+  return ok;
+}
+
 static bool testGenericA5PredicateLimit() {
   VPTOGenericA5SchedModel model;
   auto predicate = llvm::find_if(
@@ -2038,6 +2113,7 @@ int main() {
       !testBitcastPressureAliasing(context, genericModel) ||
       !testBitcastPressureCacheInvalidation(context, genericModel) ||
       !testPressureAwareStrategy(context) ||
+      !testRegisterClassFrontiers(context, model) ||
       !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
       !testPressureNoPendingProgress(context) ||
