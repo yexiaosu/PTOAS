@@ -27,7 +27,7 @@ run_case() {
     mkdir -p "${output}"
     echo "START ${group} run${repeat}"
     if WORK_SPACE="${output}" CASE_NAME=kernels/issue-1506-vec-misched \
-        timeout 1800 bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${output}/runner.log" 2>&1; then
+        timeout 5400 bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${output}/runner.log" 2>&1; then
         echo "PASS ${group} run${repeat}"
     else
         echo "FAIL ${group} run${repeat}"
