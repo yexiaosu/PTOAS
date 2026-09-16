@@ -16,7 +16,7 @@
 // RUN: ptoas --bisheng-vec-misched=auto --help > /dev/null
 // RUN: ptoas --bisheng-vec-misched=on --help > /dev/null
 // RUN: ptoas --bisheng-vec-misched=off --help > /dev/null
-// RUN: not ptoas --bisheng-vec-misched=invalid --help 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not ptoas --bisheng-vec-misched=invalid %s 2>&1 | FileCheck %s --check-prefix=INVALID
 // RUN: not ptoas --bisheng-vec-misched=auto --enable-bisheng-vec-misched=false %s 2>&1 | FileCheck %s --check-prefix=CONFLICT
 // RUN: pto-bisheng-scheduler-test | FileCheck %s --check-prefix=POLICY
 
