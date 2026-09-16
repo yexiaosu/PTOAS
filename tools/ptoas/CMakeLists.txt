@@ -19,6 +19,7 @@ set(PTOAS_RUNTIME_SOURCES
   driver.cpp
   VPTOHostStubEmission.cpp
   ObjectEmission.cpp
+  BishengScheduler.cpp
 )
 
 add_library(PTOASVFSIMTSizePatcher STATIC

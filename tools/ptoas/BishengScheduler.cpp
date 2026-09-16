@@ -1,0 +1,163 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+#include "BishengScheduler.h"
+
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <cstdint>
+#include <limits>
+#include <map>
+#include <optional>
+#include <string>
+
+namespace {
+struct StackUsage {
+    std::map<std::string, uint64_t> functions;
+    uint64_t total = 0;
+};
+
+bool addUsageLine(llvm::StringRef line, StackUsage& usage)
+{
+    auto [name, properties] = line.split(": Stack size:");
+    auto [bytes, remainder] = properties.trim().split(" bytes");
+    uint64_t size = 0;
+    bool invalidNumber = bytes.getAsInteger(10, size);
+    bool invalidFields = name.trim().empty() || remainder.empty();
+    if (invalidFields || invalidNumber) {
+        return false;
+    }
+    auto [entry, inserted] = usage.functions.emplace(name.trim().str(), size);
+    if (!inserted) {
+        // Bisheng can repeat an identical VF report. Never count it twice.
+        return entry->second == size;
+    }
+    uint64_t available = std::numeric_limits<uint64_t>::max() - usage.total;
+    if (size > available) {
+        return false;
+    }
+    usage.total += size;
+    return true;
+}
+
+std::optional<StackUsage> readStackUsage(llvm::StringRef logPath)
+{
+    auto buffer = llvm::MemoryBuffer::getFile(logPath);
+    if (!buffer) {
+        return std::nullopt;
+    }
+    StackUsage usage;
+    llvm::StringRef remaining = buffer.get()->getBuffer();
+    while (!remaining.empty()) {
+        auto [line, tail] = remaining.split('\n');
+        remaining = tail;
+        llvm::StringRef report = line.trim();
+        if (!report.consume_front("[BISHENG] SIMD VF Function properties for ")) {
+            continue;
+        }
+        if (!addUsageLine(report, usage)) {
+            return std::nullopt;
+        }
+    }
+    if (usage.functions.empty()) {
+        return std::nullopt;
+    }
+    return usage;
+}
+
+bool sameFunctions(const StackUsage& on, const StackUsage& off)
+{
+    bool sameCount = on.functions.size() == off.functions.size();
+    if (!sameCount) {
+        return false;
+    }
+    for (const auto& entry : on.functions) {
+        bool found = off.functions.count(entry.first) != 0;
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool compareAndSelect(
+    const StackUsage& on, llvm::StringRef offLog, llvm::StringRef offObject, llvm::StringRef output,
+    llvm::raw_ostream& diagnostics)
+{
+    auto off = readStackUsage(offLog);
+    if (!off || !sameFunctions(on, *off)) {
+        diagnostics << "Bisheng scheduler auto: off report unavailable or "
+                       "incomparable; keeping on.\n";
+        return true;
+    }
+    bool selectOff = off->total < on.total;
+    diagnostics << "Bisheng scheduler auto: SIMD VF stack bytes on=" << on.total << ", off=" << off->total
+                << "; selected " << (selectOff ? "off" : "on") << ".\n";
+    if (selectOff) {
+        if (std::error_code error = llvm::sys::fs::copy_file(offObject, output)) {
+            diagnostics << "Error: cannot select Bisheng off object: " << error.message() << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool retryWithoutScheduler(
+    const StackUsage& on, llvm::StringRef objectPath, mlir::pto::CompileBishengVariant compile,
+    llvm::raw_ostream& diagnostics)
+{
+    llvm::SmallString<128> offObject;
+    llvm::SmallString<128> offLog;
+    if (std::error_code error = llvm::sys::fs::createTemporaryFile("ptoas-bisheng-off", "o", offObject)) {
+        diagnostics << "Bisheng scheduler auto: " << error.message() << "; keeping on.\n";
+        return true;
+    }
+    llvm::FileRemover objectCleanup(offObject);
+    if (std::error_code error = llvm::sys::fs::createTemporaryFile("ptoas-bisheng-off", "log", offLog)) {
+        diagnostics << "Bisheng scheduler auto: " << error.message() << "; keeping on.\n";
+        return true;
+    }
+    llvm::FileRemover logCleanup(offLog);
+    std::string retryErrors;
+    llvm::raw_string_ostream retryDiagnostics(retryErrors);
+    if (!compile(false, true, offObject, offLog, retryDiagnostics)) {
+        diagnostics << "Warning: Bisheng scheduler auto retry failed; keeping on.\n" << retryErrors;
+        return true;
+    }
+    return compareAndSelect(on, offLog, offObject, objectPath, diagnostics);
+}
+} // namespace
+
+bool mlir::pto::compileWithBishengScheduler(
+    BishengSchedulerMode mode, llvm::StringRef objectPath, llvm::StringRef logPath, CompileBishengVariant compile,
+    llvm::raw_ostream& diagnostics)
+{
+    bool automatic = mode == BishengSchedulerMode::Auto;
+    if (!compile(mode != BishengSchedulerMode::Off, automatic, objectPath, logPath, diagnostics)) {
+        return false;
+    }
+    if (!automatic) {
+        return true;
+    }
+    auto on = readStackUsage(logPath);
+    if (!on) {
+        diagnostics << "Bisheng scheduler auto: SIMD VF stack report unavailable; "
+                       "keeping on.\n";
+        return true;
+    }
+    if (on->total == 0) {
+        diagnostics << "Bisheng scheduler auto: SIMD VF stack bytes on=0; "
+                       "selected on without retry.\n";
+        return true;
+    }
+    return retryWithoutScheduler(*on, objectPath, compile, diagnostics);
+}

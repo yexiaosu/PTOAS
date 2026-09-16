@@ -815,6 +815,10 @@ mlir::pto::PTOASContext::getVFSIMTSizeFixMode() const {
   return vfsimtSizeFixMode;
 }
 
+void mlir::pto::PTOASContext::setBishengSchedulerMode(BishengSchedulerMode value) { schedulerMode = value; }
+
+mlir::pto::BishengSchedulerMode mlir::pto::PTOASContext::getBishengSchedulerMode() const { return schedulerMode; }
+
 llvm::StringRef mlir::pto::PTOASContext::getOutputPath() const {
   return outputPath;
 }
@@ -1151,12 +1155,12 @@ static LogicalResult emitVPTOLLVMFatobj(
   if (!toolchain) {
     return failure();
   }
-  if (failed(mlir::pto::emitFatobjLLVM(
-          jobResult.vptoCubeModule.module.get(),
-          jobResult.vptoVectorModule.module.get(), stubSource,
-          outputPath, moduleId, *toolchain, context.getTempFiles(),
-          context.getVFSIMTSizeFixMode(), llvm::errs()))) {
-    return failure();
+  if (failed(
+          mlir::pto::emitFatobjLLVM(
+              jobResult.vptoCubeModule.module.get(), jobResult.vptoVectorModule.module.get(), stubSource, outputPath,
+              moduleId, *toolchain, context.getTempFiles(), context.getVFSIMTSizeFixMode(), llvm::errs(),
+              context.getBishengSchedulerMode()))) {
+      return failure();
   }
   return success();
 }
@@ -1415,6 +1419,13 @@ parseDriverInvocation(const std::vector<std::string> &args,
   std::vector<const char *> argViews = toCommandLineViews(args);
   llvm::cl::ParseCommandLineOptions(static_cast<int>(argViews.size()),
                                     argViews.data(), "PTO Assembler (ptoas)\n");
+  bool newSchedulerOption = mlir::pto::bishengSchedulerMode.getNumOccurrences() != 0;
+  bool oldSchedulerOption = mlir::pto::enableBishengVecMISched.getNumOccurrences() != 0;
+  if (newSchedulerOption && oldSchedulerOption) {
+      llvm::errs() << "Error: --bisheng-vec-misched and "
+                      "--enable-bisheng-vec-misched cannot be combined.\n";
+      return failure();
+  }
   return options;
 }
 
@@ -1427,6 +1438,12 @@ createDriverContext(DialectRegistry &registry, MLIRContext *borrowedContext,
   } else {
     context = std::make_unique<PTOASContext>(registry, outputFilename);
   }
+  auto mode = mlir::pto::bishengSchedulerMode.getValue();
+  bool explicitLegacy = mlir::pto::enableBishengVecMISched.getNumOccurrences() != 0;
+  if (explicitLegacy) {
+      mode = mlir::pto::enableBishengVecMISched ? BishengSchedulerMode::On : BishengSchedulerMode::Off;
+  }
+  context->setBishengSchedulerMode(mode);
   context->setVFSIMTSizeFixMode(mlir::pto::vptoFixVFSIMTSize);
   context->initializeMLIRContext();
   return context;

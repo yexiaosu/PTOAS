@@ -79,6 +79,7 @@ tools = [
     'ptoas',
     'pto-test-opt',
     'pto-vpto-scheduler-tracker-test',
+    'pto-bisheng-scheduler-test',
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)

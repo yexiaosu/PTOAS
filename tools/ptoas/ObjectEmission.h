@@ -9,6 +9,7 @@
 #ifndef PTOAS_OBJECT_EMISSION_H
 #define PTOAS_OBJECT_EMISSION_H
 
+#include "BishengScheduler.h"
 #include "PTO/Support/CodeConstants.h"
 #include "PTO/Support/CANNVersion.h"
 #include "VFSIMTSizePatcher.h"
@@ -91,9 +92,9 @@ LogicalResult compileCppToDeviceObject(
     llvm::StringRef stderrPath, llvm::raw_ostream &diagOS);
 
 LogicalResult compileLLVMToDeviceObject(
-    llvm::StringRef llPath, llvm::StringRef outObjPath,
-    ObjectEmissionDeviceTarget target, const CANNToolchain &toolchain,
-    llvm::StringRef stderrPath, llvm::raw_ostream &diagOS);
+    llvm::StringRef llPath, llvm::StringRef outObjPath, ObjectEmissionDeviceTarget target,
+    const CANNToolchain& toolchain, llvm::StringRef stderrPath, llvm::raw_ostream& diagOS,
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
 
 LogicalResult emitCppVectorDeviceObject(
     llvm::StringRef cppSource, llvm::StringRef cppPath,
@@ -118,9 +119,9 @@ LogicalResult emitFatobjCCE(llvm::StringRef cppSource,
                             llvm::raw_ostream &diagOS);
 
 LogicalResult emitVPTOVectorDeviceObject(
-    llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
-    const CANNToolchain &toolchain, llvm::StringRef stderrPath,
-    llvm::raw_ostream &diagOS);
+    llvm::Module& module, llvm::StringRef llPath, llvm::StringRef outObjPath, const CANNToolchain& toolchain,
+    llvm::StringRef stderrPath, llvm::raw_ostream& diagOS,
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
 
 LogicalResult emitVPTOCubeDeviceObject(
     llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
@@ -128,11 +129,10 @@ LogicalResult emitVPTOCubeDeviceObject(
     llvm::raw_ostream &diagOS);
 
 LogicalResult emitFatobjLLVM(
-    llvm::Module *cubeModule, llvm::Module *vectorModule,
-    llvm::StringRef stubSource, llvm::StringRef outputPath,
-    llvm::StringRef moduleId, const CANNToolchain &toolchain,
-    TempFileRegistry &tempFiles, VFSIMTSizeFixMode vfsimtSizeFixMode,
-    llvm::raw_ostream &diagOS);
+    llvm::Module* cubeModule, llvm::Module* vectorModule, llvm::StringRef stubSource, llvm::StringRef outputPath,
+    llvm::StringRef moduleId, const CANNToolchain& toolchain, TempFileRegistry& tempFiles,
+    VFSIMTSizeFixMode vfsimtSizeFixMode, llvm::raw_ostream& diagOS,
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
 
 LogicalResult mergeDeviceObjects(llvm::ArrayRef<std::string> deviceObjPaths,
                                  llvm::StringRef outObjPath,
@@ -152,12 +152,10 @@ LogicalResult linkFatobjs(llvm::ArrayRef<std::string> fatobjPaths,
                           llvm::StringRef stderrPath,
                           llvm::raw_ostream &diagOS);
 
-LogicalResult emitFatobjLLVMWithRuntime(llvm::Module *cubeModule,
-                                        llvm::Module *vectorModule,
-                                        llvm::StringRef stubSource,
-                                        llvm::ToolOutputFile &outputFile,
-                                        VFSIMTSizeFixMode vfsimtSizeFixMode,
-                                        llvm::raw_ostream &diagOS);
+LogicalResult emitFatobjLLVMWithRuntime(
+    llvm::Module* cubeModule, llvm::Module* vectorModule, llvm::StringRef stubSource, llvm::ToolOutputFile& outputFile,
+    VFSIMTSizeFixMode vfsimtSizeFixMode, llvm::raw_ostream& diagOS,
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
 
 } // namespace mlir::pto
 

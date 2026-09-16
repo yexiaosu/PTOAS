@@ -44,13 +44,6 @@ enum class BishengVFAutoSyncMode {
   Global,
 };
 
-static llvm::cl::opt<bool> enableBishengVecMISched(
-    "enable-bisheng-vec-misched",
-    llvm::cl::desc("Use Bisheng's default vector MI scheduler behavior for "
-                   "VPTO device compilation instead of explicitly disabling "
-                   "the scheduler"),
-    llvm::cl::init(false));
-
 static llvm::cl::opt<bool> enableSimtFastMath(
     "simt-fastmath",
     llvm::cl::desc("Enable Bisheng SIMT floating-point contraction and fast "
@@ -366,6 +359,7 @@ public:
   bool emitVectorObject(llvm::Module *module,
                         const mlir::pto::CANNToolchain &toolchain,
                         mlir::pto::VFSIMTSizeFixMode vfsimtSizeFixMode,
+                        mlir::pto::BishengSchedulerMode schedulerMode,
                         llvm::raw_ostream &diagOS) {
     if (!module) {
       return true;
@@ -380,7 +374,7 @@ public:
     }
     if (failed(mlir::pto::emitVPTOVectorDeviceObject(
             *module, vectorLLPath, rawVectorObjPath, toolchain, stderrPath,
-            diagOS))) {
+            diagOS, schedulerMode))) {
       return false;
     }
     if (vfsimtSizeFixMode == mlir::pto::VFSIMTSizeFixMode::Off) {
@@ -525,59 +519,58 @@ static bool runCommandWithStderr(llvm::StringRef program,
   return false;
 }
 
-static bool compileDeviceLLVMToObject(llvm::StringRef llPath,
-                                      llvm::StringRef outObjPath,
-                                      llvm::StringRef targetCPU,
-                                      llvm::StringRef bishengPath,
-                                      llvm::StringRef stderrPath,
-                                      llvm::raw_ostream &diagOS) {
-  llvm::SmallVector<std::string, mlir::pto::kValue24> args = {
-      bishengPath.str(),
-      std::string("--cce-aicore-arch=") + targetCPU.str(),
-      "--cce-aicore-only",
-      "-O2",
-      "--cce-generic-addrspace=off",
-      "-cce-bitcode-is-aicore",
-      "-Wno-override-module",
-      "-dc",
-      "--cce-long-scbz=true",
-      "-mllvm",
-      "-cce-dyn-kernel-stack-size=true",
-  };
-  switch (bishengVFAutoSyncMode) {
-  case BishengVFAutoSyncMode::Unspecified:
-    break;
-  case BishengVFAutoSyncMode::Off:
+static bool compileDeviceLLVMToObject(
+    llvm::StringRef llPath, llvm::StringRef outObjPath, llvm::StringRef targetCPU, llvm::StringRef bishengPath,
+    llvm::StringRef stderrPath, llvm::raw_ostream& diagOS, mlir::pto::BishengSchedulerMode schedulerMode)
+{
+    llvm::SmallVector<std::string, mlir::pto::kValue24> args = {
+        bishengPath.str(),
+        std::string("--cce-aicore-arch=") + targetCPU.str(),
+        "--cce-aicore-only",
+        "-O2",
+        "--cce-generic-addrspace=off",
+        "-cce-bitcode-is-aicore",
+        "-Wno-override-module",
+        "-dc",
+        "--cce-long-scbz=true",
+        "-mllvm",
+        "-cce-dyn-kernel-stack-size=true",
+    };
+    switch (bishengVFAutoSyncMode) {
+        case BishengVFAutoSyncMode::Unspecified:
+            break;
+        case BishengVFAutoSyncMode::Off:
+            args.push_back("-mllvm");
+            args.push_back("-cce-vf-auto-sync=off");
+            break;
+        case BishengVFAutoSyncMode::Fused:
+            args.push_back("-mllvm");
+            args.push_back("-cce-vf-auto-sync=fused");
+            break;
+        case BishengVFAutoSyncMode::Global:
+            args.push_back("-mllvm");
+            args.push_back("-cce-vf-auto-sync=global");
+            break;
+    }
     args.push_back("-mllvm");
-    args.push_back("-cce-vf-auto-sync=off");
-    break;
-  case BishengVFAutoSyncMode::Fused:
-    args.push_back("-mllvm");
-    args.push_back("-cce-vf-auto-sync=fused");
-    break;
-  case BishengVFAutoSyncMode::Global:
-    args.push_back("-mllvm");
-    args.push_back("-cce-vf-auto-sync=global");
-    break;
-  }
-  // Enabling vector MI scheduling deliberately omits this argument instead of
-  // passing `=1`, so Bisheng retains the default behavior of the selected
-  // toolchain version.
-  if (!enableBishengVecMISched) {
-    args.push_back("-mllvm");
-    args.push_back("--cce-aicore-vec-misched=0");
-  }
-  args.push_back("-mllvm");
-  args.push_back(std::string("--cce-simt-fpmath-combine=") +
-                 (enableSimtFastMath ? "true" : "false"));
-  args.push_back("-c");
-  args.push_back("-x");
-  args.push_back("ir");
-  args.push_back("-");
-  args.push_back("-o");
-  args.push_back(outObjPath.str());
-  return runCommandWithStderr(bishengPath, args, stderrPath, diagOS,
-                              "device LLVM compilation", llPath);
+    args.push_back(std::string("--cce-simt-fpmath-combine=") + (enableSimtFastMath ? "true" : "false"));
+    auto compile = [&args, bishengPath, llPath](
+                       bool enabled, bool reportUsage, llvm::StringRef object, llvm::StringRef log,
+                       llvm::raw_ostream& diagnostics) {
+        auto variantArgs = args;
+        // On retains the toolchain's default; =1 is not equivalent on all versions.
+        if (!enabled) {
+            variantArgs.append({"-mllvm", "--cce-aicore-vec-misched=0"});
+        }
+        if (reportUsage) {
+            variantArgs.push_back("--cce-res-usage");
+        }
+        variantArgs.append({"-c", "-x", "ir", "-", "-o", object.str()});
+        return runCommandWithStderr(bishengPath, variantArgs, log, diagnostics, "device LLVM compilation", llPath);
+    };
+    // The vector scheduler policy never retries cube compilation.
+    auto mode = targetCPU.ends_with("-vec") ? schedulerMode : mlir::pto::BishengSchedulerMode::Off;
+    return mlir::pto::compileWithBishengScheduler(mode, outObjPath, stderrPath, compile, diagOS);
 }
 
 static void appendCceAicoreMllvmFlags(
@@ -995,9 +988,11 @@ mlir::LogicalResult mlir::pto::compileCppToDeviceObject(
 mlir::LogicalResult mlir::pto::compileLLVMToDeviceObject(
     llvm::StringRef llPath, llvm::StringRef outObjPath,
     ObjectEmissionDeviceTarget target, const CANNToolchain &toolchain,
-    llvm::StringRef stderrPath, llvm::raw_ostream &diagOS) {
+    llvm::StringRef stderrPath, llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   return compileDeviceLLVMToObject(llPath, outObjPath, getTargetCPU(target),
-                                   toolchain.bishengPath, stderrPath, diagOS)
+                                   toolchain.bishengPath, stderrPath, diagOS,
+                                   schedulerMode)
              ? success()
              : failure();
 }
@@ -1105,7 +1100,8 @@ static mlir::LogicalResult applyVPTOLLVMABINames(llvm::Module &module,
 mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
     llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
     const CANNToolchain &toolchain, llvm::StringRef stderrPath,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (failed(applyVPTOLLVMABINames(
           module,
           toolchain.vptoPublicABISuffix(ObjectEmissionDeviceTarget::Vector),
@@ -1118,7 +1114,8 @@ mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
   return compileDeviceLLVMToObject(llPath, outObjPath,
                                    resolveTargetCPU(module,
                                                     ObjectEmissionDeviceTarget::Vector),
-                                   toolchain.bishengPath, stderrPath, diagOS)
+                                   toolchain.bishengPath, stderrPath, diagOS,
+                                   schedulerMode)
              ? success()
              : failure();
 }
@@ -1139,7 +1136,8 @@ mlir::LogicalResult mlir::pto::emitVPTOCubeDeviceObject(
   return compileDeviceLLVMToObject(llPath, outObjPath,
                                    resolveTargetCPU(module,
                                                     ObjectEmissionDeviceTarget::Cube),
-                                   toolchain.bishengPath, stderrPath, diagOS)
+                                   toolchain.bishengPath, stderrPath, diagOS,
+                                   BishengSchedulerMode::Off)
              ? success()
              : failure();
 }
@@ -1149,7 +1147,8 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVM(
     llvm::StringRef stubSource, llvm::StringRef outputPath,
     llvm::StringRef moduleId, const CANNToolchain &toolchain,
     TempFileRegistry &tempFiles, VFSIMTSizeFixMode vfsimtSizeFixMode,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (!cubeModule && !vectorModule) {
     diagOS << "Error: VPTO fatobj emission requires at least one LLVM module.\n";
     return failure();
@@ -1166,7 +1165,7 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVM(
     return failure();
   }
   if (!artifacts.emitVectorObject(vectorModule, toolchain,
-                                  vfsimtSizeFixMode, diagOS)) {
+                                  vfsimtSizeFixMode, schedulerMode, diagOS)) {
     return failure();
   }
   if (!artifacts.mergeDeviceObjects(toolchain, diagOS)) {
@@ -1217,7 +1216,8 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVMWithRuntime(
     llvm::Module *cubeModule, llvm::Module *vectorModule,
     llvm::StringRef stubSource, llvm::ToolOutputFile &outputFile,
     VFSIMTSizeFixMode vfsimtSizeFixMode,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (!cubeModule && !vectorModule) {
     diagOS << "Error: VPTO fatobj emission requires at least one LLVM module.\n";
     return failure();
@@ -1241,7 +1241,7 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVMWithRuntime(
     return failure();
   }
   if (!artifacts.emitVectorObject(vectorModule, *toolchain,
-                                  vfsimtSizeFixMode, diagOS)) {
+                                  vfsimtSizeFixMode, schedulerMode, diagOS)) {
     return failure();
   }
 
