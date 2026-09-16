@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 : "${RESULT_ROOT:?Set RESULT_ROOT to an isolated result directory}"
 : "${PTOAS_BIN:?Set PTOAS_BIN to this worktree virtual environment entry point}"
+TARGET_CASE="${TARGET_CASE:-kernels/issue-1506-vec-misched}"
 mkdir -p "${RESULT_ROOT}"
 export DEVICE=SIM COMPILE_ONLY=0 COMPARE_STRICT=1
 export PTO_ISA_PATH="${PTO_ISA_PATH:?Set PTO_ISA_PATH}"
@@ -26,7 +27,7 @@ run_case() {
     local group="$1" repeat="$2" output="$3"
     mkdir -p "${output}"
     echo "START ${group} run${repeat}"
-    if WORK_SPACE="${output}" CASE_NAME=kernels/issue-1506-vec-misched \
+    if WORK_SPACE="${output}" CASE_NAME="${TARGET_CASE}" \
         timeout 5400 bash "${SCRIPT_DIR}/run_host_vpto_validation.sh" > "${output}/runner.log" 2>&1; then
         echo "PASS ${group} run${repeat}"
     else

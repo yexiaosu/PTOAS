@@ -111,7 +111,7 @@ int main() {
     if (!file) {
       throw std::runtime_error("failed closing output.bin");
     }
-    std::puts("issue1506 host completed: BlockDim=28, batch=2, N=196, heads=12, D=64");
+    std::puts("issue1506 host completed: batch storage=2, N=196, heads=12, D=64");
     return 0;
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());

@@ -1,0 +1,2475 @@
+module attributes {pto.mode = "explicit", pto.target_arch = "a5"} {
+  func.func @_attn_rel_h_rel_w_kernel(%arg0: !pto.ptr<bf16, gm>, %arg1: !pto.ptr<bf16, gm>, %arg2: !pto.ptr<bf16, gm>, %arg3: !pto.ptr<bf16, gm>, %arg4: !pto.ptr<bf16, gm>, %arg5: !pto.ptr<bf16, gm>, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32, %arg10: i32, %arg11: i32, %arg12: i32, %arg13: i32, %arg14: i32, %arg15: i32, %arg16: i32, %arg17: i32, %arg18: i32, %arg19: i32, %arg20: i32, %arg21: i32) attributes {pto.entry} {
+    %c0_i64 = arith.constant 0 : i64
+    %0 = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, l0a>
+    %1 = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, l0b>
+    %2 = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, l0a>
+    %3 = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, l0b>
+    %4 = pto.get_block_idx
+    %5 = arith.trunci %4 : i64 to i32
+    %c0_i64_0 = arith.constant 0 : i64
+    %c0_i64_1 = arith.constant 0 : i64
+    %c0_i64_2 = arith.constant 0 : i64
+    pto.section.cube {
+      pto.set_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID0>]
+      pto.set_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID1>]
+      pto.set_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID2>]
+      pto.set_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID3>]
+      pto.set_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID0>]
+      pto.set_intra_block <PIPE_MTE1>, 3
+      pto.set_intra_block <PIPE_MTE1>, 19
+      pto.set_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID1>]
+      pto.set_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID4>]
+      %c0 = arith.constant 0 : index
+      %c2 = arith.constant 2 : index
+      %c1 = arith.constant 1 : index
+      scf.for %arg22 = %c0 to %c1 step %c1 {
+        %6 = arith.index_cast %arg22 : index to i32
+        %c7_i32 = arith.constant 7 : i32
+        %7 = arith.muli %6, %c7_i32 : i32
+        %c4_i32 = arith.constant 4 : i32
+        %8 = arith.floordivsi %5, %c4_i32 : i32
+        %9 = arith.addi %7, %8 : i32
+        %c12_i32 = arith.constant 12 : i32
+        %10 = arith.cmpi slt, %9, %c12_i32 : i32
+        pto.wait_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID4>]
+        %c7_i32_3 = arith.constant 7 : i32
+        %11 = arith.muli %6, %c7_i32_3 : i32
+        %c4_i32_4 = arith.constant 4 : i32
+        %12 = arith.floordivsi %5, %c4_i32_4 : i32
+        %13 = arith.addi %11, %12 : i32
+        %c12_i32_5 = arith.constant 12 : i32
+        %14 = arith.cmpi slt, %13, %c12_i32_5 : i32
+        scf.if %14 {
+          %c7_i32_12 = arith.constant 7 : i32
+          %23 = arith.muli %6, %c7_i32_12 : i32
+          %c4_i32_13 = arith.constant 4 : i32
+          %24 = arith.floordivsi %5, %c4_i32_13 : i32
+          %25 = arith.addi %23, %24 : i32
+          %c6_i32 = arith.constant 6 : i32
+          %26 = arith.floordivsi %25, %c6_i32 : i32
+          %27 = arith.subi %arg6, %26 : i32
+          %c0_i32 = arith.constant 0 : i32
+          %28 = arith.cmpi sgt, %27, %c0_i32 : i32
+          scf.if %28 {
+            %29 = arith.extsi %5 : i32 to i64
+            %c1_i64 = arith.constant 1 : i64
+            %30 = arith.andi %29, %c1_i64 : i64
+            %31 = arith.extsi %arg12 : i32 to i64
+            %32 = arith.muli %30, %31 : i64
+            %c128_i64 = arith.constant 128 : i64
+            %33 = arith.muli %32, %c128_i64 : i64
+            %34 = arith.extsi %6 : i32 to i64
+            %c7_i64 = arith.constant 7 : i64
+            %35 = arith.muli %34, %c7_i64 : i64
+            %36 = arith.extsi %5 : i32 to i64
+            %c4_i64 = arith.constant 4 : i64
+            %37 = arith.floordivsi %36, %c4_i64 : i64
+            %38 = arith.addi %35, %37 : i64
+            %c6_i64 = arith.constant 6 : i64
+            %39 = arith.floordivsi %38, %c6_i64 : i64
+            %40 = arith.extsi %arg10 : i32 to i64
+            %41 = arith.muli %39, %40 : i64
+            %42 = arith.addi %33, %41 : i64
+            %43 = arith.extsi %6 : i32 to i64
+            %c14_i64 = arith.constant 14 : i64
+            %44 = arith.muli %43, %c14_i64 : i64
+            %45 = arith.extsi %5 : i32 to i64
+            %c2_i64 = arith.constant 2 : i64
+            %46 = arith.floordivsi %45, %c2_i64 : i64
+            %47 = arith.addi %44, %46 : i64
+            %c12_i64 = arith.constant 12 : i64
+            %48 = arith.remsi %47, %c12_i64 : i64
+            %49 = arith.extsi %arg11 : i32 to i64
+            %50 = arith.muli %48, %49 : i64
+            %51 = arith.addi %42, %50 : i64
+            %52 = arith.index_cast %51 : i64 to index
+            %53 = pto.addptr %arg2, %52 : <bf16, gm> -> <bf16, gm>
+            %c0_i64_14 = arith.constant 0 : i64
+            %54 = pto.castptr %c0_i64_14 : i64 -> !pto.ptr<bf16, l1>
+            %c1_i32 = arith.constant 1 : i32
+            %55 = arith.andi %5, %c1_i32 : i32
+            %c128_i32 = arith.constant 128 : i32
+            %56 = arith.muli %55, %c128_i32 : i32
+            %c196_i32 = arith.constant 196 : i32
+            %57 = arith.subi %c196_i32, %56 : i32
+            %c128_i32_15 = arith.constant 128 : i32
+            %58 = arith.minsi %c128_i32_15, %57 : i32
+            %c2_i32 = arith.constant 2 : i32
+            %59 = arith.muli %arg12, %c2_i32 : i32
+            %60 = arith.extsi %58 : i32 to i64
+            %c64_i64 = arith.constant 64 : i64
+            %61 = arith.extsi %59 : i32 to i64
+            %c1_i64_16 = arith.constant 1 : i64
+            %c1_i64_17 = arith.constant 1 : i64
+            %c128_i64_18 = arith.constant 128 : i64
+            %c0_i64_19 = arith.constant 0 : i64
+            %c0_i64_20 = arith.constant 0 : i64
+            %false = arith.constant false
+            pto.mte_gm_l1_frac %53, %54, nd2nz, shape(%60, %c64_i64), src_layout(%61), dst_group(%c1_i64_16, %c1_i64_17, %c128_i64_18, %c0_i64_19), ctrl(%c0_i64_20, %false) : !pto.ptr<bf16, gm>, !pto.ptr<bf16, l1>, nd2nz, shape i64, i64, src_layout(i64), dst_group i64, i64, i64, i64, ctrl i64, i1
+          }
+        }
+        pto.barrier <PIPE_MTE2>
+        %c7_i32_6 = arith.constant 7 : i32
+        %15 = arith.muli %6, %c7_i32_6 : i32
+        %c4_i32_7 = arith.constant 4 : i32
+        %16 = arith.floordivsi %5, %c4_i32_7 : i32
+        %17 = arith.addi %15, %16 : i32
+        %c12_i32_8 = arith.constant 12 : i32
+        %18 = arith.cmpi slt, %17, %c12_i32_8 : i32
+        scf.if %18 {
+          %c0_i64_12 = arith.constant 0 : i64
+          %23 = pto.castptr %c0_i64_12 : i64 -> !pto.ptr<bf16, l1>
+          %c1_i32 = arith.constant 1 : i32
+          %24 = arith.andi %5, %c1_i32 : i32
+          %c128_i32 = arith.constant 128 : i32
+          %25 = arith.muli %24, %c128_i32 : i32
+          %c196_i32 = arith.constant 196 : i32
+          %26 = arith.subi %c196_i32, %25 : i32
+          %c128_i32_13 = arith.constant 128 : i32
+          %27 = arith.minsi %c128_i32_13, %26 : i32
+          %c32_i32 = arith.constant 32 : i32
+          %28 = arith.muli %27, %c32_i32 : i32
+          %c1_i32_14 = arith.constant 1 : i32
+          %29 = arith.andi %5, %c1_i32_14 : i32
+          %c128_i32_15 = arith.constant 128 : i32
+          %30 = arith.muli %29, %c128_i32_15 : i32
+          %c68_i32 = arith.constant 68 : i32
+          %31 = arith.subi %30, %c68_i32 : i32
+          %c0_i32 = arith.constant 0 : i32
+          %32 = arith.maxsi %c0_i32, %31 : i32
+          %c1_i32_16 = arith.constant 1 : i32
+          %33 = arith.andi %5, %c1_i32_16 : i32
+          %c128_i32_17 = arith.constant 128 : i32
+          %34 = arith.muli %33, %c128_i32_17 : i32
+          %c196_i32_18 = arith.constant 196 : i32
+          %35 = arith.subi %c196_i32_18, %34 : i32
+          %c128_i32_19 = arith.constant 128 : i32
+          %36 = arith.minsi %c128_i32_19, %35 : i32
+          %37 = arith.extsi %28 : i32 to i64
+          %c0_i32_20 = arith.constant 0 : i32
+          %c4_i64 = arith.constant 4 : i64
+          %38 = arith.extsi %32 : i32 to i64
+          %39 = arith.extsi %36 : i32 to i64
+          pto.raw_fill_l1 %23, %37, %c0_i32_20, %c4_i64, %38, %39 {fill_word_bits = 16 : i64} : !pto.ptr<bf16, l1>, i64, i32, i64, i64, i64
+        }
+        pto.set_flag[<PIPE_MTE2>, <PIPE_MTE1>, <EVENT_ID4>]
+        pto.wait_flag[<PIPE_MTE2>, <PIPE_MTE1>, <EVENT_ID4>]
+        %c7_i32_9 = arith.constant 7 : i32
+        %19 = arith.muli %6, %c7_i32_9 : i32
+        %c4_i32_10 = arith.constant 4 : i32
+        %20 = arith.floordivsi %5, %c4_i32_10 : i32
+        %21 = arith.addi %19, %20 : i32
+        %c12_i32_11 = arith.constant 12 : i32
+        %22 = arith.cmpi slt, %21, %c12_i32_11 : i32
+        scf.if %22 {
+          %c0_12 = arith.constant 0 : index
+          %c6 = arith.constant 6 : index
+          %c1_13 = arith.constant 1 : index
+          scf.for %arg23 = %c0_12 to %c6 step %c1_13 {
+            %23 = arith.index_cast %arg23 : index to i32
+            %c4_i32_14 = arith.constant 4 : i32
+            %24 = arith.cmpi sge, %23, %c4_i32_14 : i32
+            scf.if %24 {
+              pto.wait_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID0>]
+              %c1_i32 = arith.constant 1 : i32
+              %37 = arith.andi %23, %c1_i32 : i32
+              %38 = arith.index_cast %37 : i32 to index
+              pto.wait_flag_dyn[<PIPE_MTE2>, <PIPE_MTE1>, %38]
+              pto.wait_intra_block <PIPE_MTE1>, 23
+              pto.wait_intra_block <PIPE_MTE1>, 7
+              %c81920_i64 = arith.constant 81920 : i64
+              %39 = pto.castptr %c81920_i64 : i64 -> !pto.ptr<bf16, l1>
+              %c1_i32_19 = arith.constant 1 : i32
+              %40 = arith.andi %23, %c1_i32_19 : i32
+              %c8192_i32 = arith.constant 8192 : i32
+              %41 = arith.muli %40, %c8192_i32 : i32
+              %c24576_i32 = arith.constant 24576 : i32
+              %42 = arith.addi %41, %c24576_i32 : i32
+              %43 = arith.extsi %42 : i32 to i64
+              %c2_i64 = arith.constant 2 : i64
+              %44 = arith.muli %43, %c2_i64 : i64
+              %45 = pto.castptr %44 : i64 -> !pto.ptr<bf16, l1>
+              %c65536_i64 = arith.constant 65536 : i64
+              %46 = pto.castptr %c65536_i64 : i64 -> !pto.ptr<f32, l0c>
+              pto.set_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              pto.set_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID1>]
+              pto.wait_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              %c128_i64 = arith.constant 128 : i64
+              %c128_i64_20 = arith.constant 128 : i64
+              %c0_i64_21 = arith.constant 0 : i64
+              %c0_i64_22 = arith.constant 0 : i64
+              pto.mte_l1_l0a %39, %0, %c128_i64, %c128_i64_20, %c0_i64_21, %c0_i64_22 {transpose = false} : !pto.ptr<bf16, l1>, !pto.ptr<bf16, l0a>, i64, i64, i64, i64
+              %c128_i64_23 = arith.constant 128 : i64
+              %c64_i64 = arith.constant 64 : i64
+              %c0_i64_24 = arith.constant 0 : i64
+              %c0_i64_25 = arith.constant 0 : i64
+              pto.mte_l1_l0b %45, %1, %c128_i64_23, %c64_i64, %c0_i64_24, %c0_i64_25 {transpose = false} : !pto.ptr<bf16, l1>, !pto.ptr<bf16, l0b>, i64, i64, i64, i64
+              pto.set_flag[<PIPE_MTE1>, <PIPE_M>, <EVENT_ID0>]
+              pto.wait_flag[<PIPE_MTE1>, <PIPE_M>, <EVENT_ID0>]
+              %c128_i64_26 = arith.constant 128 : i64
+              %c64_i64_27 = arith.constant 64 : i64
+              %c128_i64_28 = arith.constant 128 : i64
+              pto.mad %0, %1, %46, %c128_i64_26, %c64_i64_27, %c128_i64_28 : !pto.ptr<bf16, l0a>, !pto.ptr<bf16, l0b>, !pto.ptr<f32, l0c>, i64, i64, i64
+              pto.set_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              pto.wait_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              pto.wait_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID1>]
+              pto.set_flag[<PIPE_M>, <PIPE_FIX>, <EVENT_ID0>]
+              pto.set_intra_block <PIPE_MTE1>, 3
+              pto.set_intra_block <PIPE_MTE1>, 19
+              %c1_i32_29 = arith.constant 1 : i32
+              %47 = arith.andi %23, %c1_i32_29 : i32
+              %48 = arith.index_cast %47 : i32 to index
+              pto.set_flag_dyn[<PIPE_MTE1>, <PIPE_MTE2>, %48]
+            }
+            %c5_i32 = arith.constant 5 : i32
+            %25 = arith.cmpi slt, %23, %c5_i32 : i32
+            %26 = scf.if %25 -> (i1) {
+              %c3_i32_19 = arith.constant 3 : i32
+              %37 = arith.cmpi sge, %23, %c3_i32_19 : i32
+              scf.yield %37 : i1
+            } else {
+              scf.yield %25 : i1
+            }
+            scf.if %26 {
+              pto.barrier <PIPE_MTE2>
+              %c8192_i32 = arith.constant 8192 : i32
+              %37 = arith.muli %23, %c8192_i32 : i32
+              %38 = arith.extsi %37 : i32 to i64
+              %c2_i64 = arith.constant 2 : i64
+              %39 = arith.muli %38, %c2_i64 : i64
+              %40 = pto.castptr %39 : i64 -> !pto.ptr<bf16, l1>
+              %c128_i32 = arith.constant 128 : i32
+              %41 = arith.muli %23, %c128_i32 : i32
+              %c580_i32 = arith.constant 580 : i32
+              %42 = arith.subi %c580_i32, %41 : i32
+              %c128_i32_19 = arith.constant 128 : i32
+              %43 = arith.minsi %c128_i32_19, %42 : i32
+              %c15_i32 = arith.constant 15 : i32
+              %44 = arith.addi %43, %c15_i32 : i32
+              %c16_i32 = arith.constant 16 : i32
+              %45 = arith.floordivsi %44, %c16_i32 : i32
+              %c2048_i32 = arith.constant 2048 : i32
+              %46 = arith.muli %45, %c2048_i32 : i32
+              %c128_i32_20 = arith.constant 128 : i32
+              %47 = arith.muli %23, %c128_i32_20 : i32
+              %c580_i32_21 = arith.constant 580 : i32
+              %48 = arith.subi %c580_i32_21, %47 : i32
+              %c128_i32_22 = arith.constant 128 : i32
+              %49 = arith.minsi %c128_i32_22, %48 : i32
+              %c15_i32_23 = arith.constant 15 : i32
+              %50 = arith.addi %49, %c15_i32_23 : i32
+              %c16_i32_24 = arith.constant 16 : i32
+              %51 = arith.floordivsi %50, %c16_i32_24 : i32
+              %c8_i32 = arith.constant 8 : i32
+              %52 = arith.subi %c8_i32, %51 : i32
+              %53 = arith.extsi %46 : i32 to i64
+              %c0_i32 = arith.constant 0 : i32
+              %54 = arith.extsi %52 : i32 to i64
+              %c64_i64 = arith.constant 64 : i64
+              %c0_i64_25 = arith.constant 0 : i64
+              pto.raw_fill_l1 %40, %53, %c0_i32, %54, %c64_i64, %c0_i64_25 {fill_word_bits = 16 : i64} : !pto.ptr<bf16, l1>, i64, i32, i64, i64, i64
+              %c3_i32_26 = arith.constant 3 : i32
+              %55 = arith.subi %23, %c3_i32_26 : i32
+              %56 = arith.index_cast %55 : i32 to index
+              pto.set_flag_dyn[<PIPE_MTE2>, <PIPE_MTE1>, %56]
+            }
+            %c4_i32_15 = arith.constant 4 : i32
+            %27 = arith.cmpi slt, %23, %c4_i32_15 : i32
+            %28 = scf.if %27 -> (i1) {
+              %c2_i32_19 = arith.constant 2 : i32
+              %37 = arith.cmpi sge, %23, %c2_i32_19 : i32
+              scf.yield %37 : i1
+            } else {
+              scf.yield %27 : i1
+            }
+            scf.if %28 {
+              pto.wait_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID1>]
+              %c1_i32 = arith.constant 1 : i32
+              %37 = arith.andi %23, %c1_i32 : i32
+              %c2_i32_19 = arith.constant 2 : i32
+              %38 = arith.addi %37, %c2_i32_19 : i32
+              %39 = arith.index_cast %38 : i32 to index
+              pto.wait_flag_dyn[<PIPE_MTE2>, <PIPE_MTE1>, %39]
+              %c0_i64_20 = arith.constant 0 : i64
+              %40 = pto.castptr %c0_i64_20 : i64 -> !pto.ptr<bf16, l1>
+              %c1_i32_21 = arith.constant 1 : i32
+              %41 = arith.andi %23, %c1_i32_21 : i32
+              %c8192_i32 = arith.constant 8192 : i32
+              %42 = arith.muli %41, %c8192_i32 : i32
+              %c8192_i32_22 = arith.constant 8192 : i32
+              %43 = arith.addi %42, %c8192_i32_22 : i32
+              %44 = arith.extsi %43 : i32 to i64
+              %c2_i64 = arith.constant 2 : i64
+              %45 = arith.muli %44, %c2_i64 : i64
+              %46 = pto.castptr %45 : i64 -> !pto.ptr<bf16, l1>
+              %c0_i64_23 = arith.constant 0 : i64
+              %47 = pto.castptr %c0_i64_23 : i64 -> !pto.ptr<f32, l0c>
+              pto.set_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              pto.set_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID1>]
+              pto.wait_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              %c128_i64 = arith.constant 128 : i64
+              %c64_i64 = arith.constant 64 : i64
+              %c0_i64_24 = arith.constant 0 : i64
+              %c0_i64_25 = arith.constant 0 : i64
+              pto.mte_l1_l0a %40, %2, %c128_i64, %c64_i64, %c0_i64_24, %c0_i64_25 {transpose = false} : !pto.ptr<bf16, l1>, !pto.ptr<bf16, l0a>, i64, i64, i64, i64
+              %c64_i64_26 = arith.constant 64 : i64
+              %c128_i64_27 = arith.constant 128 : i64
+              %c0_i64_28 = arith.constant 0 : i64
+              %c0_i64_29 = arith.constant 0 : i64
+              pto.mte_l1_l0b %46, %3, %c64_i64_26, %c128_i64_27, %c0_i64_28, %c0_i64_29 {transpose = false} : !pto.ptr<bf16, l1>, !pto.ptr<bf16, l0b>, i64, i64, i64, i64
+              pto.set_flag[<PIPE_MTE1>, <PIPE_M>, <EVENT_ID0>]
+              pto.wait_flag[<PIPE_MTE1>, <PIPE_M>, <EVENT_ID0>]
+              %c128_i64_30 = arith.constant 128 : i64
+              %c128_i64_31 = arith.constant 128 : i64
+              %c64_i64_32 = arith.constant 64 : i64
+              pto.mad %2, %3, %47, %c128_i64_30, %c128_i64_31, %c64_i64_32 : !pto.ptr<bf16, l0a>, !pto.ptr<bf16, l0b>, !pto.ptr<f32, l0c>, i64, i64, i64
+              pto.set_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              pto.wait_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID0>]
+              pto.wait_flag[<PIPE_M>, <PIPE_MTE1>, <EVENT_ID1>]
+              pto.set_flag[<PIPE_M>, <PIPE_FIX>, <EVENT_ID1>]
+              %c1_i32_33 = arith.constant 1 : i32
+              %48 = arith.andi %23, %c1_i32_33 : i32
+              %c2_i32_34 = arith.constant 2 : i32
+              %49 = arith.addi %48, %c2_i32_34 : i32
+              %50 = arith.index_cast %49 : i32 to index
+              pto.set_flag_dyn[<PIPE_MTE1>, <PIPE_MTE2>, %50]
+            }
+            %c4_i32_16 = arith.constant 4 : i32
+            %29 = arith.cmpi sge, %23, %c4_i32_16 : i32
+            scf.if %29 {
+              pto.wait_intra_block <PIPE_FIX>, 18
+              pto.wait_intra_block <PIPE_FIX>, 2
+              pto.wait_flag[<PIPE_M>, <PIPE_FIX>, <EVENT_ID0>]
+              %c65536_i64 = arith.constant 65536 : i64
+              %37 = pto.castptr %c65536_i64 : i64 -> !pto.ptr<f32, l0c>
+              %c98304_i64 = arith.constant 98304 : i64
+              %38 = pto.castptr %c98304_i64 : i64 -> !pto.ptr<f32, ub>
+              %c128_i64 = arith.constant 128 : i64
+              %c64_i64 = arith.constant 64 : i64
+              %c128_i64_19 = arith.constant 128 : i64
+              %c64_i64_20 = arith.constant 64 : i64
+              pto.mte_l0c_ub %37, %38, %c128_i64, %c64_i64, %c128_i64_19, %c64_i64_20, dst_mode(split_m), nz2nd : !pto.ptr<f32, l0c>, !pto.ptr<f32, ub>, i64, i64, i64, i64
+              pto.set_intra_block <PIPE_FIX>, 6
+              pto.set_intra_block <PIPE_FIX>, 22
+              pto.set_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID0>]
+            }
+            %c4_i32_17 = arith.constant 4 : i32
+            %30 = arith.cmpi slt, %23, %c4_i32_17 : i32
+            %31 = scf.if %30 -> (i1) {
+              %c2_i32_19 = arith.constant 2 : i32
+              %37 = arith.cmpi sge, %23, %c2_i32_19 : i32
+              scf.yield %37 : i1
+            } else {
+              scf.yield %30 : i1
+            }
+            scf.if %31 {
+              %c1_i32 = arith.constant 1 : i32
+              %37 = arith.andi %23, %c1_i32 : i32
+              %38 = arith.index_cast %37 : i32 to index
+              pto.wait_flag_dyn[<PIPE_MTE1>, <PIPE_MTE2>, %38]
+              %c7_i32_19 = arith.constant 7 : i32
+              %39 = arith.muli %6, %c7_i32_19 : i32
+              %c4_i32_20 = arith.constant 4 : i32
+              %40 = arith.floordivsi %5, %c4_i32_20 : i32
+              %41 = arith.addi %39, %40 : i32
+              %c6_i32 = arith.constant 6 : i32
+              %42 = arith.floordivsi %41, %c6_i32 : i32
+              %43 = arith.subi %arg6, %42 : i32
+              %c0_i32 = arith.constant 0 : i32
+              %44 = arith.cmpi sgt, %43, %c0_i32 : i32
+              scf.if %44 {
+                %45 = arith.extsi %6 : i32 to i64
+                %c7_i64 = arith.constant 7 : i64
+                %46 = arith.muli %45, %c7_i64 : i64
+                %47 = arith.extsi %5 : i32 to i64
+                %c4_i64 = arith.constant 4 : i64
+                %48 = arith.floordivsi %47, %c4_i64 : i64
+                %49 = arith.addi %46, %48 : i64
+                %c6_i64 = arith.constant 6 : i64
+                %50 = arith.floordivsi %49, %c6_i64 : i64
+                %51 = arith.extsi %arg19 : i32 to i64
+                %52 = arith.muli %50, %51 : i64
+                %53 = arith.extsi %23 : i32 to i64
+                %c128_i64 = arith.constant 128 : i64
+                %54 = arith.muli %53, %c128_i64 : i64
+                %c256_i64 = arith.constant 256 : i64
+                %55 = arith.subi %54, %c256_i64 : i64
+                %56 = arith.extsi %arg21 : i32 to i64
+                %57 = arith.muli %55, %56 : i64
+                %58 = arith.addi %52, %57 : i64
+                %59 = arith.extsi %6 : i32 to i64
+                %c14_i64 = arith.constant 14 : i64
+                %60 = arith.muli %59, %c14_i64 : i64
+                %61 = arith.extsi %5 : i32 to i64
+                %c2_i64 = arith.constant 2 : i64
+                %62 = arith.floordivsi %61, %c2_i64 : i64
+                %63 = arith.addi %60, %62 : i64
+                %c12_i64 = arith.constant 12 : i64
+                %64 = arith.remsi %63, %c12_i64 : i64
+                %65 = arith.extsi %arg20 : i32 to i64
+                %66 = arith.muli %64, %65 : i64
+                %67 = arith.addi %58, %66 : i64
+                %68 = arith.index_cast %67 : i64 to index
+                %69 = pto.addptr %arg5, %68 : <bf16, gm> -> <bf16, gm>
+                %c1_i32_21 = arith.constant 1 : i32
+                %70 = arith.andi %23, %c1_i32_21 : i32
+                %c8192_i32 = arith.constant 8192 : i32
+                %71 = arith.muli %70, %c8192_i32 : i32
+                %c24576_i32 = arith.constant 24576 : i32
+                %72 = arith.addi %71, %c24576_i32 : i32
+                %73 = arith.extsi %72 : i32 to i64
+                %c2_i64_22 = arith.constant 2 : i64
+                %74 = arith.muli %73, %c2_i64_22 : i64
+                %75 = pto.castptr %74 : i64 -> !pto.ptr<bf16, l1>
+                %c128_i32 = arith.constant 128 : i32
+                %76 = arith.muli %23, %c128_i32 : i32
+                %c452_i32 = arith.constant 452 : i32
+                %77 = arith.subi %c452_i32, %76 : i32
+                %c128_i32_23 = arith.constant 128 : i32
+                %78 = arith.minsi %c128_i32_23, %77 : i32
+                %c2_i32_24 = arith.constant 2 : i32
+                %79 = arith.muli %arg21, %c2_i32_24 : i32
+                %c64_i64 = arith.constant 64 : i64
+                %80 = arith.extsi %78 : i32 to i64
+                %81 = arith.extsi %79 : i32 to i64
+                %c1_i64 = arith.constant 1 : i64
+                %c1_i64_25 = arith.constant 1 : i64
+                %c64_i64_26 = arith.constant 64 : i64
+                %c0_i64_27 = arith.constant 0 : i64
+                %c0_i64_28 = arith.constant 0 : i64
+                %false = arith.constant false
+                pto.mte_gm_l1_frac %69, %75, dn2nz, shape(%c64_i64, %80), src_layout(%81), dst_group(%c1_i64, %c1_i64_25, %c64_i64_26, %c0_i64_27), ctrl(%c0_i64_28, %false) : !pto.ptr<bf16, gm>, !pto.ptr<bf16, l1>, dn2nz, shape i64, i64, src_layout(i64), dst_group i64, i64, i64, i64, ctrl i64, i1
+              }
+            }
+            %c3_i32 = arith.constant 3 : i32
+            %32 = arith.cmpi slt, %23, %c3_i32 : i32
+            %33 = scf.if %32 -> (i1) {
+              %c1_i32 = arith.constant 1 : i32
+              %37 = arith.cmpi sge, %23, %c1_i32 : i32
+              scf.yield %37 : i1
+            } else {
+              scf.yield %32 : i1
+            }
+            scf.if %33 {
+              pto.barrier <PIPE_MTE2>
+              %c8192_i32 = arith.constant 8192 : i32
+              %37 = arith.muli %23, %c8192_i32 : i32
+              %38 = arith.extsi %37 : i32 to i64
+              %c2_i64 = arith.constant 2 : i64
+              %39 = arith.muli %38, %c2_i64 : i64
+              %40 = pto.castptr %39 : i64 -> !pto.ptr<bf16, l1>
+              %c128_i32 = arith.constant 128 : i32
+              %41 = arith.muli %23, %c128_i32 : i32
+              %c324_i32 = arith.constant 324 : i32
+              %42 = arith.subi %c324_i32, %41 : i32
+              %c128_i32_19 = arith.constant 128 : i32
+              %43 = arith.minsi %c128_i32_19, %42 : i32
+              %c32_i32 = arith.constant 32 : i32
+              %44 = arith.muli %43, %c32_i32 : i32
+              %c128_i32_20 = arith.constant 128 : i32
+              %45 = arith.muli %23, %c128_i32_20 : i32
+              %c196_i32 = arith.constant 196 : i32
+              %46 = arith.subi %45, %c196_i32 : i32
+              %c0_i32 = arith.constant 0 : i32
+              %47 = arith.maxsi %c0_i32, %46 : i32
+              %c128_i32_21 = arith.constant 128 : i32
+              %48 = arith.muli %23, %c128_i32_21 : i32
+              %c324_i32_22 = arith.constant 324 : i32
+              %49 = arith.subi %c324_i32_22, %48 : i32
+              %c128_i32_23 = arith.constant 128 : i32
+              %50 = arith.minsi %c128_i32_23, %49 : i32
+              %51 = arith.extsi %44 : i32 to i64
+              %c0_i32_24 = arith.constant 0 : i32
+              %c4_i64 = arith.constant 4 : i64
+              %52 = arith.extsi %47 : i32 to i64
+              %53 = arith.extsi %50 : i32 to i64
+              pto.raw_fill_l1 %40, %51, %c0_i32_24, %c4_i64, %52, %53 {fill_word_bits = 16 : i64} : !pto.ptr<bf16, l1>, i64, i32, i64, i64, i64
+              %c1_i32 = arith.constant 1 : i32
+              %54 = arith.addi %23, %c1_i32 : i32
+              %55 = arith.index_cast %54 : i32 to index
+              pto.set_flag_dyn[<PIPE_MTE2>, <PIPE_MTE1>, %55]
+            }
+            %c4_i32_18 = arith.constant 4 : i32
+            %34 = arith.cmpi slt, %23, %c4_i32_18 : i32
+            %35 = scf.if %34 -> (i1) {
+              %c2_i32_19 = arith.constant 2 : i32
+              %37 = arith.cmpi sge, %23, %c2_i32_19 : i32
+              scf.yield %37 : i1
+            } else {
+              scf.yield %34 : i1
+            }
+            scf.if %35 {
+              %c1_i32 = arith.constant 1 : i32
+              %37 = arith.andi %23, %c1_i32 : i32
+              %c16_i32 = arith.constant 16 : i32
+              %38 = arith.addi %37, %c16_i32 : i32
+              %39 = arith.extsi %38 : i32 to i64
+              %40 = arith.index_cast %39 : i64 to index
+              pto.wait_intra_block <PIPE_FIX>, %40
+              %c1_i32_19 = arith.constant 1 : i32
+              %41 = arith.andi %23, %c1_i32_19 : i32
+              %42 = arith.extsi %41 : i32 to i64
+              %43 = arith.index_cast %42 : i64 to index
+              pto.wait_intra_block <PIPE_FIX>, %43
+              pto.wait_flag[<PIPE_M>, <PIPE_FIX>, <EVENT_ID1>]
+              %c0_i64_20 = arith.constant 0 : i64
+              %44 = pto.castptr %c0_i64_20 : i64 -> !pto.ptr<f32, l0c>
+              %c1_i32_21 = arith.constant 1 : i32
+              %45 = arith.andi %23, %c1_i32_21 : i32
+              %c8192_i32 = arith.constant 8192 : i32
+              %46 = arith.muli %45, %c8192_i32 : i32
+              %47 = arith.extsi %46 : i32 to i64
+              %c4_i64 = arith.constant 4 : i64
+              %48 = arith.muli %47, %c4_i64 : i64
+              %49 = pto.castptr %48 : i64 -> !pto.ptr<f32, ub>
+              %c128_i64 = arith.constant 128 : i64
+              %c128_i64_22 = arith.constant 128 : i64
+              %c128_i64_23 = arith.constant 128 : i64
+              %c128_i64_24 = arith.constant 128 : i64
+              pto.mte_l0c_ub %44, %49, %c128_i64, %c128_i64_22, %c128_i64_23, %c128_i64_24, dst_mode(split_m), nz2nd : !pto.ptr<f32, l0c>, !pto.ptr<f32, ub>, i64, i64, i64, i64
+              %c1_i32_25 = arith.constant 1 : i32
+              %50 = arith.andi %23, %c1_i32_25 : i32
+              %c4_i32_26 = arith.constant 4 : i32
+              %51 = arith.addi %50, %c4_i32_26 : i32
+              %52 = arith.extsi %51 : i32 to i64
+              %53 = arith.index_cast %52 : i64 to index
+              pto.set_intra_block <PIPE_FIX>, %53
+              %c1_i32_27 = arith.constant 1 : i32
+              %54 = arith.andi %23, %c1_i32_27 : i32
+              %c20_i32 = arith.constant 20 : i32
+              %55 = arith.addi %54, %c20_i32 : i32
+              %56 = arith.extsi %55 : i32 to i64
+              %57 = arith.index_cast %56 : i64 to index
+              pto.set_intra_block <PIPE_FIX>, %57
+              pto.set_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID1>]
+            }
+            %c2_i32 = arith.constant 2 : i32
+            %36 = arith.cmpi slt, %23, %c2_i32 : i32
+            scf.if %36 {
+              %c2_i32_19 = arith.constant 2 : i32
+              %37 = arith.addi %23, %c2_i32_19 : i32
+              %38 = arith.index_cast %37 : i32 to index
+              pto.wait_flag_dyn[<PIPE_MTE1>, <PIPE_MTE2>, %38]
+              %c7_i32_20 = arith.constant 7 : i32
+              %39 = arith.muli %6, %c7_i32_20 : i32
+              %c4_i32_21 = arith.constant 4 : i32
+              %40 = arith.floordivsi %5, %c4_i32_21 : i32
+              %41 = arith.addi %39, %40 : i32
+              %c6_i32 = arith.constant 6 : i32
+              %42 = arith.floordivsi %41, %c6_i32 : i32
+              %43 = arith.subi %arg6, %42 : i32
+              %c0_i32 = arith.constant 0 : i32
+              %44 = arith.cmpi sgt, %43, %c0_i32 : i32
+              scf.if %44 {
+                %45 = arith.extsi %23 : i32 to i64
+                %46 = arith.extsi %arg9 : i32 to i64
+                %47 = arith.muli %45, %46 : i64
+                %c128_i64 = arith.constant 128 : i64
+                %48 = arith.muli %47, %c128_i64 : i64
+                %49 = arith.extsi %6 : i32 to i64
+                %c7_i64 = arith.constant 7 : i64
+                %50 = arith.muli %49, %c7_i64 : i64
+                %51 = arith.extsi %5 : i32 to i64
+                %c4_i64 = arith.constant 4 : i64
+                %52 = arith.floordivsi %51, %c4_i64 : i64
+                %53 = arith.addi %50, %52 : i64
+                %c6_i64 = arith.constant 6 : i64
+                %54 = arith.floordivsi %53, %c6_i64 : i64
+                %55 = arith.extsi %arg7 : i32 to i64
+                %56 = arith.muli %54, %55 : i64
+                %57 = arith.addi %48, %56 : i64
+                %58 = arith.extsi %6 : i32 to i64
+                %c14_i64 = arith.constant 14 : i64
+                %59 = arith.muli %58, %c14_i64 : i64
+                %60 = arith.extsi %5 : i32 to i64
+                %c2_i64 = arith.constant 2 : i64
+                %61 = arith.floordivsi %60, %c2_i64 : i64
+                %62 = arith.addi %59, %61 : i64
+                %c12_i64 = arith.constant 12 : i64
+                %63 = arith.remsi %62, %c12_i64 : i64
+                %64 = arith.extsi %arg8 : i32 to i64
+                %65 = arith.muli %63, %64 : i64
+                %66 = arith.addi %57, %65 : i64
+                %67 = arith.index_cast %66 : i64 to index
+                %68 = pto.addptr %arg0, %67 : <bf16, gm> -> <bf16, gm>
+                %c8192_i32 = arith.constant 8192 : i32
+                %69 = arith.muli %23, %c8192_i32 : i32
+                %c8192_i32_22 = arith.constant 8192 : i32
+                %70 = arith.addi %69, %c8192_i32_22 : i32
+                %71 = arith.extsi %70 : i32 to i64
+                %c2_i64_23 = arith.constant 2 : i64
+                %72 = arith.muli %71, %c2_i64_23 : i64
+                %73 = pto.castptr %72 : i64 -> !pto.ptr<bf16, l1>
+                %c128_i32 = arith.constant 128 : i32
+                %74 = arith.muli %23, %c128_i32 : i32
+                %c196_i32 = arith.constant 196 : i32
+                %75 = arith.subi %c196_i32, %74 : i32
+                %c128_i32_24 = arith.constant 128 : i32
+                %76 = arith.minsi %c128_i32_24, %75 : i32
+                %c2_i32_25 = arith.constant 2 : i32
+                %77 = arith.muli %arg9, %c2_i32_25 : i32
+                %78 = arith.extsi %76 : i32 to i64
+                %c64_i64 = arith.constant 64 : i64
+                %79 = arith.extsi %77 : i32 to i64
+                %c1_i64 = arith.constant 1 : i64
+                %c1_i64_26 = arith.constant 1 : i64
+                %c128_i64_27 = arith.constant 128 : i64
+                %c0_i64_28 = arith.constant 0 : i64
+                %c0_i64_29 = arith.constant 0 : i64
+                %false = arith.constant false
+                pto.mte_gm_l1_frac %68, %73, nd2nz, shape(%78, %c64_i64), src_layout(%79), dst_group(%c1_i64, %c1_i64_26, %c128_i64_27, %c0_i64_28), ctrl(%c0_i64_29, %false) : !pto.ptr<bf16, gm>, !pto.ptr<bf16, l1>, nd2nz, shape i64, i64, src_layout(i64), dst_group i64, i64, i64, i64, ctrl i64, i1
+              }
+            }
+          }
+        }
+        pto.set_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID4>]
+      }
+      pto.wait_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID0>]
+      pto.wait_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID1>]
+      pto.wait_intra_block <PIPE_FIX>, 0
+      pto.wait_intra_block <PIPE_FIX>, 1
+      pto.wait_intra_block <PIPE_FIX>, 16
+      pto.wait_intra_block <PIPE_FIX>, 17
+      pto.wait_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID2>]
+      pto.wait_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID3>]
+      pto.wait_intra_block <PIPE_FIX>, 2
+      pto.wait_intra_block <PIPE_FIX>, 18
+      pto.wait_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID0>]
+      pto.wait_flag[<PIPE_FIX>, <PIPE_M>, <EVENT_ID1>]
+      pto.wait_flag[<PIPE_MTE1>, <PIPE_MTE2>, <EVENT_ID4>]
+    }
+    pto.section.vector {
+      %6 = pto.get_subblock_idx
+      pto.set_intra_block <PIPE_V>, 0
+      pto.set_intra_block <PIPE_V>, 1
+      pto.set_intra_block <PIPE_V>, 2
+      pto.set_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID0>]
+      pto.set_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID1>]
+      pto.set_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID0>]
+      %c0 = arith.constant 0 : index
+      %c2 = arith.constant 2 : index
+      %c1 = arith.constant 1 : index
+      scf.for %arg22 = %c0 to %c1 step %c1 {
+        %7 = arith.index_cast %arg22 : index to i32
+        %c7_i32 = arith.constant 7 : i32
+        %8 = arith.muli %7, %c7_i32 : i32
+        %c4_i32 = arith.constant 4 : i32
+        %9 = arith.floordivsi %5, %c4_i32 : i32
+        %10 = arith.addi %8, %9 : i32
+        %c12_i32 = arith.constant 12 : i32
+        %11 = arith.cmpi slt, %10, %c12_i32 : i32
+        pto.wait_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID0>]
+        %c7_i32_3 = arith.constant 7 : i32
+        %12 = arith.muli %7, %c7_i32_3 : i32
+        %c4_i32_4 = arith.constant 4 : i32
+        %13 = arith.floordivsi %5, %c4_i32_4 : i32
+        %14 = arith.addi %12, %13 : i32
+        %c12_i32_5 = arith.constant 12 : i32
+        %15 = arith.cmpi slt, %14, %c12_i32_5 : i32
+        scf.if %15 {
+          %c7_i32_15 = arith.constant 7 : i32
+          %28 = arith.muli %7, %c7_i32_15 : i32
+          %c4_i32_16 = arith.constant 4 : i32
+          %29 = arith.floordivsi %5, %c4_i32_16 : i32
+          %30 = arith.addi %28, %29 : i32
+          %c6_i32 = arith.constant 6 : i32
+          %31 = arith.floordivsi %30, %c6_i32 : i32
+          %32 = arith.subi %arg6, %31 : i32
+          %c0_i32 = arith.constant 0 : i32
+          %33 = arith.cmpi sgt, %32, %c0_i32 : i32
+          scf.if %33 {
+            %40 = arith.extsi %7 : i32 to i64
+            %c7_i64 = arith.constant 7 : i64
+            %41 = arith.muli %40, %c7_i64 : i64
+            %42 = arith.extsi %5 : i32 to i64
+            %c4_i64 = arith.constant 4 : i64
+            %43 = arith.floordivsi %42, %c4_i64 : i64
+            %44 = arith.addi %41, %43 : i64
+            %c6_i64 = arith.constant 6 : i64
+            %45 = arith.floordivsi %44, %c6_i64 : i64
+            %46 = arith.extsi %arg13 : i32 to i64
+            %47 = arith.muli %45, %46 : i64
+            %48 = arith.extsi %5 : i32 to i64
+            %c1_i64 = arith.constant 1 : i64
+            %49 = arith.andi %48, %c1_i64 : i64
+            %c128_i64 = arith.constant 128 : i64
+            %50 = arith.muli %49, %c128_i64 : i64
+            %c64_i64 = arith.constant 64 : i64
+            %51 = arith.muli %6, %c64_i64 : i64
+            %52 = arith.addi %50, %51 : i64
+            %53 = arith.extsi %arg15 : i32 to i64
+            %54 = arith.muli %52, %53 : i64
+            %55 = arith.addi %47, %54 : i64
+            %56 = arith.extsi %7 : i32 to i64
+            %c14_i64 = arith.constant 14 : i64
+            %57 = arith.muli %56, %c14_i64 : i64
+            %58 = arith.extsi %5 : i32 to i64
+            %c2_i64 = arith.constant 2 : i64
+            %59 = arith.floordivsi %58, %c2_i64 : i64
+            %60 = arith.addi %57, %59 : i64
+            %c12_i64 = arith.constant 12 : i64
+            %61 = arith.remsi %60, %c12_i64 : i64
+            %62 = arith.extsi %arg14 : i32 to i64
+            %63 = arith.muli %61, %62 : i64
+            %64 = arith.addi %55, %63 : i64
+            %65 = arith.index_cast %64 : i64 to index
+            %66 = pto.addptr %arg3, %65 : <bf16, gm> -> <bf16, gm>
+            %c122880_i64 = arith.constant 122880 : i64
+            %67 = pto.castptr %c122880_i64 : i64 -> !pto.ptr<bf16, ub>
+            %c64_i64_21 = arith.constant 64 : i64
+            %68 = arith.muli %6, %c64_i64_21 : i64
+            %c196_i64 = arith.constant 196 : i64
+            %69 = arith.subi %c196_i64, %68 : i64
+            %c1_i32 = arith.constant 1 : i32
+            %70 = arith.andi %5, %c1_i32 : i32
+            %c128_i32 = arith.constant 128 : i32
+            %71 = arith.muli %70, %c128_i32 : i32
+            %72 = arith.extsi %71 : i32 to i64
+            %73 = arith.subi %69, %72 : i64
+            %c64_i64_22 = arith.constant 64 : i64
+            %74 = arith.minsi %c64_i64_22, %73 : i64
+            %c2_i32 = arith.constant 2 : i32
+            %75 = arith.muli %arg15, %c2_i32 : i32
+            %76 = arith.extsi %75 : i32 to i64
+            %c32_i64 = arith.constant 32 : i64
+            %c0_i64_23 = arith.constant 0 : i64
+            %c32_i64_24 = arith.constant 32 : i64
+            pto.mte_gm_ub %66, %67, %c0_i64_23, %c32_i64_24 nburst(%74, %76, %c32_i64) {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0>} : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+          }
+          pto.vecscope {
+            %c0_21 = arith.constant 0 : index
+            %c64 = arith.constant 64 : index
+            %c1_22 = arith.constant 1 : index
+            scf.for %arg23 = %c0_21 to %c64 step %c1_22 {
+              %50 = arith.index_cast %arg23 : index to i32
+              %cst_26 = arith.constant 0.000000e+00 : f32
+              %51 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+              %52 = pto.vdup %cst_26, %51 : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %53 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+              %c64_i32 = arith.constant 64 : i32
+              %54 = arith.muli %50, %c64_i32 : i32
+              %c20480_i32 = arith.constant 20480 : i32
+              %55 = arith.addi %54, %c20480_i32 : i32
+              %56 = arith.index_cast %55 : i32 to index
+              %57 = pto.addptr %53, %56 : <f32, ub> -> <f32, ub>
+              %c0_27 = arith.constant 0 : index
+              %58 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+              pto.vsts %52, %57[%c0_27], %58 {dist = "NORM_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+            }
+            %cst = arith.constant 0.000000e+00 : f32
+            %40 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+            %41 = pto.vdup %cst, %40 : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+            %42 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+            %c31808 = arith.constant 31808 : index
+            %43 = pto.addptr %42, %c31808 : <f32, ub> -> <f32, ub>
+            %c0_23 = arith.constant 0 : index
+            %44 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+            pto.vsts %41, %43[%c0_23], %44 {dist = "NORM_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+            %cst_24 = arith.constant 0xFF800000 : f32
+            %45 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+            %46 = pto.vdup %cst_24, %45 : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+            %47 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+            %c31744 = arith.constant 31744 : index
+            %48 = pto.addptr %47, %c31744 : <f32, ub> -> <f32, ub>
+            %c0_25 = arith.constant 0 : index
+            %49 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+            pto.vsts %46, %48[%c0_25], %49 {dist = "NORM_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+          }
+          %c7_i32_17 = arith.constant 7 : i32
+          %34 = arith.muli %7, %c7_i32_17 : i32
+          %c4_i32_18 = arith.constant 4 : i32
+          %35 = arith.floordivsi %5, %c4_i32_18 : i32
+          %36 = arith.addi %34, %35 : i32
+          %c6_i32_19 = arith.constant 6 : i32
+          %37 = arith.floordivsi %36, %c6_i32_19 : i32
+          %38 = arith.subi %arg6, %37 : i32
+          %c0_i32_20 = arith.constant 0 : i32
+          %39 = arith.cmpi sgt, %38, %c0_i32_20 : i32
+          scf.if %39 {
+            %40 = arith.extsi %7 : i32 to i64
+            %c7_i64 = arith.constant 7 : i64
+            %41 = arith.muli %40, %c7_i64 : i64
+            %42 = arith.extsi %5 : i32 to i64
+            %c4_i64 = arith.constant 4 : i64
+            %43 = arith.floordivsi %42, %c4_i64 : i64
+            %44 = arith.addi %41, %43 : i64
+            %c6_i64 = arith.constant 6 : i64
+            %45 = arith.floordivsi %44, %c6_i64 : i64
+            %46 = arith.extsi %arg16 : i32 to i64
+            %47 = arith.muli %45, %46 : i64
+            %48 = arith.extsi %5 : i32 to i64
+            %c1_i64 = arith.constant 1 : i64
+            %49 = arith.andi %48, %c1_i64 : i64
+            %c128_i64 = arith.constant 128 : i64
+            %50 = arith.muli %49, %c128_i64 : i64
+            %c64_i64 = arith.constant 64 : i64
+            %51 = arith.muli %6, %c64_i64 : i64
+            %52 = arith.addi %50, %51 : i64
+            %53 = arith.extsi %arg18 : i32 to i64
+            %54 = arith.muli %52, %53 : i64
+            %55 = arith.addi %47, %54 : i64
+            %56 = arith.extsi %7 : i32 to i64
+            %c14_i64 = arith.constant 14 : i64
+            %57 = arith.muli %56, %c14_i64 : i64
+            %58 = arith.extsi %5 : i32 to i64
+            %c2_i64 = arith.constant 2 : i64
+            %59 = arith.floordivsi %58, %c2_i64 : i64
+            %60 = arith.addi %57, %59 : i64
+            %c12_i64 = arith.constant 12 : i64
+            %61 = arith.remsi %60, %c12_i64 : i64
+            %62 = arith.extsi %arg17 : i32 to i64
+            %63 = arith.muli %61, %62 : i64
+            %64 = arith.addi %55, %63 : i64
+            %65 = arith.index_cast %64 : i64 to index
+            %66 = pto.addptr %arg4, %65 : <bf16, gm> -> <bf16, gm>
+            %c124928_i64 = arith.constant 124928 : i64
+            %67 = pto.castptr %c124928_i64 : i64 -> !pto.ptr<bf16, ub>
+            %c64_i64_21 = arith.constant 64 : i64
+            %68 = arith.muli %6, %c64_i64_21 : i64
+            %c196_i64 = arith.constant 196 : i64
+            %69 = arith.subi %c196_i64, %68 : i64
+            %c1_i32 = arith.constant 1 : i32
+            %70 = arith.andi %5, %c1_i32 : i32
+            %c128_i32 = arith.constant 128 : i32
+            %71 = arith.muli %70, %c128_i32 : i32
+            %72 = arith.extsi %71 : i32 to i64
+            %73 = arith.subi %69, %72 : i64
+            %c64_i64_22 = arith.constant 64 : i64
+            %74 = arith.minsi %c64_i64_22, %73 : i64
+            %c2_i32 = arith.constant 2 : i32
+            %75 = arith.muli %arg18, %c2_i32 : i32
+            %76 = arith.extsi %75 : i32 to i64
+            %c32_i64 = arith.constant 32 : i64
+            %c0_i64_23 = arith.constant 0 : i64
+            %c32_i64_24 = arith.constant 32 : i64
+            pto.mte_gm_ub %66, %67, %c0_i64_23, %c32_i64_24 nburst(%74, %76, %c32_i64) {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0>} : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+          }
+        }
+        pto.set_flag[<PIPE_MTE2>, <PIPE_V>, <EVENT_ID0>]
+        pto.wait_flag[<PIPE_MTE2>, <PIPE_V>, <EVENT_ID0>]
+        %c7_i32_6 = arith.constant 7 : i32
+        %16 = arith.muli %7, %c7_i32_6 : i32
+        %c4_i32_7 = arith.constant 4 : i32
+        %17 = arith.floordivsi %5, %c4_i32_7 : i32
+        %18 = arith.addi %16, %17 : i32
+        %c12_i32_8 = arith.constant 12 : i32
+        %19 = arith.cmpi slt, %18, %c12_i32_8 : i32
+        scf.if %19 {
+          %c0_15 = arith.constant 0 : index
+          %c4 = arith.constant 4 : index
+          %c1_16 = arith.constant 1 : index
+          scf.for %arg23 = %c0_15 to %c4 step %c1_16 {
+            %28 = arith.index_cast %arg23 : index to i32
+            %c2_i32 = arith.constant 2 : i32
+            %29 = arith.cmpi sge, %28, %c2_i32 : i32
+            scf.if %29 {
+              pto.wait_intra_block <PIPE_V>, 6
+              pto.vecscope {
+                %c0_19 = arith.constant 0 : index
+                %c64 = arith.constant 64 : index
+                %c1_20 = arith.constant 1 : index
+                scf.for %arg24 = %c0_19 to %c64 step %c1_20 {
+                  %34 = arith.index_cast %arg24 : index to i32
+                  %35 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c1_i32 = arith.constant 1 : i32
+                  %36 = arith.andi %28, %c1_i32 : i32
+                  %c64_i32 = arith.constant 64 : i32
+                  %37 = arith.muli %36, %c64_i32 : i32
+                  %38 = arith.addi %37, %34 : i32
+                  %c31872_i32 = arith.constant 31872 : i32
+                  %39 = arith.addi %38, %c31872_i32 : i32
+                  %40 = arith.index_cast %39 : i32 to index
+                  %41 = pto.addptr %35, %40 : <f32, ub> -> <f32, ub>
+                  %c0_21 = arith.constant 0 : index
+                  %result = pto.vlds %41[%c0_21] {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %42 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c64_i32_22 = arith.constant 64 : i32
+                  %43 = arith.muli %34, %c64_i32_22 : i32
+                  %c20480_i32 = arith.constant 20480 : i32
+                  %44 = arith.addi %43, %c20480_i32 : i32
+                  %45 = arith.index_cast %44 : i32 to index
+                  %46 = pto.addptr %42, %45 : <f32, ub> -> <f32, ub>
+                  %c0_23 = arith.constant 0 : index
+                  %result_24 = pto.vlds %46[%c0_23] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %47 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %48 = pto.vmul %result_24, %result, %47 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %49 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c64_i32_25 = arith.constant 64 : i32
+                  %50 = arith.muli %34, %c64_i32_25 : i32
+                  %c24576_i32 = arith.constant 24576 : i32
+                  %51 = arith.addi %50, %c24576_i32 : i32
+                  %52 = arith.index_cast %51 : i32 to index
+                  %53 = pto.addptr %49, %52 : <f32, ub> -> <f32, ub>
+                  %c0_26 = arith.constant 0 : index
+                  %result_27 = pto.vlds %53[%c0_26] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %54 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %55 = pto.vadd %48, %result_27, %54 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %56 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c64_i32_28 = arith.constant 64 : i32
+                  %57 = arith.muli %34, %c64_i32_28 : i32
+                  %c20480_i32_29 = arith.constant 20480 : i32
+                  %58 = arith.addi %57, %c20480_i32_29 : i32
+                  %59 = arith.index_cast %58 : i32 to index
+                  %60 = pto.addptr %56, %59 : <f32, ub> -> <f32, ub>
+                  %c0_30 = arith.constant 0 : index
+                  %61 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  pto.vsts %55, %60[%c0_30], %61 {dist = "NORM_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                }
+              }
+              pto.set_intra_block <PIPE_V>, 2
+            }
+            %c2_i32_17 = arith.constant 2 : i32
+            %30 = arith.cmpi slt, %28, %c2_i32_17 : i32
+            scf.if %30 {
+              %c4_i32_19 = arith.constant 4 : i32
+              %34 = arith.addi %28, %c4_i32_19 : i32
+              %35 = arith.extsi %34 : i32 to i64
+              %36 = arith.index_cast %35 : i64 to index
+              pto.wait_intra_block <PIPE_V>, %36
+              pto.vecscope {
+                %c0_20 = arith.constant 0 : index
+                %c2_21 = arith.constant 2 : index
+                %c1_22 = arith.constant 1 : index
+                scf.for %arg24 = %c0_20 to %c2_21 step %c1_22 {
+                  %39 = arith.index_cast %arg24 : index to i32
+                  %c256_i32 = arith.constant 256 : i32
+                  %40 = arith.muli %28, %c256_i32 : i32
+                  %c128_i32 = arith.constant 128 : i32
+                  %41 = arith.muli %39, %c128_i32 : i32
+                  %42 = arith.addi %40, %41 : i32
+                  %43 = arith.trunci %42 : i32 to i16
+                  %44 = pto.vci %43 {order = "ASC"} : i16 -> !pto.vreg<128xi16>
+                  %c1_i16 = arith.constant 1 : i16
+                  %45 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %46 = pto.vshrs %44, %c1_i16, %45 : !pto.vreg<128xi16>, i16, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %47 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %c196_i16 = arith.constant 196 : i16
+                  %48 = pto.vcmps %46, %c196_i16, %47, "lt" : !pto.vreg<128xi16>, i16, !pto.mask<b16> -> !pto.mask<b16>
+                  %c0_i16 = arith.constant 0 : i16
+                  %49 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %50 = pto.vdup %c0_i16, %49 : i16, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %51 = pto.vsel %46, %50, %48 : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %c14_i16 = arith.constant 14 : i16
+                  %52 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %53 = pto.vdup %c14_i16, %52 : i16, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %54 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %55 = pto.vdiv %51, %53, %54 : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %c14_i16_23 = arith.constant 14 : i16
+                  %56 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %57 = pto.vdup %c14_i16_23, %56 : i16, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %58 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %59 = pto.vmul %55, %57, %58 : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %60 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                  %61 = pto.vsub %51, %59, %60 : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+                  %c128_i32_24 = arith.constant 128 : i32
+                  %62 = arith.muli %28, %c128_i32_24 : i32
+                  %c64_i32 = arith.constant 64 : i32
+                  %63 = arith.muli %39, %c64_i32 : i32
+                  %64 = arith.addi %62, %63 : i32
+                  %65 = pto.vci %64 {order = "ASC"} : i32 -> !pto.vreg<64xi32>
+                  %66 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %c196_i32 = arith.constant 196 : i32
+                  %67 = pto.vcmps %65, %c196_i32, %66, "lt" : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.mask<b32>
+                  %c0_25 = arith.constant 0 : index
+                  %c64 = arith.constant 64 : index
+                  %c1_26 = arith.constant 1 : index
+                  scf.for %arg25 = %c0_25 to %c64 step %c1_26 {
+                    %68 = arith.index_cast %arg25 : index to i32
+                    %69 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+                    %c16_i32 = arith.constant 16 : i32
+                    %70 = arith.muli %68, %c16_i32 : i32
+                    %c61440_i32 = arith.constant 61440 : i32
+                    %71 = arith.addi %70, %c61440_i32 : i32
+                    %72 = arith.index_cast %71 : i32 to index
+                    %73 = pto.addptr %69, %72 : <bf16, ub> -> <bf16, ub>
+                    %74 = pto.vbitcast %55 : !pto.vreg<128xi16> -> !pto.vreg<128xui16>
+                    %75 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                    %76 = pto.pbitcast %75 : !pto.mask<b16> -> !pto.mask<b16>
+                    %77 = pto.vgather2 %73, %74, %76 : !pto.ptr<bf16, ub>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+                    %78 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                    %79 = pto.pbitcast %78 : !pto.mask<b16> -> !pto.mask<b16>
+                    %80 = pto.vcvt %77, %79 {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+                    %81 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+                    %c16_i32_27 = arith.constant 16 : i32
+                    %82 = arith.muli %68, %c16_i32_27 : i32
+                    %c62464_i32 = arith.constant 62464 : i32
+                    %83 = arith.addi %82, %c62464_i32 : i32
+                    %84 = arith.index_cast %83 : i32 to index
+                    %85 = pto.addptr %81, %84 : <bf16, ub> -> <bf16, ub>
+                    %86 = pto.vbitcast %61 : !pto.vreg<128xi16> -> !pto.vreg<128xui16>
+                    %87 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                    %88 = pto.pbitcast %87 : !pto.mask<b16> -> !pto.mask<b16>
+                    %89 = pto.vgather2 %85, %86, %88 : !pto.ptr<bf16, ub>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+                    %90 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+                    %91 = pto.pbitcast %90 : !pto.mask<b16> -> !pto.mask<b16>
+                    %92 = pto.vcvt %89, %91 {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+                    %93 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                    %c8192_i32 = arith.constant 8192 : i32
+                    %94 = arith.muli %28, %c8192_i32 : i32
+                    %c128_i32_28 = arith.constant 128 : i32
+                    %95 = arith.muli %68, %c128_i32_28 : i32
+                    %96 = arith.addi %94, %95 : i32
+                    %c64_i32_29 = arith.constant 64 : i32
+                    %97 = arith.muli %39, %c64_i32_29 : i32
+                    %98 = arith.addi %96, %97 : i32
+                    %99 = arith.index_cast %98 : i32 to index
+                    %100 = pto.addptr %93, %99 : <f32, ub> -> <f32, ub>
+                    %c0_30 = arith.constant 0 : index
+                    %result = pto.vlds %100[%c0_30] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                    %cst = arith.constant 1.250000e-01 : f32
+                    %101 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                    %102 = pto.vmuls %result, %cst, %101 : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+                    %103 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                    %104 = pto.vadd %102, %80, %103 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                    %105 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                    %106 = pto.vadd %104, %92, %105 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                    %cst_31 = arith.constant 0xFF800000 : f32
+                    %107 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                    %108 = pto.vdup %cst_31, %107 : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+                    %109 = pto.vsel %106, %108, %67 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                    %110 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                    %c8192_i32_32 = arith.constant 8192 : i32
+                    %111 = arith.muli %28, %c8192_i32_32 : i32
+                    %c128_i32_33 = arith.constant 128 : i32
+                    %112 = arith.muli %68, %c128_i32_33 : i32
+                    %113 = arith.addi %111, %112 : i32
+                    %c64_i32_34 = arith.constant 64 : i32
+                    %114 = arith.muli %39, %c64_i32_34 : i32
+                    %115 = arith.addi %113, %114 : i32
+                    %116 = arith.index_cast %115 : i32 to index
+                    %117 = pto.addptr %110, %116 : <f32, ub> -> <f32, ub>
+                    %c0_35 = arith.constant 0 : index
+                    %118 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                    pto.vsts %109, %117[%c0_35], %118 {dist = "NORM_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                  }
+                }
+              }
+              pto.vecscope {
+                %c0_20 = arith.constant 0 : index
+                %c32 = arith.constant 32 : index
+                %c1_21 = arith.constant 1 : index
+                scf.for %arg24 = %c0_20 to %c32 step %c1_21 {
+                  %39 = arith.index_cast %arg24 : index to i32
+                  %40 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_22 = arith.constant 2 : i32
+                  %41 = arith.muli %39, %c2_i32_22 : i32
+                  %c31744_i32 = arith.constant 31744 : i32
+                  %42 = arith.addi %41, %c31744_i32 : i32
+                  %43 = arith.index_cast %42 : i32 to index
+                  %44 = pto.addptr %40, %43 : <f32, ub> -> <f32, ub>
+                  %c0_23 = arith.constant 0 : index
+                  %result = pto.vlds %44[%c0_23] {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %45 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_24 = arith.constant 2 : i32
+                  %46 = arith.muli %39, %c2_i32_24 : i32
+                  %c31745_i32 = arith.constant 31745 : i32
+                  %47 = arith.addi %46, %c31745_i32 : i32
+                  %48 = arith.index_cast %47 : i32 to index
+                  %49 = pto.addptr %45, %48 : <f32, ub> -> <f32, ub>
+                  %c0_25 = arith.constant 0 : index
+                  %result_26 = pto.vlds %49[%c0_25] {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %50 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c8192_i32 = arith.constant 8192 : i32
+                  %51 = arith.muli %28, %c8192_i32 : i32
+                  %c256_i32 = arith.constant 256 : i32
+                  %52 = arith.muli %39, %c256_i32 : i32
+                  %53 = arith.addi %51, %52 : i32
+                  %54 = arith.index_cast %53 : i32 to index
+                  %55 = pto.addptr %50, %54 : <f32, ub> -> <f32, ub>
+                  %c0_27 = arith.constant 0 : index
+                  %result_28 = pto.vlds %55[%c0_27] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %56 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c8192_i32_29 = arith.constant 8192 : i32
+                  %57 = arith.muli %28, %c8192_i32_29 : i32
+                  %c256_i32_30 = arith.constant 256 : i32
+                  %58 = arith.muli %39, %c256_i32_30 : i32
+                  %59 = arith.addi %57, %58 : i32
+                  %c64_i32 = arith.constant 64 : i32
+                  %60 = arith.addi %59, %c64_i32 : i32
+                  %61 = arith.index_cast %60 : i32 to index
+                  %62 = pto.addptr %56, %61 : <f32, ub> -> <f32, ub>
+                  %c0_31 = arith.constant 0 : index
+                  %result_32 = pto.vlds %62[%c0_31] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %63 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c8192_i32_33 = arith.constant 8192 : i32
+                  %64 = arith.muli %28, %c8192_i32_33 : i32
+                  %c256_i32_34 = arith.constant 256 : i32
+                  %65 = arith.muli %39, %c256_i32_34 : i32
+                  %66 = arith.addi %64, %65 : i32
+                  %c128_i32 = arith.constant 128 : i32
+                  %67 = arith.addi %66, %c128_i32 : i32
+                  %68 = arith.index_cast %67 : i32 to index
+                  %69 = pto.addptr %63, %68 : <f32, ub> -> <f32, ub>
+                  %c0_35 = arith.constant 0 : index
+                  %result_36 = pto.vlds %69[%c0_35] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %70 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c8192_i32_37 = arith.constant 8192 : i32
+                  %71 = arith.muli %28, %c8192_i32_37 : i32
+                  %c256_i32_38 = arith.constant 256 : i32
+                  %72 = arith.muli %39, %c256_i32_38 : i32
+                  %73 = arith.addi %71, %72 : i32
+                  %c192_i32 = arith.constant 192 : i32
+                  %74 = arith.addi %73, %c192_i32 : i32
+                  %75 = arith.index_cast %74 : i32 to index
+                  %76 = pto.addptr %70, %75 : <f32, ub> -> <f32, ub>
+                  %c0_39 = arith.constant 0 : index
+                  %result_40 = pto.vlds %76[%c0_39] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %77 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %78 = pto.vmax %result, %result_28, %77 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %79 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %80 = pto.vmax %78, %result_32, %79 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %81 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %82 = pto.pbitcast %81 : !pto.mask<b32> -> !pto.mask<b32>
+                  %83 = pto.vcmax %80, %82 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %84 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_41 = arith.constant 2 : i32
+                  %85 = arith.muli %39, %c2_i32_41 : i32
+                  %c31744_i32_42 = arith.constant 31744 : i32
+                  %86 = arith.addi %85, %c31744_i32_42 : i32
+                  %87 = arith.index_cast %86 : i32 to index
+                  %88 = pto.addptr %84, %87 : <f32, ub> -> <f32, ub>
+                  %c0_43 = arith.constant 0 : index
+                  %89 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  pto.vsts %83, %88[%c0_43], %89 {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                  %90 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %91 = pto.vdup %83, %90 {position = "LOWEST"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %92 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %93 = pto.vmax %result_26, %result_36, %92 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %94 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %95 = pto.vmax %93, %result_40, %94 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %96 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %97 = pto.pbitcast %96 : !pto.mask<b32> -> !pto.mask<b32>
+                  %98 = pto.vcmax %95, %97 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %99 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_44 = arith.constant 2 : i32
+                  %100 = arith.muli %39, %c2_i32_44 : i32
+                  %c31745_i32_45 = arith.constant 31745 : i32
+                  %101 = arith.addi %100, %c31745_i32_45 : i32
+                  %102 = arith.index_cast %101 : i32 to index
+                  %103 = pto.addptr %99, %102 : <f32, ub> -> <f32, ub>
+                  %c0_46 = arith.constant 0 : index
+                  %104 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  pto.vsts %98, %103[%c0_46], %104 {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                  %105 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %106 = pto.vdup %98, %105 {position = "LOWEST"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %107 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %108 = pto.vexpdif %result, %91, %107, "EVEN" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %109 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %110 = pto.vexpdif %result_26, %106, %109, "EVEN" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %111 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c64_i32_47 = arith.constant 64 : i32
+                  %112 = arith.muli %28, %c64_i32_47 : i32
+                  %c2_i32_48 = arith.constant 2 : i32
+                  %113 = arith.muli %39, %c2_i32_48 : i32
+                  %114 = arith.addi %112, %113 : i32
+                  %c31872_i32 = arith.constant 31872 : i32
+                  %115 = arith.addi %114, %c31872_i32 : i32
+                  %116 = arith.index_cast %115 : i32 to index
+                  %117 = pto.addptr %111, %116 : <f32, ub> -> <f32, ub>
+                  %c0_49 = arith.constant 0 : index
+                  %118 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  pto.vsts %108, %117[%c0_49], %118 {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                  %119 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c64_i32_50 = arith.constant 64 : i32
+                  %120 = arith.muli %28, %c64_i32_50 : i32
+                  %c2_i32_51 = arith.constant 2 : i32
+                  %121 = arith.muli %39, %c2_i32_51 : i32
+                  %122 = arith.addi %120, %121 : i32
+                  %c31873_i32 = arith.constant 31873 : i32
+                  %123 = arith.addi %122, %c31873_i32 : i32
+                  %124 = arith.index_cast %123 : i32 to index
+                  %125 = pto.addptr %119, %124 : <f32, ub> -> <f32, ub>
+                  %c0_52 = arith.constant 0 : index
+                  %126 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  pto.vsts %110, %125[%c0_52], %126 {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                  %127 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %128 = pto.vexpdif %result_28, %91, %127, "EVEN" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %129 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %130 = pto.vexpdif %result_32, %91, %129, "EVEN" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %131 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %132 = pto.vexpdif %result_36, %106, %131, "EVEN" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %133 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %134 = pto.vexpdif %result_40, %106, %133, "EVEN" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %135 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %136 = pto.pbitcast %135 : !pto.mask<b32> -> !pto.mask<b32>
+                  %137 = pto.vcvt %128, %136 {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+                  %138 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+                  %c256_i32_53 = arith.constant 256 : i32
+                  %139 = arith.muli %39, %c256_i32_53 : i32
+                  %c32768_i32 = arith.constant 32768 : i32
+                  %140 = arith.addi %139, %c32768_i32 : i32
+                  %141 = arith.index_cast %140 : i32 to index
+                  %142 = pto.addptr %138, %141 : <bf16, ub> -> <bf16, ub>
+                  %c0_54 = arith.constant 0 : index
+                  %143 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %144 = pto.pbitcast %143 : !pto.mask<b32> -> !pto.mask<b32>
+                  pto.vsts %137, %142[%c0_54], %144 {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+                  %145 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %146 = pto.pbitcast %145 : !pto.mask<b32> -> !pto.mask<b32>
+                  %147 = pto.vcvt %130, %146 {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+                  %148 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+                  %c256_i32_55 = arith.constant 256 : i32
+                  %149 = arith.muli %39, %c256_i32_55 : i32
+                  %c32832_i32 = arith.constant 32832 : i32
+                  %150 = arith.addi %149, %c32832_i32 : i32
+                  %151 = arith.index_cast %150 : i32 to index
+                  %152 = pto.addptr %148, %151 : <bf16, ub> -> <bf16, ub>
+                  %c0_56 = arith.constant 0 : index
+                  %153 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %154 = pto.pbitcast %153 : !pto.mask<b32> -> !pto.mask<b32>
+                  pto.vsts %147, %152[%c0_56], %154 {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+                  %155 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %156 = pto.pbitcast %155 : !pto.mask<b32> -> !pto.mask<b32>
+                  %157 = pto.vcvt %132, %156 {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+                  %158 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+                  %c256_i32_57 = arith.constant 256 : i32
+                  %159 = arith.muli %39, %c256_i32_57 : i32
+                  %c32896_i32 = arith.constant 32896 : i32
+                  %160 = arith.addi %159, %c32896_i32 : i32
+                  %161 = arith.index_cast %160 : i32 to index
+                  %162 = pto.addptr %158, %161 : <bf16, ub> -> <bf16, ub>
+                  %c0_58 = arith.constant 0 : index
+                  %163 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %164 = pto.pbitcast %163 : !pto.mask<b32> -> !pto.mask<b32>
+                  pto.vsts %157, %162[%c0_58], %164 {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+                  %165 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %166 = pto.pbitcast %165 : !pto.mask<b32> -> !pto.mask<b32>
+                  %167 = pto.vcvt %134, %166 {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+                  %168 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+                  %c256_i32_59 = arith.constant 256 : i32
+                  %169 = arith.muli %39, %c256_i32_59 : i32
+                  %c32960_i32 = arith.constant 32960 : i32
+                  %170 = arith.addi %169, %c32960_i32 : i32
+                  %171 = arith.index_cast %170 : i32 to index
+                  %172 = pto.addptr %168, %171 : <bf16, ub> -> <bf16, ub>
+                  %c0_60 = arith.constant 0 : index
+                  %173 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %174 = pto.pbitcast %173 : !pto.mask<b32> -> !pto.mask<b32>
+                  pto.vsts %167, %172[%c0_60], %174 {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+                  %175 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %176 = pto.vadd %128, %130, %175 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %177 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %178 = pto.pbitcast %177 : !pto.mask<b32> -> !pto.mask<b32>
+                  %179 = pto.vcadd %176, %178 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %180 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %181 = pto.vadd %132, %134, %180 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %182 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %183 = pto.pbitcast %182 : !pto.mask<b32> -> !pto.mask<b32>
+                  %184 = pto.vcadd %181, %183 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %185 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_61 = arith.constant 2 : i32
+                  %186 = arith.muli %39, %c2_i32_61 : i32
+                  %c31808_i32 = arith.constant 31808 : i32
+                  %187 = arith.addi %186, %c31808_i32 : i32
+                  %188 = arith.index_cast %187 : i32 to index
+                  %189 = pto.addptr %185, %188 : <f32, ub> -> <f32, ub>
+                  %c0_62 = arith.constant 0 : index
+                  %result_63 = pto.vlds %189[%c0_62] {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %190 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_64 = arith.constant 2 : i32
+                  %191 = arith.muli %39, %c2_i32_64 : i32
+                  %c31809_i32 = arith.constant 31809 : i32
+                  %192 = arith.addi %191, %c31809_i32 : i32
+                  %193 = arith.index_cast %192 : i32 to index
+                  %194 = pto.addptr %190, %193 : <f32, ub> -> <f32, ub>
+                  %c0_65 = arith.constant 0 : index
+                  %result_66 = pto.vlds %194[%c0_65] {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+                  %195 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %196 = pto.vmul %result_63, %108, %195 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %197 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  %198 = pto.vadd %196, %179, %197 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %199 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+                  %200 = pto.vmul %result_66, %110, %199 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %201 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  %202 = pto.vadd %200, %184, %201 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+                  %203 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_67 = arith.constant 2 : i32
+                  %204 = arith.muli %39, %c2_i32_67 : i32
+                  %c31808_i32_68 = arith.constant 31808 : i32
+                  %205 = arith.addi %204, %c31808_i32_68 : i32
+                  %206 = arith.index_cast %205 : i32 to index
+                  %207 = pto.addptr %203, %206 : <f32, ub> -> <f32, ub>
+                  %c0_69 = arith.constant 0 : index
+                  %208 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  pto.vsts %198, %207[%c0_69], %208 {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                  %209 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+                  %c2_i32_70 = arith.constant 2 : i32
+                  %210 = arith.muli %39, %c2_i32_70 : i32
+                  %c31809_i32_71 = arith.constant 31809 : i32
+                  %211 = arith.addi %210, %c31809_i32_71 : i32
+                  %212 = arith.index_cast %211 : i32 to index
+                  %213 = pto.addptr %209, %212 : <f32, ub> -> <f32, ub>
+                  %c0_72 = arith.constant 0 : index
+                  %214 = pto.pset_b32 "PAT_VL1" : !pto.mask<b32>
+                  pto.vsts %202, %213[%c0_72], %214 {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+                }
+              }
+              %37 = arith.extsi %28 : i32 to i64
+              %38 = arith.index_cast %37 : i64 to index
+              pto.set_intra_block <PIPE_V>, %38
+            }
+            %c3_i32 = arith.constant 3 : i32
+            %31 = arith.cmpi slt, %28, %c3_i32 : i32
+            %32 = scf.if %31 -> (i1) {
+              %c1_i32 = arith.constant 1 : i32
+              %34 = arith.cmpi sge, %28, %c1_i32 : i32
+              scf.yield %34 : i1
+            } else {
+              scf.yield %31 : i1
+            }
+            scf.if %32 {
+              pto.wait_intra_block <PIPE_MTE3>, 3
+              pto.wait_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID0>]
+              %c128000_i64 = arith.constant 128000 : i64
+              %34 = pto.castptr %c128000_i64 : i64 -> !pto.ptr<bf16, ub>
+              %c1024_i64 = arith.constant 1024 : i64
+              %35 = arith.muli %6, %c1024_i64 : i64
+              %c40960_i64 = arith.constant 40960 : i64
+              %36 = arith.addi %35, %c40960_i64 : i64
+              %c2_i64 = arith.constant 2 : i64
+              %37 = arith.muli %36, %c2_i64 : i64
+              %38 = pto.castptr %37 : i64 -> !pto.ptr<bf16, l1>
+              %c8_i64 = arith.constant 8 : i64
+              %c1_i64 = arith.constant 1 : i64
+              %c64_i64 = arith.constant 64 : i64
+              %c64_i64_19 = arith.constant 64 : i64
+              pto.mte_ub_l1 %34, %38, %c64_i64_19 nburst(%c8_i64, %c1_i64, %c64_i64) : !pto.ptr<bf16, ub>, !pto.ptr<bf16, l1>, i64, i64, i64, i64
+              pto.set_intra_block <PIPE_MTE3>, 7
+              pto.set_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID0>]
+            }
+            %c2_i32_18 = arith.constant 2 : i32
+            %33 = arith.cmpi slt, %28, %c2_i32_18 : i32
+            scf.if %33 {
+              pto.wait_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID0>]
+              %c65536_i64 = arith.constant 65536 : i64
+              %34 = pto.castptr %c65536_i64 : i64 -> !pto.ptr<bf16, ub>
+              %c0_19 = arith.constant 0 : index
+              %35 = pto.addptr %34, %c0_19 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_20 = arith.constant 0 : i64
+              %36 = arith.index_cast %c0_i64_20 : i64 to index
+              %result = pto.vlds %35[%36] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64 = arith.constant 128000 : i64
+              %37 = pto.castptr %c128000_i64 : i64 -> !pto.ptr<bf16, ub>
+              %c0_21 = arith.constant 0 : index
+              %38 = pto.addptr %37, %c0_21 : <bf16, ub> -> <bf16, ub>
+              %39 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16 = arith.constant 65 : i16
+              %c0_i16 = arith.constant 0 : i16
+              pto.vsstb %result, %38, %c65_i16, %c0_i16, %39 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_22 = arith.constant 65536 : i64
+              %40 = pto.castptr %c65536_i64_22 : i64 -> !pto.ptr<bf16, ub>
+              %c128 = arith.constant 128 : index
+              %41 = pto.addptr %40, %c128 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_23 = arith.constant 0 : i64
+              %42 = arith.index_cast %c0_i64_23 : i64 to index
+              %result_24 = pto.vlds %41[%42] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_25 = arith.constant 128000 : i64
+              %43 = pto.castptr %c128000_i64_25 : i64 -> !pto.ptr<bf16, ub>
+              %c16 = arith.constant 16 : index
+              %44 = pto.addptr %43, %c16 : <bf16, ub> -> <bf16, ub>
+              %45 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_26 = arith.constant 65 : i16
+              %c0_i16_27 = arith.constant 0 : i16
+              pto.vsstb %result_24, %44, %c65_i16_26, %c0_i16_27, %45 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_28 = arith.constant 65536 : i64
+              %46 = pto.castptr %c65536_i64_28 : i64 -> !pto.ptr<bf16, ub>
+              %c256 = arith.constant 256 : index
+              %47 = pto.addptr %46, %c256 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_29 = arith.constant 0 : i64
+              %48 = arith.index_cast %c0_i64_29 : i64 to index
+              %result_30 = pto.vlds %47[%48] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_31 = arith.constant 128000 : i64
+              %49 = pto.castptr %c128000_i64_31 : i64 -> !pto.ptr<bf16, ub>
+              %c32 = arith.constant 32 : index
+              %50 = pto.addptr %49, %c32 : <bf16, ub> -> <bf16, ub>
+              %51 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_32 = arith.constant 65 : i16
+              %c0_i16_33 = arith.constant 0 : i16
+              pto.vsstb %result_30, %50, %c65_i16_32, %c0_i16_33, %51 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_34 = arith.constant 65536 : i64
+              %52 = pto.castptr %c65536_i64_34 : i64 -> !pto.ptr<bf16, ub>
+              %c384 = arith.constant 384 : index
+              %53 = pto.addptr %52, %c384 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_35 = arith.constant 0 : i64
+              %54 = arith.index_cast %c0_i64_35 : i64 to index
+              %result_36 = pto.vlds %53[%54] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_37 = arith.constant 128000 : i64
+              %55 = pto.castptr %c128000_i64_37 : i64 -> !pto.ptr<bf16, ub>
+              %c48 = arith.constant 48 : index
+              %56 = pto.addptr %55, %c48 : <bf16, ub> -> <bf16, ub>
+              %57 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_38 = arith.constant 65 : i16
+              %c0_i16_39 = arith.constant 0 : i16
+              pto.vsstb %result_36, %56, %c65_i16_38, %c0_i16_39, %57 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_40 = arith.constant 65536 : i64
+              %58 = pto.castptr %c65536_i64_40 : i64 -> !pto.ptr<bf16, ub>
+              %c512 = arith.constant 512 : index
+              %59 = pto.addptr %58, %c512 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_41 = arith.constant 0 : i64
+              %60 = arith.index_cast %c0_i64_41 : i64 to index
+              %result_42 = pto.vlds %59[%60] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_43 = arith.constant 128000 : i64
+              %61 = pto.castptr %c128000_i64_43 : i64 -> !pto.ptr<bf16, ub>
+              %c64 = arith.constant 64 : index
+              %62 = pto.addptr %61, %c64 : <bf16, ub> -> <bf16, ub>
+              %63 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_44 = arith.constant 65 : i16
+              %c0_i16_45 = arith.constant 0 : i16
+              pto.vsstb %result_42, %62, %c65_i16_44, %c0_i16_45, %63 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_46 = arith.constant 65536 : i64
+              %64 = pto.castptr %c65536_i64_46 : i64 -> !pto.ptr<bf16, ub>
+              %c640 = arith.constant 640 : index
+              %65 = pto.addptr %64, %c640 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_47 = arith.constant 0 : i64
+              %66 = arith.index_cast %c0_i64_47 : i64 to index
+              %result_48 = pto.vlds %65[%66] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_49 = arith.constant 128000 : i64
+              %67 = pto.castptr %c128000_i64_49 : i64 -> !pto.ptr<bf16, ub>
+              %c80 = arith.constant 80 : index
+              %68 = pto.addptr %67, %c80 : <bf16, ub> -> <bf16, ub>
+              %69 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_50 = arith.constant 65 : i16
+              %c0_i16_51 = arith.constant 0 : i16
+              pto.vsstb %result_48, %68, %c65_i16_50, %c0_i16_51, %69 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_52 = arith.constant 65536 : i64
+              %70 = pto.castptr %c65536_i64_52 : i64 -> !pto.ptr<bf16, ub>
+              %c768 = arith.constant 768 : index
+              %71 = pto.addptr %70, %c768 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_53 = arith.constant 0 : i64
+              %72 = arith.index_cast %c0_i64_53 : i64 to index
+              %result_54 = pto.vlds %71[%72] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_55 = arith.constant 128000 : i64
+              %73 = pto.castptr %c128000_i64_55 : i64 -> !pto.ptr<bf16, ub>
+              %c96 = arith.constant 96 : index
+              %74 = pto.addptr %73, %c96 : <bf16, ub> -> <bf16, ub>
+              %75 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_56 = arith.constant 65 : i16
+              %c0_i16_57 = arith.constant 0 : i16
+              pto.vsstb %result_54, %74, %c65_i16_56, %c0_i16_57, %75 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_58 = arith.constant 65536 : i64
+              %76 = pto.castptr %c65536_i64_58 : i64 -> !pto.ptr<bf16, ub>
+              %c896 = arith.constant 896 : index
+              %77 = pto.addptr %76, %c896 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_59 = arith.constant 0 : i64
+              %78 = arith.index_cast %c0_i64_59 : i64 to index
+              %result_60 = pto.vlds %77[%78] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_61 = arith.constant 128000 : i64
+              %79 = pto.castptr %c128000_i64_61 : i64 -> !pto.ptr<bf16, ub>
+              %c112 = arith.constant 112 : index
+              %80 = pto.addptr %79, %c112 : <bf16, ub> -> <bf16, ub>
+              %81 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_62 = arith.constant 65 : i16
+              %c0_i16_63 = arith.constant 0 : i16
+              pto.vsstb %result_60, %80, %c65_i16_62, %c0_i16_63, %81 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_64 = arith.constant 65536 : i64
+              %82 = pto.castptr %c65536_i64_64 : i64 -> !pto.ptr<bf16, ub>
+              %c1024 = arith.constant 1024 : index
+              %83 = pto.addptr %82, %c1024 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_65 = arith.constant 0 : i64
+              %84 = arith.index_cast %c0_i64_65 : i64 to index
+              %result_66 = pto.vlds %83[%84] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_67 = arith.constant 128000 : i64
+              %85 = pto.castptr %c128000_i64_67 : i64 -> !pto.ptr<bf16, ub>
+              %c128_68 = arith.constant 128 : index
+              %86 = pto.addptr %85, %c128_68 : <bf16, ub> -> <bf16, ub>
+              %87 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_69 = arith.constant 65 : i16
+              %c0_i16_70 = arith.constant 0 : i16
+              pto.vsstb %result_66, %86, %c65_i16_69, %c0_i16_70, %87 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_71 = arith.constant 65536 : i64
+              %88 = pto.castptr %c65536_i64_71 : i64 -> !pto.ptr<bf16, ub>
+              %c1152 = arith.constant 1152 : index
+              %89 = pto.addptr %88, %c1152 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_72 = arith.constant 0 : i64
+              %90 = arith.index_cast %c0_i64_72 : i64 to index
+              %result_73 = pto.vlds %89[%90] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_74 = arith.constant 128000 : i64
+              %91 = pto.castptr %c128000_i64_74 : i64 -> !pto.ptr<bf16, ub>
+              %c144 = arith.constant 144 : index
+              %92 = pto.addptr %91, %c144 : <bf16, ub> -> <bf16, ub>
+              %93 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_75 = arith.constant 65 : i16
+              %c0_i16_76 = arith.constant 0 : i16
+              pto.vsstb %result_73, %92, %c65_i16_75, %c0_i16_76, %93 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_77 = arith.constant 65536 : i64
+              %94 = pto.castptr %c65536_i64_77 : i64 -> !pto.ptr<bf16, ub>
+              %c1280 = arith.constant 1280 : index
+              %95 = pto.addptr %94, %c1280 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_78 = arith.constant 0 : i64
+              %96 = arith.index_cast %c0_i64_78 : i64 to index
+              %result_79 = pto.vlds %95[%96] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_80 = arith.constant 128000 : i64
+              %97 = pto.castptr %c128000_i64_80 : i64 -> !pto.ptr<bf16, ub>
+              %c160 = arith.constant 160 : index
+              %98 = pto.addptr %97, %c160 : <bf16, ub> -> <bf16, ub>
+              %99 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_81 = arith.constant 65 : i16
+              %c0_i16_82 = arith.constant 0 : i16
+              pto.vsstb %result_79, %98, %c65_i16_81, %c0_i16_82, %99 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_83 = arith.constant 65536 : i64
+              %100 = pto.castptr %c65536_i64_83 : i64 -> !pto.ptr<bf16, ub>
+              %c1408 = arith.constant 1408 : index
+              %101 = pto.addptr %100, %c1408 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_84 = arith.constant 0 : i64
+              %102 = arith.index_cast %c0_i64_84 : i64 to index
+              %result_85 = pto.vlds %101[%102] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_86 = arith.constant 128000 : i64
+              %103 = pto.castptr %c128000_i64_86 : i64 -> !pto.ptr<bf16, ub>
+              %c176 = arith.constant 176 : index
+              %104 = pto.addptr %103, %c176 : <bf16, ub> -> <bf16, ub>
+              %105 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_87 = arith.constant 65 : i16
+              %c0_i16_88 = arith.constant 0 : i16
+              pto.vsstb %result_85, %104, %c65_i16_87, %c0_i16_88, %105 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_89 = arith.constant 65536 : i64
+              %106 = pto.castptr %c65536_i64_89 : i64 -> !pto.ptr<bf16, ub>
+              %c1536 = arith.constant 1536 : index
+              %107 = pto.addptr %106, %c1536 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_90 = arith.constant 0 : i64
+              %108 = arith.index_cast %c0_i64_90 : i64 to index
+              %result_91 = pto.vlds %107[%108] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_92 = arith.constant 128000 : i64
+              %109 = pto.castptr %c128000_i64_92 : i64 -> !pto.ptr<bf16, ub>
+              %c192 = arith.constant 192 : index
+              %110 = pto.addptr %109, %c192 : <bf16, ub> -> <bf16, ub>
+              %111 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_93 = arith.constant 65 : i16
+              %c0_i16_94 = arith.constant 0 : i16
+              pto.vsstb %result_91, %110, %c65_i16_93, %c0_i16_94, %111 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_95 = arith.constant 65536 : i64
+              %112 = pto.castptr %c65536_i64_95 : i64 -> !pto.ptr<bf16, ub>
+              %c1664 = arith.constant 1664 : index
+              %113 = pto.addptr %112, %c1664 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_96 = arith.constant 0 : i64
+              %114 = arith.index_cast %c0_i64_96 : i64 to index
+              %result_97 = pto.vlds %113[%114] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_98 = arith.constant 128000 : i64
+              %115 = pto.castptr %c128000_i64_98 : i64 -> !pto.ptr<bf16, ub>
+              %c208 = arith.constant 208 : index
+              %116 = pto.addptr %115, %c208 : <bf16, ub> -> <bf16, ub>
+              %117 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_99 = arith.constant 65 : i16
+              %c0_i16_100 = arith.constant 0 : i16
+              pto.vsstb %result_97, %116, %c65_i16_99, %c0_i16_100, %117 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_101 = arith.constant 65536 : i64
+              %118 = pto.castptr %c65536_i64_101 : i64 -> !pto.ptr<bf16, ub>
+              %c1792 = arith.constant 1792 : index
+              %119 = pto.addptr %118, %c1792 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_102 = arith.constant 0 : i64
+              %120 = arith.index_cast %c0_i64_102 : i64 to index
+              %result_103 = pto.vlds %119[%120] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_104 = arith.constant 128000 : i64
+              %121 = pto.castptr %c128000_i64_104 : i64 -> !pto.ptr<bf16, ub>
+              %c224 = arith.constant 224 : index
+              %122 = pto.addptr %121, %c224 : <bf16, ub> -> <bf16, ub>
+              %123 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_105 = arith.constant 65 : i16
+              %c0_i16_106 = arith.constant 0 : i16
+              pto.vsstb %result_103, %122, %c65_i16_105, %c0_i16_106, %123 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_107 = arith.constant 65536 : i64
+              %124 = pto.castptr %c65536_i64_107 : i64 -> !pto.ptr<bf16, ub>
+              %c1920 = arith.constant 1920 : index
+              %125 = pto.addptr %124, %c1920 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_108 = arith.constant 0 : i64
+              %126 = arith.index_cast %c0_i64_108 : i64 to index
+              %result_109 = pto.vlds %125[%126] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_110 = arith.constant 128000 : i64
+              %127 = pto.castptr %c128000_i64_110 : i64 -> !pto.ptr<bf16, ub>
+              %c240 = arith.constant 240 : index
+              %128 = pto.addptr %127, %c240 : <bf16, ub> -> <bf16, ub>
+              %129 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_111 = arith.constant 65 : i16
+              %c0_i16_112 = arith.constant 0 : i16
+              pto.vsstb %result_109, %128, %c65_i16_111, %c0_i16_112, %129 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_113 = arith.constant 65536 : i64
+              %130 = pto.castptr %c65536_i64_113 : i64 -> !pto.ptr<bf16, ub>
+              %c2048 = arith.constant 2048 : index
+              %131 = pto.addptr %130, %c2048 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_114 = arith.constant 0 : i64
+              %132 = arith.index_cast %c0_i64_114 : i64 to index
+              %result_115 = pto.vlds %131[%132] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_116 = arith.constant 128000 : i64
+              %133 = pto.castptr %c128000_i64_116 : i64 -> !pto.ptr<bf16, ub>
+              %c256_117 = arith.constant 256 : index
+              %134 = pto.addptr %133, %c256_117 : <bf16, ub> -> <bf16, ub>
+              %135 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_118 = arith.constant 65 : i16
+              %c0_i16_119 = arith.constant 0 : i16
+              pto.vsstb %result_115, %134, %c65_i16_118, %c0_i16_119, %135 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_120 = arith.constant 65536 : i64
+              %136 = pto.castptr %c65536_i64_120 : i64 -> !pto.ptr<bf16, ub>
+              %c2176 = arith.constant 2176 : index
+              %137 = pto.addptr %136, %c2176 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_121 = arith.constant 0 : i64
+              %138 = arith.index_cast %c0_i64_121 : i64 to index
+              %result_122 = pto.vlds %137[%138] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_123 = arith.constant 128000 : i64
+              %139 = pto.castptr %c128000_i64_123 : i64 -> !pto.ptr<bf16, ub>
+              %c272 = arith.constant 272 : index
+              %140 = pto.addptr %139, %c272 : <bf16, ub> -> <bf16, ub>
+              %141 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_124 = arith.constant 65 : i16
+              %c0_i16_125 = arith.constant 0 : i16
+              pto.vsstb %result_122, %140, %c65_i16_124, %c0_i16_125, %141 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_126 = arith.constant 65536 : i64
+              %142 = pto.castptr %c65536_i64_126 : i64 -> !pto.ptr<bf16, ub>
+              %c2304 = arith.constant 2304 : index
+              %143 = pto.addptr %142, %c2304 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_127 = arith.constant 0 : i64
+              %144 = arith.index_cast %c0_i64_127 : i64 to index
+              %result_128 = pto.vlds %143[%144] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_129 = arith.constant 128000 : i64
+              %145 = pto.castptr %c128000_i64_129 : i64 -> !pto.ptr<bf16, ub>
+              %c288 = arith.constant 288 : index
+              %146 = pto.addptr %145, %c288 : <bf16, ub> -> <bf16, ub>
+              %147 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_130 = arith.constant 65 : i16
+              %c0_i16_131 = arith.constant 0 : i16
+              pto.vsstb %result_128, %146, %c65_i16_130, %c0_i16_131, %147 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_132 = arith.constant 65536 : i64
+              %148 = pto.castptr %c65536_i64_132 : i64 -> !pto.ptr<bf16, ub>
+              %c2432 = arith.constant 2432 : index
+              %149 = pto.addptr %148, %c2432 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_133 = arith.constant 0 : i64
+              %150 = arith.index_cast %c0_i64_133 : i64 to index
+              %result_134 = pto.vlds %149[%150] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_135 = arith.constant 128000 : i64
+              %151 = pto.castptr %c128000_i64_135 : i64 -> !pto.ptr<bf16, ub>
+              %c304 = arith.constant 304 : index
+              %152 = pto.addptr %151, %c304 : <bf16, ub> -> <bf16, ub>
+              %153 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_136 = arith.constant 65 : i16
+              %c0_i16_137 = arith.constant 0 : i16
+              pto.vsstb %result_134, %152, %c65_i16_136, %c0_i16_137, %153 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_138 = arith.constant 65536 : i64
+              %154 = pto.castptr %c65536_i64_138 : i64 -> !pto.ptr<bf16, ub>
+              %c2560 = arith.constant 2560 : index
+              %155 = pto.addptr %154, %c2560 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_139 = arith.constant 0 : i64
+              %156 = arith.index_cast %c0_i64_139 : i64 to index
+              %result_140 = pto.vlds %155[%156] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_141 = arith.constant 128000 : i64
+              %157 = pto.castptr %c128000_i64_141 : i64 -> !pto.ptr<bf16, ub>
+              %c320 = arith.constant 320 : index
+              %158 = pto.addptr %157, %c320 : <bf16, ub> -> <bf16, ub>
+              %159 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_142 = arith.constant 65 : i16
+              %c0_i16_143 = arith.constant 0 : i16
+              pto.vsstb %result_140, %158, %c65_i16_142, %c0_i16_143, %159 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_144 = arith.constant 65536 : i64
+              %160 = pto.castptr %c65536_i64_144 : i64 -> !pto.ptr<bf16, ub>
+              %c2688 = arith.constant 2688 : index
+              %161 = pto.addptr %160, %c2688 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_145 = arith.constant 0 : i64
+              %162 = arith.index_cast %c0_i64_145 : i64 to index
+              %result_146 = pto.vlds %161[%162] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_147 = arith.constant 128000 : i64
+              %163 = pto.castptr %c128000_i64_147 : i64 -> !pto.ptr<bf16, ub>
+              %c336 = arith.constant 336 : index
+              %164 = pto.addptr %163, %c336 : <bf16, ub> -> <bf16, ub>
+              %165 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_148 = arith.constant 65 : i16
+              %c0_i16_149 = arith.constant 0 : i16
+              pto.vsstb %result_146, %164, %c65_i16_148, %c0_i16_149, %165 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_150 = arith.constant 65536 : i64
+              %166 = pto.castptr %c65536_i64_150 : i64 -> !pto.ptr<bf16, ub>
+              %c2816 = arith.constant 2816 : index
+              %167 = pto.addptr %166, %c2816 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_151 = arith.constant 0 : i64
+              %168 = arith.index_cast %c0_i64_151 : i64 to index
+              %result_152 = pto.vlds %167[%168] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_153 = arith.constant 128000 : i64
+              %169 = pto.castptr %c128000_i64_153 : i64 -> !pto.ptr<bf16, ub>
+              %c352 = arith.constant 352 : index
+              %170 = pto.addptr %169, %c352 : <bf16, ub> -> <bf16, ub>
+              %171 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_154 = arith.constant 65 : i16
+              %c0_i16_155 = arith.constant 0 : i16
+              pto.vsstb %result_152, %170, %c65_i16_154, %c0_i16_155, %171 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_156 = arith.constant 65536 : i64
+              %172 = pto.castptr %c65536_i64_156 : i64 -> !pto.ptr<bf16, ub>
+              %c2944 = arith.constant 2944 : index
+              %173 = pto.addptr %172, %c2944 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_157 = arith.constant 0 : i64
+              %174 = arith.index_cast %c0_i64_157 : i64 to index
+              %result_158 = pto.vlds %173[%174] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_159 = arith.constant 128000 : i64
+              %175 = pto.castptr %c128000_i64_159 : i64 -> !pto.ptr<bf16, ub>
+              %c368 = arith.constant 368 : index
+              %176 = pto.addptr %175, %c368 : <bf16, ub> -> <bf16, ub>
+              %177 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_160 = arith.constant 65 : i16
+              %c0_i16_161 = arith.constant 0 : i16
+              pto.vsstb %result_158, %176, %c65_i16_160, %c0_i16_161, %177 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_162 = arith.constant 65536 : i64
+              %178 = pto.castptr %c65536_i64_162 : i64 -> !pto.ptr<bf16, ub>
+              %c3072 = arith.constant 3072 : index
+              %179 = pto.addptr %178, %c3072 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_163 = arith.constant 0 : i64
+              %180 = arith.index_cast %c0_i64_163 : i64 to index
+              %result_164 = pto.vlds %179[%180] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_165 = arith.constant 128000 : i64
+              %181 = pto.castptr %c128000_i64_165 : i64 -> !pto.ptr<bf16, ub>
+              %c384_166 = arith.constant 384 : index
+              %182 = pto.addptr %181, %c384_166 : <bf16, ub> -> <bf16, ub>
+              %183 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_167 = arith.constant 65 : i16
+              %c0_i16_168 = arith.constant 0 : i16
+              pto.vsstb %result_164, %182, %c65_i16_167, %c0_i16_168, %183 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_169 = arith.constant 65536 : i64
+              %184 = pto.castptr %c65536_i64_169 : i64 -> !pto.ptr<bf16, ub>
+              %c3200 = arith.constant 3200 : index
+              %185 = pto.addptr %184, %c3200 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_170 = arith.constant 0 : i64
+              %186 = arith.index_cast %c0_i64_170 : i64 to index
+              %result_171 = pto.vlds %185[%186] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_172 = arith.constant 128000 : i64
+              %187 = pto.castptr %c128000_i64_172 : i64 -> !pto.ptr<bf16, ub>
+              %c400 = arith.constant 400 : index
+              %188 = pto.addptr %187, %c400 : <bf16, ub> -> <bf16, ub>
+              %189 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_173 = arith.constant 65 : i16
+              %c0_i16_174 = arith.constant 0 : i16
+              pto.vsstb %result_171, %188, %c65_i16_173, %c0_i16_174, %189 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_175 = arith.constant 65536 : i64
+              %190 = pto.castptr %c65536_i64_175 : i64 -> !pto.ptr<bf16, ub>
+              %c3328 = arith.constant 3328 : index
+              %191 = pto.addptr %190, %c3328 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_176 = arith.constant 0 : i64
+              %192 = arith.index_cast %c0_i64_176 : i64 to index
+              %result_177 = pto.vlds %191[%192] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_178 = arith.constant 128000 : i64
+              %193 = pto.castptr %c128000_i64_178 : i64 -> !pto.ptr<bf16, ub>
+              %c416 = arith.constant 416 : index
+              %194 = pto.addptr %193, %c416 : <bf16, ub> -> <bf16, ub>
+              %195 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_179 = arith.constant 65 : i16
+              %c0_i16_180 = arith.constant 0 : i16
+              pto.vsstb %result_177, %194, %c65_i16_179, %c0_i16_180, %195 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_181 = arith.constant 65536 : i64
+              %196 = pto.castptr %c65536_i64_181 : i64 -> !pto.ptr<bf16, ub>
+              %c3456 = arith.constant 3456 : index
+              %197 = pto.addptr %196, %c3456 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_182 = arith.constant 0 : i64
+              %198 = arith.index_cast %c0_i64_182 : i64 to index
+              %result_183 = pto.vlds %197[%198] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_184 = arith.constant 128000 : i64
+              %199 = pto.castptr %c128000_i64_184 : i64 -> !pto.ptr<bf16, ub>
+              %c432 = arith.constant 432 : index
+              %200 = pto.addptr %199, %c432 : <bf16, ub> -> <bf16, ub>
+              %201 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_185 = arith.constant 65 : i16
+              %c0_i16_186 = arith.constant 0 : i16
+              pto.vsstb %result_183, %200, %c65_i16_185, %c0_i16_186, %201 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_187 = arith.constant 65536 : i64
+              %202 = pto.castptr %c65536_i64_187 : i64 -> !pto.ptr<bf16, ub>
+              %c3584 = arith.constant 3584 : index
+              %203 = pto.addptr %202, %c3584 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_188 = arith.constant 0 : i64
+              %204 = arith.index_cast %c0_i64_188 : i64 to index
+              %result_189 = pto.vlds %203[%204] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_190 = arith.constant 128000 : i64
+              %205 = pto.castptr %c128000_i64_190 : i64 -> !pto.ptr<bf16, ub>
+              %c448 = arith.constant 448 : index
+              %206 = pto.addptr %205, %c448 : <bf16, ub> -> <bf16, ub>
+              %207 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_191 = arith.constant 65 : i16
+              %c0_i16_192 = arith.constant 0 : i16
+              pto.vsstb %result_189, %206, %c65_i16_191, %c0_i16_192, %207 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_193 = arith.constant 65536 : i64
+              %208 = pto.castptr %c65536_i64_193 : i64 -> !pto.ptr<bf16, ub>
+              %c3712 = arith.constant 3712 : index
+              %209 = pto.addptr %208, %c3712 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_194 = arith.constant 0 : i64
+              %210 = arith.index_cast %c0_i64_194 : i64 to index
+              %result_195 = pto.vlds %209[%210] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_196 = arith.constant 128000 : i64
+              %211 = pto.castptr %c128000_i64_196 : i64 -> !pto.ptr<bf16, ub>
+              %c464 = arith.constant 464 : index
+              %212 = pto.addptr %211, %c464 : <bf16, ub> -> <bf16, ub>
+              %213 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_197 = arith.constant 65 : i16
+              %c0_i16_198 = arith.constant 0 : i16
+              pto.vsstb %result_195, %212, %c65_i16_197, %c0_i16_198, %213 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_199 = arith.constant 65536 : i64
+              %214 = pto.castptr %c65536_i64_199 : i64 -> !pto.ptr<bf16, ub>
+              %c3840 = arith.constant 3840 : index
+              %215 = pto.addptr %214, %c3840 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_200 = arith.constant 0 : i64
+              %216 = arith.index_cast %c0_i64_200 : i64 to index
+              %result_201 = pto.vlds %215[%216] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_202 = arith.constant 128000 : i64
+              %217 = pto.castptr %c128000_i64_202 : i64 -> !pto.ptr<bf16, ub>
+              %c480 = arith.constant 480 : index
+              %218 = pto.addptr %217, %c480 : <bf16, ub> -> <bf16, ub>
+              %219 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_203 = arith.constant 65 : i16
+              %c0_i16_204 = arith.constant 0 : i16
+              pto.vsstb %result_201, %218, %c65_i16_203, %c0_i16_204, %219 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_205 = arith.constant 65536 : i64
+              %220 = pto.castptr %c65536_i64_205 : i64 -> !pto.ptr<bf16, ub>
+              %c3968 = arith.constant 3968 : index
+              %221 = pto.addptr %220, %c3968 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_206 = arith.constant 0 : i64
+              %222 = arith.index_cast %c0_i64_206 : i64 to index
+              %result_207 = pto.vlds %221[%222] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_208 = arith.constant 128000 : i64
+              %223 = pto.castptr %c128000_i64_208 : i64 -> !pto.ptr<bf16, ub>
+              %c496 = arith.constant 496 : index
+              %224 = pto.addptr %223, %c496 : <bf16, ub> -> <bf16, ub>
+              %225 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_209 = arith.constant 65 : i16
+              %c0_i16_210 = arith.constant 0 : i16
+              pto.vsstb %result_207, %224, %c65_i16_209, %c0_i16_210, %225 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_211 = arith.constant 65536 : i64
+              %226 = pto.castptr %c65536_i64_211 : i64 -> !pto.ptr<bf16, ub>
+              %c4096 = arith.constant 4096 : index
+              %227 = pto.addptr %226, %c4096 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_212 = arith.constant 0 : i64
+              %228 = arith.index_cast %c0_i64_212 : i64 to index
+              %result_213 = pto.vlds %227[%228] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_214 = arith.constant 128000 : i64
+              %229 = pto.castptr %c128000_i64_214 : i64 -> !pto.ptr<bf16, ub>
+              %c512_215 = arith.constant 512 : index
+              %230 = pto.addptr %229, %c512_215 : <bf16, ub> -> <bf16, ub>
+              %231 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_216 = arith.constant 65 : i16
+              %c0_i16_217 = arith.constant 0 : i16
+              pto.vsstb %result_213, %230, %c65_i16_216, %c0_i16_217, %231 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_218 = arith.constant 65536 : i64
+              %232 = pto.castptr %c65536_i64_218 : i64 -> !pto.ptr<bf16, ub>
+              %c4224 = arith.constant 4224 : index
+              %233 = pto.addptr %232, %c4224 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_219 = arith.constant 0 : i64
+              %234 = arith.index_cast %c0_i64_219 : i64 to index
+              %result_220 = pto.vlds %233[%234] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_221 = arith.constant 128000 : i64
+              %235 = pto.castptr %c128000_i64_221 : i64 -> !pto.ptr<bf16, ub>
+              %c528 = arith.constant 528 : index
+              %236 = pto.addptr %235, %c528 : <bf16, ub> -> <bf16, ub>
+              %237 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_222 = arith.constant 65 : i16
+              %c0_i16_223 = arith.constant 0 : i16
+              pto.vsstb %result_220, %236, %c65_i16_222, %c0_i16_223, %237 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_224 = arith.constant 65536 : i64
+              %238 = pto.castptr %c65536_i64_224 : i64 -> !pto.ptr<bf16, ub>
+              %c4352 = arith.constant 4352 : index
+              %239 = pto.addptr %238, %c4352 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_225 = arith.constant 0 : i64
+              %240 = arith.index_cast %c0_i64_225 : i64 to index
+              %result_226 = pto.vlds %239[%240] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_227 = arith.constant 128000 : i64
+              %241 = pto.castptr %c128000_i64_227 : i64 -> !pto.ptr<bf16, ub>
+              %c544 = arith.constant 544 : index
+              %242 = pto.addptr %241, %c544 : <bf16, ub> -> <bf16, ub>
+              %243 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_228 = arith.constant 65 : i16
+              %c0_i16_229 = arith.constant 0 : i16
+              pto.vsstb %result_226, %242, %c65_i16_228, %c0_i16_229, %243 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_230 = arith.constant 65536 : i64
+              %244 = pto.castptr %c65536_i64_230 : i64 -> !pto.ptr<bf16, ub>
+              %c4480 = arith.constant 4480 : index
+              %245 = pto.addptr %244, %c4480 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_231 = arith.constant 0 : i64
+              %246 = arith.index_cast %c0_i64_231 : i64 to index
+              %result_232 = pto.vlds %245[%246] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_233 = arith.constant 128000 : i64
+              %247 = pto.castptr %c128000_i64_233 : i64 -> !pto.ptr<bf16, ub>
+              %c560 = arith.constant 560 : index
+              %248 = pto.addptr %247, %c560 : <bf16, ub> -> <bf16, ub>
+              %249 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_234 = arith.constant 65 : i16
+              %c0_i16_235 = arith.constant 0 : i16
+              pto.vsstb %result_232, %248, %c65_i16_234, %c0_i16_235, %249 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_236 = arith.constant 65536 : i64
+              %250 = pto.castptr %c65536_i64_236 : i64 -> !pto.ptr<bf16, ub>
+              %c4608 = arith.constant 4608 : index
+              %251 = pto.addptr %250, %c4608 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_237 = arith.constant 0 : i64
+              %252 = arith.index_cast %c0_i64_237 : i64 to index
+              %result_238 = pto.vlds %251[%252] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_239 = arith.constant 128000 : i64
+              %253 = pto.castptr %c128000_i64_239 : i64 -> !pto.ptr<bf16, ub>
+              %c576 = arith.constant 576 : index
+              %254 = pto.addptr %253, %c576 : <bf16, ub> -> <bf16, ub>
+              %255 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_240 = arith.constant 65 : i16
+              %c0_i16_241 = arith.constant 0 : i16
+              pto.vsstb %result_238, %254, %c65_i16_240, %c0_i16_241, %255 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_242 = arith.constant 65536 : i64
+              %256 = pto.castptr %c65536_i64_242 : i64 -> !pto.ptr<bf16, ub>
+              %c4736 = arith.constant 4736 : index
+              %257 = pto.addptr %256, %c4736 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_243 = arith.constant 0 : i64
+              %258 = arith.index_cast %c0_i64_243 : i64 to index
+              %result_244 = pto.vlds %257[%258] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_245 = arith.constant 128000 : i64
+              %259 = pto.castptr %c128000_i64_245 : i64 -> !pto.ptr<bf16, ub>
+              %c592 = arith.constant 592 : index
+              %260 = pto.addptr %259, %c592 : <bf16, ub> -> <bf16, ub>
+              %261 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_246 = arith.constant 65 : i16
+              %c0_i16_247 = arith.constant 0 : i16
+              pto.vsstb %result_244, %260, %c65_i16_246, %c0_i16_247, %261 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_248 = arith.constant 65536 : i64
+              %262 = pto.castptr %c65536_i64_248 : i64 -> !pto.ptr<bf16, ub>
+              %c4864 = arith.constant 4864 : index
+              %263 = pto.addptr %262, %c4864 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_249 = arith.constant 0 : i64
+              %264 = arith.index_cast %c0_i64_249 : i64 to index
+              %result_250 = pto.vlds %263[%264] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_251 = arith.constant 128000 : i64
+              %265 = pto.castptr %c128000_i64_251 : i64 -> !pto.ptr<bf16, ub>
+              %c608 = arith.constant 608 : index
+              %266 = pto.addptr %265, %c608 : <bf16, ub> -> <bf16, ub>
+              %267 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_252 = arith.constant 65 : i16
+              %c0_i16_253 = arith.constant 0 : i16
+              pto.vsstb %result_250, %266, %c65_i16_252, %c0_i16_253, %267 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_254 = arith.constant 65536 : i64
+              %268 = pto.castptr %c65536_i64_254 : i64 -> !pto.ptr<bf16, ub>
+              %c4992 = arith.constant 4992 : index
+              %269 = pto.addptr %268, %c4992 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_255 = arith.constant 0 : i64
+              %270 = arith.index_cast %c0_i64_255 : i64 to index
+              %result_256 = pto.vlds %269[%270] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_257 = arith.constant 128000 : i64
+              %271 = pto.castptr %c128000_i64_257 : i64 -> !pto.ptr<bf16, ub>
+              %c624 = arith.constant 624 : index
+              %272 = pto.addptr %271, %c624 : <bf16, ub> -> <bf16, ub>
+              %273 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_258 = arith.constant 65 : i16
+              %c0_i16_259 = arith.constant 0 : i16
+              pto.vsstb %result_256, %272, %c65_i16_258, %c0_i16_259, %273 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_260 = arith.constant 65536 : i64
+              %274 = pto.castptr %c65536_i64_260 : i64 -> !pto.ptr<bf16, ub>
+              %c5120 = arith.constant 5120 : index
+              %275 = pto.addptr %274, %c5120 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_261 = arith.constant 0 : i64
+              %276 = arith.index_cast %c0_i64_261 : i64 to index
+              %result_262 = pto.vlds %275[%276] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_263 = arith.constant 128000 : i64
+              %277 = pto.castptr %c128000_i64_263 : i64 -> !pto.ptr<bf16, ub>
+              %c640_264 = arith.constant 640 : index
+              %278 = pto.addptr %277, %c640_264 : <bf16, ub> -> <bf16, ub>
+              %279 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_265 = arith.constant 65 : i16
+              %c0_i16_266 = arith.constant 0 : i16
+              pto.vsstb %result_262, %278, %c65_i16_265, %c0_i16_266, %279 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_267 = arith.constant 65536 : i64
+              %280 = pto.castptr %c65536_i64_267 : i64 -> !pto.ptr<bf16, ub>
+              %c5248 = arith.constant 5248 : index
+              %281 = pto.addptr %280, %c5248 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_268 = arith.constant 0 : i64
+              %282 = arith.index_cast %c0_i64_268 : i64 to index
+              %result_269 = pto.vlds %281[%282] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_270 = arith.constant 128000 : i64
+              %283 = pto.castptr %c128000_i64_270 : i64 -> !pto.ptr<bf16, ub>
+              %c656 = arith.constant 656 : index
+              %284 = pto.addptr %283, %c656 : <bf16, ub> -> <bf16, ub>
+              %285 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_271 = arith.constant 65 : i16
+              %c0_i16_272 = arith.constant 0 : i16
+              pto.vsstb %result_269, %284, %c65_i16_271, %c0_i16_272, %285 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_273 = arith.constant 65536 : i64
+              %286 = pto.castptr %c65536_i64_273 : i64 -> !pto.ptr<bf16, ub>
+              %c5376 = arith.constant 5376 : index
+              %287 = pto.addptr %286, %c5376 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_274 = arith.constant 0 : i64
+              %288 = arith.index_cast %c0_i64_274 : i64 to index
+              %result_275 = pto.vlds %287[%288] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_276 = arith.constant 128000 : i64
+              %289 = pto.castptr %c128000_i64_276 : i64 -> !pto.ptr<bf16, ub>
+              %c672 = arith.constant 672 : index
+              %290 = pto.addptr %289, %c672 : <bf16, ub> -> <bf16, ub>
+              %291 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_277 = arith.constant 65 : i16
+              %c0_i16_278 = arith.constant 0 : i16
+              pto.vsstb %result_275, %290, %c65_i16_277, %c0_i16_278, %291 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_279 = arith.constant 65536 : i64
+              %292 = pto.castptr %c65536_i64_279 : i64 -> !pto.ptr<bf16, ub>
+              %c5504 = arith.constant 5504 : index
+              %293 = pto.addptr %292, %c5504 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_280 = arith.constant 0 : i64
+              %294 = arith.index_cast %c0_i64_280 : i64 to index
+              %result_281 = pto.vlds %293[%294] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_282 = arith.constant 128000 : i64
+              %295 = pto.castptr %c128000_i64_282 : i64 -> !pto.ptr<bf16, ub>
+              %c688 = arith.constant 688 : index
+              %296 = pto.addptr %295, %c688 : <bf16, ub> -> <bf16, ub>
+              %297 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_283 = arith.constant 65 : i16
+              %c0_i16_284 = arith.constant 0 : i16
+              pto.vsstb %result_281, %296, %c65_i16_283, %c0_i16_284, %297 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_285 = arith.constant 65536 : i64
+              %298 = pto.castptr %c65536_i64_285 : i64 -> !pto.ptr<bf16, ub>
+              %c5632 = arith.constant 5632 : index
+              %299 = pto.addptr %298, %c5632 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_286 = arith.constant 0 : i64
+              %300 = arith.index_cast %c0_i64_286 : i64 to index
+              %result_287 = pto.vlds %299[%300] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_288 = arith.constant 128000 : i64
+              %301 = pto.castptr %c128000_i64_288 : i64 -> !pto.ptr<bf16, ub>
+              %c704 = arith.constant 704 : index
+              %302 = pto.addptr %301, %c704 : <bf16, ub> -> <bf16, ub>
+              %303 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_289 = arith.constant 65 : i16
+              %c0_i16_290 = arith.constant 0 : i16
+              pto.vsstb %result_287, %302, %c65_i16_289, %c0_i16_290, %303 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_291 = arith.constant 65536 : i64
+              %304 = pto.castptr %c65536_i64_291 : i64 -> !pto.ptr<bf16, ub>
+              %c5760 = arith.constant 5760 : index
+              %305 = pto.addptr %304, %c5760 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_292 = arith.constant 0 : i64
+              %306 = arith.index_cast %c0_i64_292 : i64 to index
+              %result_293 = pto.vlds %305[%306] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_294 = arith.constant 128000 : i64
+              %307 = pto.castptr %c128000_i64_294 : i64 -> !pto.ptr<bf16, ub>
+              %c720 = arith.constant 720 : index
+              %308 = pto.addptr %307, %c720 : <bf16, ub> -> <bf16, ub>
+              %309 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_295 = arith.constant 65 : i16
+              %c0_i16_296 = arith.constant 0 : i16
+              pto.vsstb %result_293, %308, %c65_i16_295, %c0_i16_296, %309 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_297 = arith.constant 65536 : i64
+              %310 = pto.castptr %c65536_i64_297 : i64 -> !pto.ptr<bf16, ub>
+              %c5888 = arith.constant 5888 : index
+              %311 = pto.addptr %310, %c5888 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_298 = arith.constant 0 : i64
+              %312 = arith.index_cast %c0_i64_298 : i64 to index
+              %result_299 = pto.vlds %311[%312] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_300 = arith.constant 128000 : i64
+              %313 = pto.castptr %c128000_i64_300 : i64 -> !pto.ptr<bf16, ub>
+              %c736 = arith.constant 736 : index
+              %314 = pto.addptr %313, %c736 : <bf16, ub> -> <bf16, ub>
+              %315 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_301 = arith.constant 65 : i16
+              %c0_i16_302 = arith.constant 0 : i16
+              pto.vsstb %result_299, %314, %c65_i16_301, %c0_i16_302, %315 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_303 = arith.constant 65536 : i64
+              %316 = pto.castptr %c65536_i64_303 : i64 -> !pto.ptr<bf16, ub>
+              %c6016 = arith.constant 6016 : index
+              %317 = pto.addptr %316, %c6016 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_304 = arith.constant 0 : i64
+              %318 = arith.index_cast %c0_i64_304 : i64 to index
+              %result_305 = pto.vlds %317[%318] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_306 = arith.constant 128000 : i64
+              %319 = pto.castptr %c128000_i64_306 : i64 -> !pto.ptr<bf16, ub>
+              %c752 = arith.constant 752 : index
+              %320 = pto.addptr %319, %c752 : <bf16, ub> -> <bf16, ub>
+              %321 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_307 = arith.constant 65 : i16
+              %c0_i16_308 = arith.constant 0 : i16
+              pto.vsstb %result_305, %320, %c65_i16_307, %c0_i16_308, %321 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_309 = arith.constant 65536 : i64
+              %322 = pto.castptr %c65536_i64_309 : i64 -> !pto.ptr<bf16, ub>
+              %c6144 = arith.constant 6144 : index
+              %323 = pto.addptr %322, %c6144 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_310 = arith.constant 0 : i64
+              %324 = arith.index_cast %c0_i64_310 : i64 to index
+              %result_311 = pto.vlds %323[%324] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_312 = arith.constant 128000 : i64
+              %325 = pto.castptr %c128000_i64_312 : i64 -> !pto.ptr<bf16, ub>
+              %c768_313 = arith.constant 768 : index
+              %326 = pto.addptr %325, %c768_313 : <bf16, ub> -> <bf16, ub>
+              %327 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_314 = arith.constant 65 : i16
+              %c0_i16_315 = arith.constant 0 : i16
+              pto.vsstb %result_311, %326, %c65_i16_314, %c0_i16_315, %327 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_316 = arith.constant 65536 : i64
+              %328 = pto.castptr %c65536_i64_316 : i64 -> !pto.ptr<bf16, ub>
+              %c6272 = arith.constant 6272 : index
+              %329 = pto.addptr %328, %c6272 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_317 = arith.constant 0 : i64
+              %330 = arith.index_cast %c0_i64_317 : i64 to index
+              %result_318 = pto.vlds %329[%330] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_319 = arith.constant 128000 : i64
+              %331 = pto.castptr %c128000_i64_319 : i64 -> !pto.ptr<bf16, ub>
+              %c784 = arith.constant 784 : index
+              %332 = pto.addptr %331, %c784 : <bf16, ub> -> <bf16, ub>
+              %333 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_320 = arith.constant 65 : i16
+              %c0_i16_321 = arith.constant 0 : i16
+              pto.vsstb %result_318, %332, %c65_i16_320, %c0_i16_321, %333 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_322 = arith.constant 65536 : i64
+              %334 = pto.castptr %c65536_i64_322 : i64 -> !pto.ptr<bf16, ub>
+              %c6400 = arith.constant 6400 : index
+              %335 = pto.addptr %334, %c6400 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_323 = arith.constant 0 : i64
+              %336 = arith.index_cast %c0_i64_323 : i64 to index
+              %result_324 = pto.vlds %335[%336] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_325 = arith.constant 128000 : i64
+              %337 = pto.castptr %c128000_i64_325 : i64 -> !pto.ptr<bf16, ub>
+              %c800 = arith.constant 800 : index
+              %338 = pto.addptr %337, %c800 : <bf16, ub> -> <bf16, ub>
+              %339 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_326 = arith.constant 65 : i16
+              %c0_i16_327 = arith.constant 0 : i16
+              pto.vsstb %result_324, %338, %c65_i16_326, %c0_i16_327, %339 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_328 = arith.constant 65536 : i64
+              %340 = pto.castptr %c65536_i64_328 : i64 -> !pto.ptr<bf16, ub>
+              %c6528 = arith.constant 6528 : index
+              %341 = pto.addptr %340, %c6528 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_329 = arith.constant 0 : i64
+              %342 = arith.index_cast %c0_i64_329 : i64 to index
+              %result_330 = pto.vlds %341[%342] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_331 = arith.constant 128000 : i64
+              %343 = pto.castptr %c128000_i64_331 : i64 -> !pto.ptr<bf16, ub>
+              %c816 = arith.constant 816 : index
+              %344 = pto.addptr %343, %c816 : <bf16, ub> -> <bf16, ub>
+              %345 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_332 = arith.constant 65 : i16
+              %c0_i16_333 = arith.constant 0 : i16
+              pto.vsstb %result_330, %344, %c65_i16_332, %c0_i16_333, %345 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_334 = arith.constant 65536 : i64
+              %346 = pto.castptr %c65536_i64_334 : i64 -> !pto.ptr<bf16, ub>
+              %c6656 = arith.constant 6656 : index
+              %347 = pto.addptr %346, %c6656 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_335 = arith.constant 0 : i64
+              %348 = arith.index_cast %c0_i64_335 : i64 to index
+              %result_336 = pto.vlds %347[%348] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_337 = arith.constant 128000 : i64
+              %349 = pto.castptr %c128000_i64_337 : i64 -> !pto.ptr<bf16, ub>
+              %c832 = arith.constant 832 : index
+              %350 = pto.addptr %349, %c832 : <bf16, ub> -> <bf16, ub>
+              %351 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_338 = arith.constant 65 : i16
+              %c0_i16_339 = arith.constant 0 : i16
+              pto.vsstb %result_336, %350, %c65_i16_338, %c0_i16_339, %351 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_340 = arith.constant 65536 : i64
+              %352 = pto.castptr %c65536_i64_340 : i64 -> !pto.ptr<bf16, ub>
+              %c6784 = arith.constant 6784 : index
+              %353 = pto.addptr %352, %c6784 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_341 = arith.constant 0 : i64
+              %354 = arith.index_cast %c0_i64_341 : i64 to index
+              %result_342 = pto.vlds %353[%354] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_343 = arith.constant 128000 : i64
+              %355 = pto.castptr %c128000_i64_343 : i64 -> !pto.ptr<bf16, ub>
+              %c848 = arith.constant 848 : index
+              %356 = pto.addptr %355, %c848 : <bf16, ub> -> <bf16, ub>
+              %357 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_344 = arith.constant 65 : i16
+              %c0_i16_345 = arith.constant 0 : i16
+              pto.vsstb %result_342, %356, %c65_i16_344, %c0_i16_345, %357 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_346 = arith.constant 65536 : i64
+              %358 = pto.castptr %c65536_i64_346 : i64 -> !pto.ptr<bf16, ub>
+              %c6912 = arith.constant 6912 : index
+              %359 = pto.addptr %358, %c6912 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_347 = arith.constant 0 : i64
+              %360 = arith.index_cast %c0_i64_347 : i64 to index
+              %result_348 = pto.vlds %359[%360] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_349 = arith.constant 128000 : i64
+              %361 = pto.castptr %c128000_i64_349 : i64 -> !pto.ptr<bf16, ub>
+              %c864 = arith.constant 864 : index
+              %362 = pto.addptr %361, %c864 : <bf16, ub> -> <bf16, ub>
+              %363 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_350 = arith.constant 65 : i16
+              %c0_i16_351 = arith.constant 0 : i16
+              pto.vsstb %result_348, %362, %c65_i16_350, %c0_i16_351, %363 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_352 = arith.constant 65536 : i64
+              %364 = pto.castptr %c65536_i64_352 : i64 -> !pto.ptr<bf16, ub>
+              %c7040 = arith.constant 7040 : index
+              %365 = pto.addptr %364, %c7040 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_353 = arith.constant 0 : i64
+              %366 = arith.index_cast %c0_i64_353 : i64 to index
+              %result_354 = pto.vlds %365[%366] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_355 = arith.constant 128000 : i64
+              %367 = pto.castptr %c128000_i64_355 : i64 -> !pto.ptr<bf16, ub>
+              %c880 = arith.constant 880 : index
+              %368 = pto.addptr %367, %c880 : <bf16, ub> -> <bf16, ub>
+              %369 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_356 = arith.constant 65 : i16
+              %c0_i16_357 = arith.constant 0 : i16
+              pto.vsstb %result_354, %368, %c65_i16_356, %c0_i16_357, %369 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_358 = arith.constant 65536 : i64
+              %370 = pto.castptr %c65536_i64_358 : i64 -> !pto.ptr<bf16, ub>
+              %c7168 = arith.constant 7168 : index
+              %371 = pto.addptr %370, %c7168 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_359 = arith.constant 0 : i64
+              %372 = arith.index_cast %c0_i64_359 : i64 to index
+              %result_360 = pto.vlds %371[%372] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_361 = arith.constant 128000 : i64
+              %373 = pto.castptr %c128000_i64_361 : i64 -> !pto.ptr<bf16, ub>
+              %c896_362 = arith.constant 896 : index
+              %374 = pto.addptr %373, %c896_362 : <bf16, ub> -> <bf16, ub>
+              %375 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_363 = arith.constant 65 : i16
+              %c0_i16_364 = arith.constant 0 : i16
+              pto.vsstb %result_360, %374, %c65_i16_363, %c0_i16_364, %375 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_365 = arith.constant 65536 : i64
+              %376 = pto.castptr %c65536_i64_365 : i64 -> !pto.ptr<bf16, ub>
+              %c7296 = arith.constant 7296 : index
+              %377 = pto.addptr %376, %c7296 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_366 = arith.constant 0 : i64
+              %378 = arith.index_cast %c0_i64_366 : i64 to index
+              %result_367 = pto.vlds %377[%378] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_368 = arith.constant 128000 : i64
+              %379 = pto.castptr %c128000_i64_368 : i64 -> !pto.ptr<bf16, ub>
+              %c912 = arith.constant 912 : index
+              %380 = pto.addptr %379, %c912 : <bf16, ub> -> <bf16, ub>
+              %381 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_369 = arith.constant 65 : i16
+              %c0_i16_370 = arith.constant 0 : i16
+              pto.vsstb %result_367, %380, %c65_i16_369, %c0_i16_370, %381 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_371 = arith.constant 65536 : i64
+              %382 = pto.castptr %c65536_i64_371 : i64 -> !pto.ptr<bf16, ub>
+              %c7424 = arith.constant 7424 : index
+              %383 = pto.addptr %382, %c7424 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_372 = arith.constant 0 : i64
+              %384 = arith.index_cast %c0_i64_372 : i64 to index
+              %result_373 = pto.vlds %383[%384] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_374 = arith.constant 128000 : i64
+              %385 = pto.castptr %c128000_i64_374 : i64 -> !pto.ptr<bf16, ub>
+              %c928 = arith.constant 928 : index
+              %386 = pto.addptr %385, %c928 : <bf16, ub> -> <bf16, ub>
+              %387 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_375 = arith.constant 65 : i16
+              %c0_i16_376 = arith.constant 0 : i16
+              pto.vsstb %result_373, %386, %c65_i16_375, %c0_i16_376, %387 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_377 = arith.constant 65536 : i64
+              %388 = pto.castptr %c65536_i64_377 : i64 -> !pto.ptr<bf16, ub>
+              %c7552 = arith.constant 7552 : index
+              %389 = pto.addptr %388, %c7552 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_378 = arith.constant 0 : i64
+              %390 = arith.index_cast %c0_i64_378 : i64 to index
+              %result_379 = pto.vlds %389[%390] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_380 = arith.constant 128000 : i64
+              %391 = pto.castptr %c128000_i64_380 : i64 -> !pto.ptr<bf16, ub>
+              %c944 = arith.constant 944 : index
+              %392 = pto.addptr %391, %c944 : <bf16, ub> -> <bf16, ub>
+              %393 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_381 = arith.constant 65 : i16
+              %c0_i16_382 = arith.constant 0 : i16
+              pto.vsstb %result_379, %392, %c65_i16_381, %c0_i16_382, %393 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_383 = arith.constant 65536 : i64
+              %394 = pto.castptr %c65536_i64_383 : i64 -> !pto.ptr<bf16, ub>
+              %c7680 = arith.constant 7680 : index
+              %395 = pto.addptr %394, %c7680 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_384 = arith.constant 0 : i64
+              %396 = arith.index_cast %c0_i64_384 : i64 to index
+              %result_385 = pto.vlds %395[%396] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_386 = arith.constant 128000 : i64
+              %397 = pto.castptr %c128000_i64_386 : i64 -> !pto.ptr<bf16, ub>
+              %c960 = arith.constant 960 : index
+              %398 = pto.addptr %397, %c960 : <bf16, ub> -> <bf16, ub>
+              %399 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_387 = arith.constant 65 : i16
+              %c0_i16_388 = arith.constant 0 : i16
+              pto.vsstb %result_385, %398, %c65_i16_387, %c0_i16_388, %399 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_389 = arith.constant 65536 : i64
+              %400 = pto.castptr %c65536_i64_389 : i64 -> !pto.ptr<bf16, ub>
+              %c7808 = arith.constant 7808 : index
+              %401 = pto.addptr %400, %c7808 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_390 = arith.constant 0 : i64
+              %402 = arith.index_cast %c0_i64_390 : i64 to index
+              %result_391 = pto.vlds %401[%402] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_392 = arith.constant 128000 : i64
+              %403 = pto.castptr %c128000_i64_392 : i64 -> !pto.ptr<bf16, ub>
+              %c976 = arith.constant 976 : index
+              %404 = pto.addptr %403, %c976 : <bf16, ub> -> <bf16, ub>
+              %405 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_393 = arith.constant 65 : i16
+              %c0_i16_394 = arith.constant 0 : i16
+              pto.vsstb %result_391, %404, %c65_i16_393, %c0_i16_394, %405 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_395 = arith.constant 65536 : i64
+              %406 = pto.castptr %c65536_i64_395 : i64 -> !pto.ptr<bf16, ub>
+              %c7936 = arith.constant 7936 : index
+              %407 = pto.addptr %406, %c7936 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_396 = arith.constant 0 : i64
+              %408 = arith.index_cast %c0_i64_396 : i64 to index
+              %result_397 = pto.vlds %407[%408] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_398 = arith.constant 128000 : i64
+              %409 = pto.castptr %c128000_i64_398 : i64 -> !pto.ptr<bf16, ub>
+              %c992 = arith.constant 992 : index
+              %410 = pto.addptr %409, %c992 : <bf16, ub> -> <bf16, ub>
+              %411 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_399 = arith.constant 65 : i16
+              %c0_i16_400 = arith.constant 0 : i16
+              pto.vsstb %result_397, %410, %c65_i16_399, %c0_i16_400, %411 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              %c65536_i64_401 = arith.constant 65536 : i64
+              %412 = pto.castptr %c65536_i64_401 : i64 -> !pto.ptr<bf16, ub>
+              %c8064 = arith.constant 8064 : index
+              %413 = pto.addptr %412, %c8064 : <bf16, ub> -> <bf16, ub>
+              %c0_i64_402 = arith.constant 0 : i64
+              %414 = arith.index_cast %c0_i64_402 : i64 to index
+              %result_403 = pto.vlds %413[%414] {dist = "NORM"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+              %c128000_i64_404 = arith.constant 128000 : i64
+              %415 = pto.castptr %c128000_i64_404 : i64 -> !pto.ptr<bf16, ub>
+              %c1008 = arith.constant 1008 : index
+              %416 = pto.addptr %415, %c1008 : <bf16, ub> -> <bf16, ub>
+              %417 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+              %c65_i16_405 = arith.constant 65 : i16
+              %c0_i16_406 = arith.constant 0 : i16
+              pto.vsstb %result_403, %416, %c65_i16_405, %c0_i16_406, %417 : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, i16, i16, !pto.mask<b16>
+              pto.set_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID0>]
+            }
+          }
+        }
+        pto.set_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID0>]
+        pto.wait_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID1>]
+        %c7_i32_9 = arith.constant 7 : i32
+        %20 = arith.muli %7, %c7_i32_9 : i32
+        %c4_i32_10 = arith.constant 4 : i32
+        %21 = arith.floordivsi %5, %c4_i32_10 : i32
+        %22 = arith.addi %20, %21 : i32
+        %c12_i32_11 = arith.constant 12 : i32
+        %23 = arith.cmpi slt, %22, %c12_i32_11 : i32
+        scf.if %23 {
+          pto.vecscope {
+            %c0_15 = arith.constant 0 : index
+            %c64 = arith.constant 64 : index
+            %c1_16 = arith.constant 1 : index
+            scf.for %arg23 = %c0_15 to %c64 step %c1_16 {
+              %28 = arith.index_cast %arg23 : index to i32
+              %29 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+              %c64_i32 = arith.constant 64 : i32
+              %30 = arith.muli %28, %c64_i32 : i32
+              %c20480_i32 = arith.constant 20480 : i32
+              %31 = arith.addi %30, %c20480_i32 : i32
+              %32 = arith.index_cast %31 : i32 to index
+              %33 = pto.addptr %29, %32 : <f32, ub> -> <f32, ub>
+              %c0_17 = arith.constant 0 : index
+              %result = pto.vlds %33[%c0_17] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+              %34 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<f32, ub>
+              %c31808_i32 = arith.constant 31808 : i32
+              %35 = arith.addi %28, %c31808_i32 : i32
+              %36 = arith.index_cast %35 : i32 to index
+              %37 = pto.addptr %34, %36 : <f32, ub> -> <f32, ub>
+              %c0_18 = arith.constant 0 : index
+              %result_19 = pto.vlds %37[%c0_18] {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+              %38 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+              %39 = pto.vdiv %result, %result_19, %38 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %40 = pto.vbitcast %39 : !pto.vreg<64xf32> -> !pto.vreg<64xui32>
+              %c-2147483648_i32 = arith.constant -2147483648 : i32
+              %41 = builtin.unrealized_conversion_cast %c-2147483648_i32 : i32 to ui32
+              %42 = pto.vbr %41 : ui32 -> !pto.vreg<64xui32>
+              %43 = pto.vor %40, %42, %38 : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+              %cst = arith.constant 0.000000e+00 : f32
+              %44 = pto.vcmps %39, %cst, %38, "eq" : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.mask<b32>
+              %c-8388608_i32 = arith.constant -8388608 : i32
+              %45 = builtin.unrealized_conversion_cast %c-8388608_i32 : i32 to ui32
+              %46 = pto.vbr %45 : ui32 -> !pto.vreg<64xui32>
+              %47 = pto.vcmp %43, %46, %38, "ge" : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.mask<b32>
+              %48 = pto.por %47, %44, %38 : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+              %cst_20 = arith.constant -1.000000e+00 : f32
+              %49 = pto.vmuls %result_19, %cst_20, %38 : !pto.vreg<64xf32>, f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %50 = pto.vmula %result, %39, %49, %38 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %51 = pto.vbitcast %39 : !pto.vreg<64xf32> -> !pto.vreg<64xi32>
+              %c-1_i32 = arith.constant -1 : i32
+              %52 = pto.vadds %51, %c-1_i32, %38 : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+              %53 = pto.vbitcast %52 : !pto.vreg<64xi32> -> !pto.vreg<64xf32>
+              %c1_i32 = arith.constant 1 : i32
+              %54 = pto.vadds %51, %c1_i32, %38 : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.vreg<64xi32>
+              %55 = pto.vbitcast %54 : !pto.vreg<64xi32> -> !pto.vreg<64xf32>
+              %56 = pto.vmula %result, %53, %49, %38 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %57 = pto.vmula %result, %55, %49, %38 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %58 = pto.vabs %50, %38 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %59 = pto.vabs %56, %38 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %60 = pto.vabs %57, %38 : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %61 = pto.vcmp %58, %59, %38, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+              %62 = pto.vsel %58, %59, %61 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %63 = pto.vsel %39, %53, %61 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %64 = pto.vcmp %60, %62, %38, "lt" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+              %65 = pto.vsel %55, %63, %64 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %66 = pto.vsel %39, %65, %48 : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+              %67 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+              %68 = pto.pbitcast %67 : !pto.mask<b32> -> !pto.mask<b32>
+              %69 = pto.vcvt %66, %68 {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+              %70 = pto.castptr %c0_i64_2 : i64 -> !pto.ptr<bf16, ub>
+              %c64_i32_21 = arith.constant 64 : i32
+              %71 = arith.muli %28, %c64_i32_21 : i32
+              %c57344_i32 = arith.constant 57344 : i32
+              %72 = arith.addi %71, %c57344_i32 : i32
+              %73 = arith.index_cast %72 : i32 to index
+              %74 = pto.addptr %70, %73 : <bf16, ub> -> <bf16, ub>
+              %c0_22 = arith.constant 0 : index
+              %75 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+              %76 = pto.pbitcast %75 : !pto.mask<b32> -> !pto.mask<b32>
+              pto.vsts %69, %74[%c0_22], %76 {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+            }
+          }
+        }
+        pto.set_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID1>]
+        pto.wait_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID1>]
+        %c7_i32_12 = arith.constant 7 : i32
+        %24 = arith.muli %7, %c7_i32_12 : i32
+        %c4_i32_13 = arith.constant 4 : i32
+        %25 = arith.floordivsi %5, %c4_i32_13 : i32
+        %26 = arith.addi %24, %25 : i32
+        %c12_i32_14 = arith.constant 12 : i32
+        %27 = arith.cmpi slt, %26, %c12_i32_14 : i32
+        scf.if %27 {
+          %c7_i32_15 = arith.constant 7 : i32
+          %28 = arith.muli %7, %c7_i32_15 : i32
+          %c4_i32_16 = arith.constant 4 : i32
+          %29 = arith.floordivsi %5, %c4_i32_16 : i32
+          %30 = arith.addi %28, %29 : i32
+          %c6_i32 = arith.constant 6 : i32
+          %31 = arith.floordivsi %30, %c6_i32 : i32
+          %32 = arith.subi %arg6, %31 : i32
+          %c0_i32 = arith.constant 0 : i32
+          %33 = arith.cmpi sgt, %32, %c0_i32 : i32
+          scf.if %33 {
+            %c114688_i64 = arith.constant 114688 : i64
+            %34 = pto.castptr %c114688_i64 : i64 -> !pto.ptr<bf16, ub>
+            %c7_i32_17 = arith.constant 7 : i32
+            %35 = arith.muli %7, %c7_i32_17 : i32
+            %c4_i32_18 = arith.constant 4 : i32
+            %36 = arith.floordivsi %5, %c4_i32_18 : i32
+            %37 = arith.addi %35, %36 : i32
+            %c6_i32_19 = arith.constant 6 : i32
+            %38 = arith.floordivsi %37, %c6_i32_19 : i32
+            %c150528_i32 = arith.constant 150528 : i32
+            %39 = arith.muli %38, %c150528_i32 : i32
+            %c1_i32 = arith.constant 1 : i32
+            %40 = arith.andi %5, %c1_i32 : i32
+            %c98304_i32 = arith.constant 98304 : i32
+            %41 = arith.muli %40, %c98304_i32 : i32
+            %42 = arith.addi %39, %41 : i32
+            %c49152_i64 = arith.constant 49152 : i64
+            %43 = arith.muli %6, %c49152_i64 : i64
+            %44 = arith.extsi %42 : i32 to i64
+            %45 = arith.addi %44, %43 : i64
+            %c14_i32 = arith.constant 14 : i32
+            %46 = arith.muli %7, %c14_i32 : i32
+            %c2_i32 = arith.constant 2 : i32
+            %47 = arith.floordivsi %5, %c2_i32 : i32
+            %48 = arith.addi %46, %47 : i32
+            %c12_i32_20 = arith.constant 12 : i32
+            %49 = arith.remsi %48, %c12_i32_20 : i32
+            %c64_i32 = arith.constant 64 : i32
+            %50 = arith.muli %49, %c64_i32 : i32
+            %51 = arith.extsi %50 : i32 to i64
+            %52 = arith.addi %45, %51 : i64
+            %53 = arith.index_cast %52 : i64 to index
+            %54 = pto.addptr %arg1, %53 : <bf16, gm> -> <bf16, gm>
+            %c64_i64 = arith.constant 64 : i64
+            %55 = arith.muli %6, %c64_i64 : i64
+            %c196_i64 = arith.constant 196 : i64
+            %56 = arith.subi %c196_i64, %55 : i64
+            %c1_i32_21 = arith.constant 1 : i32
+            %57 = arith.andi %5, %c1_i32_21 : i32
+            %c128_i32 = arith.constant 128 : i32
+            %58 = arith.muli %57, %c128_i32 : i32
+            %59 = arith.extsi %58 : i32 to i64
+            %60 = arith.subi %56, %59 : i64
+            %c64_i64_22 = arith.constant 64 : i64
+            %61 = arith.minsi %c64_i64_22, %60 : i64
+            %c128_i64 = arith.constant 128 : i64
+            %c1536_i64 = arith.constant 1536 : i64
+            %c128_i64_23 = arith.constant 128 : i64
+            %c0_i64_24 = arith.constant 0 : i64
+            pto.mte_ub_gm %34, %54, %c128_i64_23 nburst(%61, %c128_i64, %c1536_i64) l2_cache_ctl(%c0_i64_24) {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 1, 0, 0, 0>} : !pto.ptr<bf16, ub>, !pto.ptr<bf16, gm>, i64, i64, i64, i64, i64
+          }
+        }
+        pto.set_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID1>]
+      }
+      pto.wait_intra_block <PIPE_MTE3>, 3
+      pto.wait_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID0>]
+      pto.wait_flag[<PIPE_MTE3>, <PIPE_V>, <EVENT_ID1>]
+      pto.wait_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID0>]
+    }
+    return
+  }
+}

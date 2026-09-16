@@ -1,0 +1,7 @@
+# Issue 1506 minimal CA model reproduction
+
+This reduction was requested after the full 28-AIC/56-AIV workload proved slow in CA model. Relative to the original gist preserved in `../issue-1506-vec-misched/kernel.pto`, the only IR edits are the two outer cube/vector loops: `scf.for %arg22 = %c0 to %c2 step %c1` becomes `scf.for %arg22 = %c0 to %c1 step %c1`. All inner loops, integer vector division, independent vector chains, cube computation and synchronization remain intact. Launch BlockDim is 1 instead of 28, giving one AIC and two AIVs.
+
+Input allocation, deterministic random data and strides are inherited from the full fixture. Only batch 0, head 0, query rows 0 through 127 are computed: 8192 BF16 output elements. All other 292864 elements must retain their initial `0x7FC1` sentinel. Active outputs use the same float32 attention golden and BF16 tolerance as the full fixture, with zero mismatches allowed. `main.cpp` and `golden.py` are symlinks to the shared full fixture; their larger host allocations do not add device computation.
+
+Run the matrix with `TARGET_CASE=kernels/issue-1506-vec-misched-minimal`, an isolated `RESULT_ROOT`, and the same selected worktree environment. Use `--case-token kernels_issue-1506-vec-misched-minimal` with the collector. Report this as a reduced-workload scheduling comparison; its absolute tick and speedup are not the original full-size kernel's hardware measurements.

@@ -21,10 +21,10 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
-def collect_run(run, evidence):
+def collect_run(run, evidence, case_token):
     log_path = run / "runner.log"
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    case = run / "kernels_issue-1506-vec-misched"
+    case = run / case_token
     compare_path = case / "compare.json"
     comparison = json.loads(compare_path.read_text()) if compare_path.is_file() else None
     record = {
@@ -86,10 +86,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("result_root", type=Path)
     parser.add_argument("evidence", type=Path)
+    parser.add_argument("--case-token", default="kernels_issue-1506-vec-misched")
     args = parser.parse_args()
     root, evidence = args.result_root.resolve(), args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
-    records = [collect_run(p.parent, evidence) for p in sorted(root.glob("ptoas-*/run*/runner.log"))]
+    records = [collect_run(p.parent, evidence, args.case_token) for p in sorted(root.glob("ptoas-*/run*/runner.log"))]
     summary = {"runs": records, "groups": summarize(records), "function_sizes": collect_analysis(root, evidence)}
     for name in ("smoke.log", "provenance.log", "matrix.log"):
         if (root / name).is_file():

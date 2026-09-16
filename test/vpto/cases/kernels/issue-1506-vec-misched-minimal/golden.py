@@ -1,0 +1,1 @@
+../issue-1506-vec-misched/golden.py
