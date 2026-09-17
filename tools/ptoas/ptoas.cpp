@@ -321,7 +321,8 @@ llvm::cl::opt<mlir::pto::BishengSchedulerMode> mlir::pto::bishengSchedulerMode(
     llvm::cl::value_desc("auto|on|off"),
     llvm::cl::values(
         clEnumValN(
-            BishengSchedulerMode::Auto, "auto", "Retry off for nonzero VF stack; select the smaller stack (default)"),
+            BishengSchedulerMode::Auto, "auto",
+            "Retry off on compilation failure or nonzero VF stack; prefer the smaller stack (default)"),
         clEnumValN(BishengSchedulerMode::On, "on", "Keep Bisheng default scheduling without retry"),
         clEnumValN(BishengSchedulerMode::Off, "off", "Disable Bisheng vector scheduling without retry")),
     llvm::cl::init(BishengSchedulerMode::Auto));

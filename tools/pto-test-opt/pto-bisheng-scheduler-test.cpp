@@ -46,7 +46,25 @@ struct Scenario {
     bool offFails = false;
     bool onFails = false;
     BishengSchedulerMode mode = BishengSchedulerMode::Auto;
+    bool expectedSuccess = true;
 };
+
+bool checkDiagnostics(const Scenario& scenario, llvm::StringRef diagnostics)
+{
+    bool recovered = scenario.onFails && scenario.expectedSuccess;
+    bool onError = scenario.onFails && !recovered;
+    bool expectedOffError = scenario.offFails;
+    bool matched = diagnostics.contains("simulated on failure") == onError;
+    matched &= diagnostics.contains("simulated off failure") == expectedOffError;
+    if (recovered) {
+        matched &= diagnostics.contains("on compilation failed; retrying off");
+        matched &= diagnostics.contains("on compilation failed; selected off");
+    }
+    if (scenario.onFails && scenario.offFails) {
+        matched &= diagnostics.contains("both on and off compilation failed");
+    }
+    return matched;
+}
 
 bool runScenario(const Scenario& scenario)
 {
@@ -63,28 +81,41 @@ bool runScenario(const Scenario& scenario)
     unsigned calls = 0;
     bool validArguments = true;
     std::string retryObject;
-    auto compile = [&scenario, &calls, &validArguments, &retryObject, objectPath](
+    std::string retryLog;
+    auto compile = [&scenario, &calls, &validArguments, &retryObject, &retryLog, objectPath, logPath](
                        bool enabled, bool reportUsage, llvm::StringRef object, llvm::StringRef log,
-                       llvm::raw_ostream&) {
+                       llvm::raw_ostream& diagnostics) {
         ++calls;
         bool automatic = scenario.mode == BishengSchedulerMode::Auto;
         bool expectedOn = scenario.mode != BishengSchedulerMode::Off && calls == 1;
-        validArguments &= enabled == expectedOn && reportUsage == automatic;
+        bool expectedUsage = automatic && (calls == 1 || !scenario.onFails);
+        validArguments &= enabled == expectedOn && reportUsage == expectedUsage;
         if (calls > 1) {
-            validArguments &= object != objectPath;
+            validArguments &= object != objectPath && log != logPath;
             retryObject = object.str();
+            retryLog = log.str();
         }
-        bool written = writeFile(object, enabled ? "on object" : "off object");
+        bool fails = enabled ? scenario.onFails : scenario.offFails;
+        std::string contents = fails ? "partial " : "";
+        contents += enabled ? "on object" : "off object";
+        bool written = writeFile(object, contents);
         written &= writeFile(log, enabled ? scenario.on : scenario.off);
-        return written && !(enabled ? scenario.onFails : scenario.offFails);
+        if (fails) {
+            diagnostics << (enabled ? "simulated on failure\n" : "simulated off failure\n");
+        }
+        return written && !fails;
     };
     std::string diagnostics;
     llvm::raw_string_ostream stream(diagnostics);
     bool result = mlir::pto::compileWithBishengScheduler(scenario.mode, objectPath, logPath, compile, stream);
     auto object = llvm::MemoryBuffer::getFile(objectPath);
-    llvm::StringRef expected = scenario.selectOff ? "off object" : "on object";
+    std::string expected = scenario.expectedSuccess ? "" : "partial ";
+    expected += scenario.selectOff ? "off object" : "on object";
     bool cleaned = retryObject.empty() || !llvm::sys::fs::exists(retryObject);
-    bool passed = result != scenario.onFails && validArguments && cleaned && calls == scenario.expectedCalls &&
+    cleaned &= retryLog.empty() || !llvm::sys::fs::exists(retryLog);
+    bool messages = checkDiagnostics(scenario, diagnostics);
+    bool passed = result == scenario.expectedSuccess && validArguments && cleaned && messages &&
+                  calls == scenario.expectedCalls &&
                   object && object.get()->getBuffer() == expected;
     if (!passed) {
         llvm::errs() << "FAIL: " << scenario.name << "\n" << diagnostics;
@@ -117,9 +148,15 @@ int main()
         {"value overflow", report("kernel", "18446744073709551616"), zero, 1},
         {"sum overflow", report("kernel", "18446744073709551615") + spill, zero, 1},
         {"retry failure keeps on", spill, zero, 2, false, true},
-        {"first failure propagates", spill, zero, 1, false, false, true},
+        {"on failure selects off", spill, zero, 2, true, false, true},
+        {"on failure ignores larger off stack", zero, larger, 2, true, false, true},
+        {"on failure needs no off report", "", "", 2, true, false, true},
+        {"on failure ignores malformed reports", "invalid", "invalid", 2, true, false, true},
+        {"both failures propagate", spill, zero, 2, false, true, true, BishengSchedulerMode::Auto, false},
         {"explicit on", spill, zero, 1, false, false, false, BishengSchedulerMode::On},
         {"explicit off", spill, zero, 1, true, false, false, BishengSchedulerMode::Off},
+        {"explicit on failure does not retry", spill, zero, 1, false, false, true, BishengSchedulerMode::On, false},
+        {"explicit off failure does not retry", spill, zero, 1, true, true, false, BishengSchedulerMode::Off, false},
     };
     bool passed = true;
     for (const Scenario& scenario : scenarios) {

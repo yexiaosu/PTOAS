@@ -101,11 +101,13 @@ Pass 自身默认 `off`。`ptoas` driver 的默认行为是：
 
 `--vpto-scheduler` 控制 VPTO IR 调度，`--bisheng-vec-misched=auto|on|off` 独立控制后续设备 LLVM IR 编译的 Bisheng vector MI 调度策略：
 
-- `auto`（默认）：先保留 Bisheng 默认调度并启用 `--cce-res-usage`；若 SIMD VF 栈大小总和非零，再关闭 Bisheng 调度编译同一份 LLVM IR。只重复 vector device object 编译，不重复 PTOAS lowering、cube 或 host 编译。关闭调度后的栈大小总和严格减小时选择 off，否则保留 on。
+- `auto`（默认）：先保留 Bisheng 默认调度并启用 `--cce-res-usage`；若 on 编译失败，则关闭 Bisheng 调度并停用资源报告，重试同一份 LLVM IR，成功即使用 off 产物，不比较栈大小。若 on 编译成功且 SIMD VF 栈大小总和非零，则关闭调度并保留资源报告重编译，栈大小总和严格减小时选择 off，否则保留 on。两种重试都只重复 vector device object 编译，不重复 PTOAS lowering、cube 或 host 编译。
 - `on`：保留 Bisheng 默认调度，只编译一次，不进行自动回退。
 - `off`：传递 `-mllvm --cce-aicore-vec-misched=0`，只编译一次。
 
 栈大小按 SIMD VF 函数名去重后求和，不计普通外层函数的栈。两份报告必须具有相同的 VF 函数集合；报告缺失、格式错误、重复记录冲突、数值溢出或 off 重编译失败时保留已成功生成的 on 产物，并输出原因。自动模式输出栈大小与最终选择，便于验证决策。栈大小是本策略采用的风险指标，不能据此证明存在 spill 或保证执行 tick 更少。
+
+on 编译失败时，只有 off 重试成功才能恢复编译；两个模式都失败则返回失败并报告两次编译的诊断。成功回退会输出警告和最终选择，不把已恢复的 on 错误作为最终编译错误输出。off 重试使用独立临时产物，失败产物不会被选用。显式 `on`、`off` 及对应旧选项均不触发失败回退。
 
 原有 `--enable-bisheng-vec-misched[=true|false]` 保持兼容：显式 true（包括不带值的开关）等同于 `on`，显式 false 等同于 `off`，均不触发自动选择。不能同时传递新旧选项。以上设置可以与 `--vpto-scheduler=on` 或 `analyze` 独立组合。
 

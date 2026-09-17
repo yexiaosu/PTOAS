@@ -28,6 +28,8 @@ using CompileBishengVariant = llvm::function_ref<bool(
 
 // Auto compares the sum of stack bytes across unique SIMD VF functions.
 // A failed retry or an unusable report leaves the successful on object intact.
+// If the initial on compilation fails, auto retries off without resource
+// reporting and accepts a successful off object without comparing stack sizes.
 bool compileWithBishengScheduler(
     BishengSchedulerMode mode, llvm::StringRef objectPath, llvm::StringRef logPath, CompileBishengVariant compile,
     llvm::raw_ostream& diagnostics);
