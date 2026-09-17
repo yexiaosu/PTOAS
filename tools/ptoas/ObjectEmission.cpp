@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -1102,6 +1103,29 @@ static mlir::LogicalResult applyVPTOLLVMABINames(llvm::Module &module,
   return mlir::success();
 }
 
+static bool isIssue1506DivisionLoop(llvm::Loop *loop) {
+  if (!loop) {
+    return false;
+  }
+  for (llvm::Instruction &instruction : *loop->getHeader()) {
+    auto *compare = llvm::dyn_cast<llvm::ICmpInst>(&instruction);
+    if (!compare) {
+      continue;
+    }
+    bool isLessThan = compare->getPredicate() == llvm::ICmpInst::ICMP_SLT;
+    if (!isLessThan) {
+      continue;
+    }
+    auto *bound = llvm::dyn_cast<llvm::ConstantInt>(compare->getOperand(1));
+    bool isInduction = llvm::isa<llvm::PHINode>(compare->getOperand(0));
+    bool isTwo = bound && bound->equalsInt(2);
+    if (isTwo && isInduction) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool disableIssue1506LICM(llvm::Module &module,
                                  llvm::raw_ostream &diagnostics) {
   unsigned tagged = 0;
@@ -1119,7 +1143,7 @@ static bool disableIssue1506LICM(llvm::Module &module,
         continue;
       }
       llvm::Loop *loop = loops.getLoopFor(instruction.getParent());
-      if (loop) {
+      if (isIssue1506DivisionLoop(loop)) {
         targets.insert(loop);
       }
     }
