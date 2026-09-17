@@ -66,6 +66,89 @@ bool checkDiagnostics(const Scenario& scenario, llvm::StringRef diagnostics)
     return matched;
 }
 
+// Records the compile callback arguments of one scenario run and writes the requested object and log files.
+class ScenarioCompiler {
+public:
+    ScenarioCompiler(const Scenario& scenario, llvm::StringRef objectPath, llvm::StringRef logPath)
+        : scenario(&scenario), originalObject(objectPath), originalLog(logPath)
+    {
+    }
+
+    bool operator()(bool enabled, bool reportUsage, llvm::StringRef object, llvm::StringRef log,
+                    llvm::raw_ostream& diagnostics)
+    {
+        ++calls;
+        checkArguments(enabled, reportUsage, object, log);
+        bool fails = enabled ? scenario->onFails : scenario->offFails;
+        bool written = writeVariant(enabled, object, log, fails, diagnostics);
+        return written && !fails;
+    }
+
+    unsigned callCount() const
+    {
+        return calls;
+    }
+
+    bool argumentsValid() const
+    {
+        return validArguments;
+    }
+
+    bool removedRetryFiles() const
+    {
+        bool removed = retryObject.empty() || !llvm::sys::fs::exists(retryObject);
+        removed &= retryLog.empty() || !llvm::sys::fs::exists(retryLog);
+        return removed;
+    }
+
+private:
+    void checkArguments(bool enabled, bool reportUsage, llvm::StringRef object, llvm::StringRef log)
+    {
+        bool automatic = scenario->mode == BishengSchedulerMode::Auto;
+        bool expectedOn = scenario->mode != BishengSchedulerMode::Off && calls == 1;
+        bool expectedUsage = automatic && (calls == 1 || !scenario->onFails);
+        validArguments &= enabled == expectedOn && reportUsage == expectedUsage;
+        if (calls > 1) {
+            validArguments &= object != originalObject && log != originalLog;
+            retryObject = object.str();
+            retryLog = log.str();
+        }
+    }
+
+    bool writeVariant(bool enabled, llvm::StringRef object, llvm::StringRef log, bool fails,
+                      llvm::raw_ostream& diagnostics) const
+    {
+        std::string contents = fails ? "partial " : "";
+        contents += enabled ? "on object" : "off object";
+        bool written = writeFile(object, contents);
+        written &= writeFile(log, enabled ? scenario->on : scenario->off);
+        if (fails) {
+            diagnostics << (enabled ? "simulated on failure\n" : "simulated off failure\n");
+        }
+        return written;
+    }
+
+    const Scenario* scenario;
+    llvm::StringRef originalObject;
+    llvm::StringRef originalLog;
+    unsigned calls = 0;
+    bool validArguments = true;
+    std::string retryObject;
+    std::string retryLog;
+};
+
+bool verifyScenario(const Scenario& scenario, const ScenarioCompiler& compiler, llvm::StringRef objectPath,
+                    llvm::StringRef diagnostics, bool result)
+{
+    auto object = llvm::MemoryBuffer::getFile(objectPath);
+    std::string expected = scenario.expectedSuccess ? "" : "partial ";
+    expected += scenario.selectOff ? "off object" : "on object";
+    bool messages = checkDiagnostics(scenario, diagnostics);
+    return result == scenario.expectedSuccess && compiler.argumentsValid() && compiler.removedRetryFiles() &&
+           messages && compiler.callCount() == scenario.expectedCalls && object &&
+           object.get()->getBuffer() == expected;
+}
+
 bool runScenario(const Scenario& scenario)
 {
     llvm::SmallString<128> objectPath;
@@ -78,45 +161,11 @@ bool runScenario(const Scenario& scenario)
         return false;
     }
     llvm::FileRemover logCleanup(logPath);
-    unsigned calls = 0;
-    bool validArguments = true;
-    std::string retryObject;
-    std::string retryLog;
-    auto compile = [&scenario, &calls, &validArguments, &retryObject, &retryLog, objectPath, logPath](
-                       bool enabled, bool reportUsage, llvm::StringRef object, llvm::StringRef log,
-                       llvm::raw_ostream& diagnostics) {
-        ++calls;
-        bool automatic = scenario.mode == BishengSchedulerMode::Auto;
-        bool expectedOn = scenario.mode != BishengSchedulerMode::Off && calls == 1;
-        bool expectedUsage = automatic && (calls == 1 || !scenario.onFails);
-        validArguments &= enabled == expectedOn && reportUsage == expectedUsage;
-        if (calls > 1) {
-            validArguments &= object != objectPath && log != logPath;
-            retryObject = object.str();
-            retryLog = log.str();
-        }
-        bool fails = enabled ? scenario.onFails : scenario.offFails;
-        std::string contents = fails ? "partial " : "";
-        contents += enabled ? "on object" : "off object";
-        bool written = writeFile(object, contents);
-        written &= writeFile(log, enabled ? scenario.on : scenario.off);
-        if (fails) {
-            diagnostics << (enabled ? "simulated on failure\n" : "simulated off failure\n");
-        }
-        return written && !fails;
-    };
+    ScenarioCompiler compiler(scenario, objectPath, logPath);
     std::string diagnostics;
     llvm::raw_string_ostream stream(diagnostics);
-    bool result = mlir::pto::compileWithBishengScheduler(scenario.mode, objectPath, logPath, compile, stream);
-    auto object = llvm::MemoryBuffer::getFile(objectPath);
-    std::string expected = scenario.expectedSuccess ? "" : "partial ";
-    expected += scenario.selectOff ? "off object" : "on object";
-    bool cleaned = retryObject.empty() || !llvm::sys::fs::exists(retryObject);
-    cleaned &= retryLog.empty() || !llvm::sys::fs::exists(retryLog);
-    bool messages = checkDiagnostics(scenario, diagnostics);
-    bool passed = result == scenario.expectedSuccess && validArguments && cleaned && messages &&
-                  calls == scenario.expectedCalls &&
-                  object && object.get()->getBuffer() == expected;
+    bool result = mlir::pto::compileWithBishengScheduler(scenario.mode, objectPath, logPath, compiler, stream);
+    bool passed = verifyScenario(scenario, compiler, objectPath, diagnostics, result);
     if (!passed) {
         llvm::errs() << "FAIL: " << scenario.name << "\n" << diagnostics;
     }
