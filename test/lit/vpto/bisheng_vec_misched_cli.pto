@@ -10,6 +10,7 @@
 // RUN: ptoas --enable-bisheng-vec-misched --help > /dev/null
 // RUN: ptoas --enable-bisheng-vec-misched=false --help > /dev/null
 
+// CHECK: Retry off on compilation failure or nonzero VF stack
 // CHECK: --enable-bisheng-vec-misched
 // CHECK-SAME: Use Bisheng's default vector MI scheduler behavior for VPTO device compilation instead of explicitly disabling the scheduler
 

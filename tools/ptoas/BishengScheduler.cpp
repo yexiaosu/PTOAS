@@ -89,6 +89,15 @@ bool sameFunctions(const StackUsage& on, const StackUsage& off)
     return true;
 }
 
+bool selectOffObject(llvm::StringRef offObject, llvm::StringRef output, llvm::raw_ostream& diagnostics)
+{
+    if (std::error_code error = llvm::sys::fs::copy_file(offObject, output)) {
+        diagnostics << "Error: cannot select Bisheng off object: " << error.message() << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool compareAndSelect(
     const StackUsage& on, llvm::StringRef offLog, llvm::StringRef offObject, llvm::StringRef output,
     llvm::raw_ostream& diagnostics)
@@ -103,37 +112,52 @@ bool compareAndSelect(
     diagnostics << "Bisheng scheduler auto: SIMD VF stack bytes on=" << on.total << ", off=" << off->total
                 << "; selected " << (selectOff ? "off" : "on") << ".\n";
     if (selectOff) {
-        if (std::error_code error = llvm::sys::fs::copy_file(offObject, output)) {
-            diagnostics << "Error: cannot select Bisheng off object: " << error.message() << "\n";
-            return false;
-        }
+        return selectOffObject(offObject, output, diagnostics);
     }
     return true;
 }
 
+bool reportRetrySetupFailure(std::error_code error, bool keepOn, llvm::raw_ostream& diagnostics)
+{
+    diagnostics << "Bisheng scheduler auto: " << error.message()
+                << (keepOn ? "; keeping on.\n" : "; cannot retry off.\n");
+    return keepOn;
+}
+
 bool retryWithoutScheduler(
-    const StackUsage& on, llvm::StringRef objectPath, mlir::pto::CompileBishengVariant compile,
+    const StackUsage* on, llvm::StringRef objectPath, mlir::pto::CompileBishengVariant compile,
     llvm::raw_ostream& diagnostics)
 {
+    bool keepOn = on != nullptr;
     llvm::SmallString<128> offObject;
     llvm::SmallString<128> offLog;
     if (std::error_code error = llvm::sys::fs::createTemporaryFile("ptoas-bisheng-off", "o", offObject)) {
-        diagnostics << "Bisheng scheduler auto: " << error.message() << "; keeping on.\n";
-        return true;
+        return reportRetrySetupFailure(error, keepOn, diagnostics);
     }
     llvm::FileRemover objectCleanup(offObject);
     if (std::error_code error = llvm::sys::fs::createTemporaryFile("ptoas-bisheng-off", "log", offLog)) {
-        diagnostics << "Bisheng scheduler auto: " << error.message() << "; keeping on.\n";
-        return true;
+        return reportRetrySetupFailure(error, keepOn, diagnostics);
     }
     llvm::FileRemover logCleanup(offLog);
     std::string retryErrors;
     llvm::raw_string_ostream retryDiagnostics(retryErrors);
-    if (!compile(false, true, offObject, offLog, retryDiagnostics)) {
-        diagnostics << "Warning: Bisheng scheduler auto retry failed; keeping on.\n" << retryErrors;
-        return true;
+    // After an on failure there is no stack report to compare, so a successful
+    // off compile is sufficient and does not need resource-reporting support.
+    if (!compile(false, keepOn, offObject, offLog, retryDiagnostics)) {
+        diagnostics << (keepOn ? "Warning: Bisheng scheduler auto retry failed; keeping on.\n"
+                               : "Error: Bisheng scheduler auto: both on and off compilation failed.\n")
+                    << "Bisheng off compilation diagnostics:\n" << retryErrors;
+        return keepOn;
     }
-    return compareAndSelect(on, offLog, offObject, objectPath, diagnostics);
+    diagnostics << retryErrors;
+    if (on) {
+        return compareAndSelect(*on, offLog, offObject, objectPath, diagnostics);
+    }
+    if (!selectOffObject(offObject, objectPath, diagnostics)) {
+        return false;
+    }
+    diagnostics << "Bisheng scheduler auto: on compilation failed; selected off.\n";
+    return true;
 }
 } // namespace
 
@@ -142,12 +166,20 @@ bool mlir::pto::compileWithBishengScheduler(
     llvm::raw_ostream& diagnostics)
 {
     bool automatic = mode == BishengSchedulerMode::Auto;
-    if (!compile(mode != BishengSchedulerMode::Off, automatic, objectPath, logPath, diagnostics)) {
-        return false;
-    }
     if (!automatic) {
-        return true;
+        return compile(mode != BishengSchedulerMode::Off, false, objectPath, logPath, diagnostics);
     }
+    std::string onMessages;
+    llvm::raw_string_ostream onDiagnostics(onMessages);
+    if (!compile(true, true, objectPath, logPath, onDiagnostics)) {
+        diagnostics << "Warning: Bisheng scheduler auto: on compilation failed; retrying off.\n";
+        bool recovered = retryWithoutScheduler(nullptr, objectPath, compile, diagnostics);
+        if (!recovered) {
+            diagnostics << "Bisheng on compilation diagnostics:\n" << onMessages;
+        }
+        return recovered;
+    }
+    diagnostics << onMessages;
     auto on = readStackUsage(logPath);
     if (!on) {
         diagnostics << "Bisheng scheduler auto: SIMD VF stack report unavailable; "
@@ -159,5 +191,5 @@ bool mlir::pto::compileWithBishengScheduler(
                        "selected on without retry.\n";
         return true;
     }
-    return retryWithoutScheduler(*on, objectPath, compile, diagnostics);
+    return retryWithoutScheduler(&*on, objectPath, compile, diagnostics);
 }
