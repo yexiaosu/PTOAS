@@ -17,6 +17,11 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -43,6 +48,12 @@ enum class BishengVFAutoSyncMode {
   Fused,
   Global,
 };
+
+// Diagnostic controls confined to the issue-1506 simulator test branch.
+static llvm::cl::opt<bool> issue1506DisableLICM(
+    "test-issue1506-disable-licm", llvm::cl::Hidden, llvm::cl::init(false));
+static llvm::cl::opt<std::string> issue1506LLVMOutput(
+    "test-issue1506-llvm-output", llvm::cl::Hidden, llvm::cl::init(""));
 
 static llvm::cl::opt<bool> enableSimtFastMath(
     "simt-fastmath",
@@ -1091,6 +1102,44 @@ static mlir::LogicalResult applyVPTOLLVMABINames(llvm::Module &module,
   return mlir::success();
 }
 
+static bool disableIssue1506LICM(llvm::Module &module,
+                                 llvm::raw_ostream &diagnostics) {
+  unsigned tagged = 0;
+  for (llvm::Function &function : module) {
+    if (function.isDeclaration()) {
+      continue;
+    }
+    llvm::DominatorTree dominators(function);
+    llvm::LoopInfo loops(dominators);
+    llvm::SmallPtrSet<llvm::Loop *, 4> targets;
+    for (llvm::Instruction &instruction : llvm::instructions(function)) {
+      auto *call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+      llvm::Function *callee = call ? call->getCalledFunction() : nullptr;
+      if (!callee || !callee->getName().starts_with("llvm.hivm.vdiv.")) {
+        continue;
+      }
+      llvm::Loop *loop = loops.getLoopFor(instruction.getParent());
+      if (loop) {
+        targets.insert(loop);
+      }
+    }
+    for (llvm::Loop *loop : targets) {
+      if (loop->getLoopID()) {
+        diagnostics << "Error: expected an unannotated issue-1506 loop.\n";
+        return false;
+      }
+      auto &context = module.getContext();
+      auto *hint = llvm::MDNode::get(context, llvm::MDString::get(context, "llvm.licm.disable"));
+      auto *id = llvm::MDNode::getDistinct(context, {nullptr, hint});
+      id->replaceOperandWith(0, id);
+      loop->setLoopID(id);
+      ++tagged;
+    }
+  }
+  diagnostics << "Issue-1506 LICM ablation: tagged " << tagged << " loop(s).\n";
+  return tagged == 1;
+}
+
 mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
     llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
     const CANNToolchain &toolchain, llvm::StringRef stderrPath,
@@ -1102,8 +1151,16 @@ mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
           diagOS))) {
     return failure();
   }
+  if (issue1506DisableLICM && !disableIssue1506LICM(module, diagOS)) {
+    return failure();
+  }
   if (failed(writeLLVMModule(module, llPath, diagOS))) {
     return failure();
+  }
+  if (!issue1506LLVMOutput.empty()) {
+    if (failed(writeLLVMModule(module, issue1506LLVMOutput, diagOS))) {
+      return failure();
+    }
   }
   return compileDeviceLLVMToObject(llPath, outObjPath,
                                    resolveTargetCPU(module,
