@@ -20,6 +20,10 @@ namespace mlir::pto {
 
 enum class BishengSchedulerMode { Auto, On, Off };
 
+// Only vector targets use auto selection. Explicit on also preserves the
+// toolchain default on cube; auto/off keep cube's historical disabled mode.
+BishengSchedulerMode getBishengSchedulerModeForTarget(BishengSchedulerMode mode, bool vectorTarget);
+
 // The callback compiles the same device LLVM IR, changing only scheduling,
 // resource reporting and output paths. It must not run lowering or host builds.
 using CompileBishengVariant = llvm::function_ref<bool(

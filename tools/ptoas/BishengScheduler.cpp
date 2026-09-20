@@ -32,7 +32,8 @@ bool addUsageLine(llvm::StringRef line, StackUsage& usage)
     auto [bytes, remainder] = properties.trim().split(" bytes");
     uint64_t size = 0;
     bool invalidNumber = bytes.getAsInteger(10, size);
-    bool invalidFields = name.trim().empty() || remainder.empty();
+    bool invalidFields = name.trim().empty() || !properties.contains(" bytes") ||
+                         (!remainder.empty() && !remainder.starts_with(","));
     if (invalidFields || invalidNumber) {
         return false;
     }
@@ -124,6 +125,23 @@ bool reportRetrySetupFailure(std::error_code error, bool keepOn, llvm::raw_ostre
     return keepOn;
 }
 
+void reportRecoveredFailure(llvm::StringRef messages, llvm::raw_ostream& diagnostics)
+{
+    llvm::StringRef summary = messages.trim().split('\n').first;
+    while (!messages.empty()) {
+        auto [line, tail] = messages.split('\n');
+        messages = tail;
+        bool failureLine = line.contains("error:") || line.contains("LLVM ERROR") || line.contains("Assertion");
+        if (failureLine) {
+            summary = line.trim();
+            break;
+        }
+    }
+    if (!summary.empty()) {
+        diagnostics << "Warning: recovered Bisheng on compilation failure: " << summary << "\n";
+    }
+}
+
 bool retryWithoutScheduler(
     const StackUsage* on, llvm::StringRef objectPath, mlir::pto::CompileBishengVariant compile,
     llvm::raw_ostream& diagnostics)
@@ -161,6 +179,15 @@ bool retryWithoutScheduler(
 }
 } // namespace
 
+mlir::pto::BishengSchedulerMode mlir::pto::getBishengSchedulerModeForTarget(
+    BishengSchedulerMode mode, bool vectorTarget)
+{
+    if (vectorTarget || mode == BishengSchedulerMode::On) {
+        return mode;
+    }
+    return BishengSchedulerMode::Off;
+}
+
 bool mlir::pto::compileWithBishengScheduler(
     BishengSchedulerMode mode, llvm::StringRef objectPath, llvm::StringRef logPath, CompileBishengVariant compile,
     llvm::raw_ostream& diagnostics)
@@ -174,7 +201,9 @@ bool mlir::pto::compileWithBishengScheduler(
     if (!compile(true, true, objectPath, logPath, onDiagnostics)) {
         diagnostics << "Warning: Bisheng scheduler auto: on compilation failed; retrying off.\n";
         bool recovered = retryWithoutScheduler(nullptr, objectPath, compile, diagnostics);
-        if (!recovered) {
+        if (recovered) {
+            reportRecoveredFailure(onMessages, diagnostics);
+        } else {
             diagnostics << "Bisheng on compilation diagnostics:\n" << onMessages;
         }
         return recovered;

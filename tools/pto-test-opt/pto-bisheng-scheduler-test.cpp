@@ -6,6 +6,9 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+// These fake-compile tests cover decision branches, report parsing and cleanup.
+// They do not validate the real Bisheng command line or reporting contract;
+// test/vpto/scripts/check_bisheng_scheduler.py exercises the real SIM runner.
 #include "BishengScheduler.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -52,13 +55,14 @@ struct Scenario {
 bool checkDiagnostics(const Scenario& scenario, llvm::StringRef diagnostics)
 {
     bool recovered = scenario.onFails && scenario.expectedSuccess;
-    bool onError = scenario.onFails && !recovered;
+    bool onError = scenario.onFails;
     bool expectedOffError = scenario.offFails;
     bool matched = diagnostics.contains("simulated on failure") == onError;
     matched &= diagnostics.contains("simulated off failure") == expectedOffError;
     if (recovered) {
         matched &= diagnostics.contains("on compilation failed; retrying off");
         matched &= diagnostics.contains("on compilation failed; selected off");
+        matched &= diagnostics.contains("recovered Bisheng on compilation failure:");
     }
     if (scenario.onFails && scenario.offFails) {
         matched &= diagnostics.contains("both on and off compilation failed");
@@ -188,7 +192,13 @@ int main()
     std::string larger = report("kernel.vector.thread", "256");
     std::string scalar = "[BISHENG] Function properties for outer: Stack size: "
                          "4096 bytes, Used register number: 20\n";
+    std::string minimal = "[BISHENG] SIMD VF Function properties for kernel.vector.thread: Stack size: 0 bytes";
     Scenario scenarios[] = {
+        {"stack-only report", minimal, spill, 1},
+        {"stack-only off report", spill, minimal, 2, true},
+        {"unknown trailing fields", minimal + ", FutureField: 42\n", spill, 1},
+        {"missing bytes unit", "[BISHENG] SIMD VF Function properties for kernel: Stack size: 0", zero, 1},
+        {"invalid bytes suffix", minimal + "garbage", zero, 1},
         {"zero skips retry", zero + scalar, spill, 1},
         {"smaller selects off", spill, zero, 2, true},
         {"equal keeps on", spill, spill, 2},
@@ -218,6 +228,11 @@ int main()
     bool passed = true;
     for (const Scenario& scenario : scenarios) {
         passed &= runScenario(scenario);
+    }
+    for (auto mode : {BishengSchedulerMode::Auto, BishengSchedulerMode::On, BishengSchedulerMode::Off}) {
+        auto cubeMode = mode == BishengSchedulerMode::On ? mode : BishengSchedulerMode::Off;
+        passed &= mlir::pto::getBishengSchedulerModeForTarget(mode, true) == mode;
+        passed &= mlir::pto::getBishengSchedulerModeForTarget(mode, false) == cubeMode;
     }
     if (!passed) {
         return 1;

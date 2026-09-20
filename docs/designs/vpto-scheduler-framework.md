@@ -99,11 +99,17 @@ Pass 自身默认 `off`。`ptoas` driver 的默认行为是：
 
 `on` 默认只报告跳过调度的情况。`--vpto-scheduler-trace` 或 Pass 选项 `trace=true` 会先输出与 `analyze` 相同的静态分析报告，再输出最终顺序、逻辑周期、峰值压力和工作量计数；trace 只能配合 `on`。
 
+本次变更将 Bisheng vector 调度默认值从关闭改为 `auto`：旧默认追加 `-mllvm --cce-aicore-vec-misched=0`，新默认首次编译不追加该禁用选项，跟随 Bisheng 默认调度。即使不修改调用参数，生成的设备代码也可能变化。要恢复旧默认行为，请显式指定 `--bisheng-vec-misched=off`（旧选项 `--enable-bisheng-vec-misched=false` 仍兼容）。
+
 `--vpto-scheduler` 控制 VPTO IR 调度，`--bisheng-vec-misched=auto|on|off` 独立控制后续设备 LLVM IR 编译的 Bisheng vector MI 调度策略：
 
 - `auto`（默认）：先保留 Bisheng 默认调度并请求资源报告；若 on 编译失败，则关闭 Bisheng 调度并停用资源报告，重试同一份 LLVM IR，成功即使用 off 产物，不比较栈大小。若 on 编译成功且 SIMD VF 栈大小总和非零，则关闭调度并保留资源报告重编译，栈大小总和严格减小时选择 off，否则保留 on。两种重试都只重复 vector device object 编译，不重复 PTOAS lowering、cube 或 host 编译。
 - `on`：保留 Bisheng 默认调度，只编译一次，不进行自动回退。
 - `off`：传递 `-mllvm --cce-aicore-vec-misched=0`，只编译一次。
+
+cube 不参与 auto 比较或重试：显式 `on`（含旧选项 true）不追加调度禁用参数，`auto`/`off` 对 cube 保持旧默认的禁用参数。
+
+编译成本：on 成功且报告中的 SIMD VF 栈总和非零时，会额外编译一次 vector device object；栈为零或 on 成功但报告不可用时不会重编译。on 失败时也会尝试一次 off。额外耗时约为一次 vector 设备编译，取决于 kernel 和工具链；总编译时间不能简单视为翻倍，因为 PTOAS lowering、cube 和 host 部分不重复。栈指标只用于选产物，不能用来预测这个时间成本。
 
 资源报告通过 `-mllvm --cce-res-usage` 请求，只用于 auto 首次 on 编译和栈大小比较所需的 off 重编译。显式 `on`、`off` 以及 on 编译失败后的 off 恢复重试均不携带该选项；cube 编译也不请求报告。
 
@@ -111,9 +117,17 @@ Pass 自身默认 `off`。`ptoas` driver 的默认行为是：
 
 栈大小按 SIMD VF 函数名去重后求和，不计普通外层函数的栈。两份报告必须具有相同的 VF 函数集合；报告缺失、格式错误、重复记录冲突、数值溢出或 off 重编译失败时保留已成功生成的 on 产物，并以 `Warning` 输出原因。自动模式输出栈大小与最终选择，便于验证决策。栈大小是本策略采用的风险指标，不能据此证明存在 spill 或保证执行 tick 更少。
 
-on 编译失败时，只有 off 重试成功才能恢复编译；两个模式都失败则返回失败并报告两次编译的诊断。成功回退会输出警告和最终选择，不把已恢复的 on 错误作为最终编译错误输出。off 重试使用独立临时产物，失败产物不会被选用。显式 `on`、`off` 及对应旧选项均不触发失败回退。
+以下是 CANN 9.1.0、Bisheng 2026-07-01 构建在 #1506 上实际输出的一行报告；解析只要求函数名、非负栈字节数及 `bytes` 单位，逗号后的字段可选，且不依赖其字段名：
+
+```text
+[BISHENG] SIMD VF Function properties for _attn_rel_h_rel_w_kernel_mix_aiv.vector.thread.1: Stack size: 128 bytes, VReg number: 13, MaskReg(PReg) number: 7
+```
+
+on 编译失败时，只有 off 重试成功才能恢复编译；两个模式都失败则返回失败并报告两次编译的诊断。成功回退会输出警告、最终选择和 on 失败原因摘要；两个模式都失败时保留完整诊断。off 重试使用独立临时产物，失败产物不会被选用。显式 `on`、`off` 及对应旧选项均不触发失败回退。
 
 原有 `--enable-bisheng-vec-misched[=true|false]` 保持兼容：显式 true（包括不带值的开关）等同于 `on`，显式 false 等同于 `off`，均不触发自动选择。不能同时传递新旧选项。以上设置可以与 `--vpto-scheduler=on` 或 `analyze` 独立组合。
+
+真实工具链回归使用 `test/vpto/scripts/check_bisheng_scheduler.py --work-space <新目录> --case micro-op/dsa-sfu/vmula --expect zero`，需要设置当前构建的 `PTOAS_BIN`、CANN 和 SIM 环境。脚本调用标准 SIM runner 并要求严格比较通过，在固定 PTOAS 调度设置下分别测试 Bisheng off/on/auto，同时记录实际决策、tick 和完整 PTOAS fatobj 编译耗时；`--expect compared` 可用于要求发生真实的栈比较，旧工具链可用 `--expect unavailable` 明确验证降级，不能以降级冒充成功获取报告。纯决策单测不覆盖 Bisheng 参数支持和真实报告接口。
 
 ### 可选的高压重物化
 

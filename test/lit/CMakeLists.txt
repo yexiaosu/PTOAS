@@ -28,6 +28,7 @@ set(PTOIR_TEST_DEPENDS
   ptoas_runtime_deps
   pto-test-opt
   pto-vpto-scheduler-tracker-test
+  pto-bisheng-scheduler-test
 )
 
 # Installed LLVM packages do not export the build-tree targets for these test
