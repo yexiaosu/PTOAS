@@ -129,6 +129,16 @@ on 编译失败时，只有 off 重试成功才能恢复编译；两个模式都
 
 真实工具链回归使用 `test/vpto/scripts/check_bisheng_scheduler.py --work-space <新目录> --case micro-op/dsa-sfu/vmula --expect zero`，需要设置当前构建的 `PTOAS_BIN`、CANN 和 SIM 环境。脚本调用标准 SIM runner 并要求严格比较通过，在固定 PTOAS 调度设置下分别测试 Bisheng off/on/auto，同时记录实际决策、tick 和完整 PTOAS fatobj 编译耗时；`--expect compared` 可用于要求发生真实的栈比较，旧工具链可用 `--expect unavailable` 明确验证降级，不能以降级冒充成功获取报告。纯决策单测不覆盖 Bisheng 参数支持和真实报告接口。
 
+2026-09-20 在 CANN 9.1.0（Bisheng 2026-07-01 构建）上完成真实工具链验证：vadd、vmula 各执行 off/on/auto 三组，均严格比较通过，auto 获得零栈报告；#1506 最小复现（实验分支中的 `kernels/issue-1506-vec-misched-minimal`）每组重复三次，也全部通过。下表固定 PTOAS scheduler 为 on、remat 为 false，仅改变 Bisheng 模式，数据为三次中位数。编译耗时测量完整 PTOAS fatobj 生成，包含 lowering 和内置设备/host stub 编译，不包含后续测试 host runner 构建及 SIM。
+
+| Bisheng 模式 | 总 ticks | PTOAS fatobj 编译耗时 |
+|---|---:|---:|
+| off（旧默认） | 12009 | 1.416 s |
+| on | 11946 | 1.466 s |
+| auto（新默认） | 11953 | 1.616 s |
+
+本例 auto 每次都读到 on=128 B、off=128 B，完成两次 vector 编译后选择 on；相对旧默认 off，tick 降低约 0.47%，完整编译耗时增加约 0.20 s（14.1%）。单次测量范围分别为 off 12009–12010、on 11944–11956、auto 11944–11956 ticks，on 与 auto 的中位数差异落在本次波动范围内。此结果仅评估该复现中切换 Bisheng 的影响；“两个都关闭”与“PTOAS on + Bisheng auto”的对照同时改变两个设置，不能将其全部收益归因于 Bisheng。
+
 ### 可选的高压重物化
 
 `--vpto-scheduler-remat` 是 `ptoas` driver 的命令行名称，对应 `pto-vpto-scheduler` Pass 的 `rematerialize=true` 选项。独立 Pass 选项默认关闭；`ptoas` driver 在 A5 的有效 scheduler 模式为 `on` 且用户没有显式设置 remat 选项时默认启用，可用 `--vpto-scheduler-remat=false` 单独关闭。启用后，每个函数执行一次“首次调度 → 高压分析 → 有界重物化 → 完整重建 DAG/存活性/压力信息 → 第二次调度”；不会循环尝试，也不会切换到 `off`。
