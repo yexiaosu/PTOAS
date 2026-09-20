@@ -63,6 +63,14 @@ bool checkDiagnostics(const Scenario& scenario, llvm::StringRef diagnostics)
     if (scenario.onFails && scenario.offFails) {
         matched &= diagnostics.contains("both on and off compilation failed");
     }
+    // Auto keeps the on object whenever the reports cannot be compared. That
+    // degraded decision must stay visible as a warning: a run that never printed
+    // a compared stack total must not silently look like a successful selection.
+    bool automatic = scenario.mode == BishengSchedulerMode::Auto;
+    bool comparedReports = diagnostics.contains("SIMD VF stack bytes on=");
+    if (automatic && !scenario.onFails && !comparedReports) {
+        matched &= diagnostics.contains("Warning:");
+    }
     return matched;
 }
 

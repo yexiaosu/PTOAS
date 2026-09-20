@@ -104,7 +104,7 @@ bool compareAndSelect(
 {
     auto off = readStackUsage(offLog);
     if (!off || !sameFunctions(on, *off)) {
-        diagnostics << "Bisheng scheduler auto: off report unavailable or "
+        diagnostics << "Warning: Bisheng scheduler auto: off SIMD VF stack report unavailable or "
                        "incomparable; keeping on.\n";
         return true;
     }
@@ -119,8 +119,8 @@ bool compareAndSelect(
 
 bool reportRetrySetupFailure(std::error_code error, bool keepOn, llvm::raw_ostream& diagnostics)
 {
-    diagnostics << "Bisheng scheduler auto: " << error.message()
-                << (keepOn ? "; keeping on.\n" : "; cannot retry off.\n");
+    diagnostics << (keepOn ? "Warning: Bisheng scheduler auto: " : "Error: Bisheng scheduler auto: ")
+                << error.message() << (keepOn ? "; keeping on.\n" : "; cannot retry off.\n");
     return keepOn;
 }
 
@@ -144,7 +144,7 @@ bool retryWithoutScheduler(
     // After an on failure there is no stack report to compare, so a successful
     // off compile is sufficient and does not need resource-reporting support.
     if (!compile(false, keepOn, offObject, offLog, retryDiagnostics)) {
-        diagnostics << (keepOn ? "Warning: Bisheng scheduler auto retry failed; keeping on.\n"
+        diagnostics << (keepOn ? "Warning: Bisheng scheduler auto: retry failed; keeping on.\n"
                                : "Error: Bisheng scheduler auto: both on and off compilation failed.\n")
                     << "Bisheng off compilation diagnostics:\n" << retryErrors;
         return keepOn;
@@ -182,8 +182,10 @@ bool mlir::pto::compileWithBishengScheduler(
     diagnostics << onMessages;
     auto on = readStackUsage(logPath);
     if (!on) {
-        diagnostics << "Bisheng scheduler auto: SIMD VF stack report unavailable; "
-                       "keeping on.\n";
+        diagnostics << "Warning: Bisheng scheduler auto: SIMD VF stack report unavailable; "
+                       "keeping on, so auto behaves like --bisheng-vec-misched=on and no "
+                       "stack size is compared. Check that this Bisheng toolchain can emit "
+                       "SIMD VF stack reports with -mllvm --cce-res-usage.\n";
         return true;
     }
     if (on->total == 0) {
