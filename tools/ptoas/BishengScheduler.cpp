@@ -131,7 +131,8 @@ void reportRecoveredFailure(llvm::StringRef messages, llvm::raw_ostream& diagnos
     while (!messages.empty()) {
         auto [line, tail] = messages.split('\n');
         messages = tail;
-        bool failureLine = line.contains("error:") || line.contains("LLVM ERROR") || line.contains("Assertion");
+        bool failureLine = line.contains("error:") || line.contains("LLVM ERROR") ||
+                           line.contains("Assertion") || line.contains("Unknown command line argument");
         if (failureLine) {
             summary = line.trim();
             break;
