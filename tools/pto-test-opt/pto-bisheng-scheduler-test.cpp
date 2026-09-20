@@ -62,7 +62,8 @@ bool checkDiagnostics(const Scenario& scenario, llvm::StringRef diagnostics)
     if (recovered) {
         matched &= diagnostics.contains("on compilation failed; retrying off");
         matched &= diagnostics.contains("on compilation failed; selected off");
-        matched &= diagnostics.contains("recovered Bisheng on compilation failure:");
+        matched &= diagnostics.contains(
+            "recovered Bisheng on compilation failure: bisheng: error: simulated on failure");
     }
     if (scenario.onFails && scenario.offFails) {
         matched &= diagnostics.contains("both on and off compilation failed");
@@ -135,7 +136,9 @@ private:
         bool written = writeFile(object, contents);
         written &= writeFile(log, enabled ? scenario->on : scenario->off);
         if (fails) {
-            diagnostics << (enabled ? "simulated on failure\n" : "simulated off failure\n");
+            diagnostics << (enabled ? "Error: device LLVM compilation failed\nCommand: bisheng ...\n"
+                                      "bisheng: error: simulated on failure\n"
+                                    : "simulated off failure\n");
         }
         return written;
     }
