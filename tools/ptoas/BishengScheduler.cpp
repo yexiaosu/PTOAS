@@ -32,7 +32,8 @@ bool addUsageLine(llvm::StringRef line, StackUsage& usage)
     auto [bytes, remainder] = properties.trim().split(" bytes");
     uint64_t size = 0;
     bool invalidNumber = bytes.getAsInteger(10, size);
-    bool invalidFields = name.trim().empty() || remainder.empty();
+    bool invalidFields = name.trim().empty() || !properties.contains(" bytes") ||
+                         (!remainder.empty() && !remainder.starts_with(","));
     if (invalidFields || invalidNumber) {
         return false;
     }
@@ -104,7 +105,7 @@ bool compareAndSelect(
 {
     auto off = readStackUsage(offLog);
     if (!off || !sameFunctions(on, *off)) {
-        diagnostics << "Bisheng scheduler auto: off report unavailable or "
+        diagnostics << "Warning: Bisheng scheduler auto: off SIMD VF stack report unavailable or "
                        "incomparable; keeping on.\n";
         return true;
     }
@@ -119,9 +120,26 @@ bool compareAndSelect(
 
 bool reportRetrySetupFailure(std::error_code error, bool keepOn, llvm::raw_ostream& diagnostics)
 {
-    diagnostics << "Bisheng scheduler auto: " << error.message()
-                << (keepOn ? "; keeping on.\n" : "; cannot retry off.\n");
+    diagnostics << (keepOn ? "Warning: Bisheng scheduler auto: " : "Error: Bisheng scheduler auto: ")
+                << error.message() << (keepOn ? "; keeping on.\n" : "; cannot retry off.\n");
     return keepOn;
+}
+
+void reportRecoveredFailure(llvm::StringRef messages, llvm::raw_ostream& diagnostics)
+{
+    llvm::StringRef summary = messages.trim().split('\n').first;
+    while (!messages.empty()) {
+        auto [line, tail] = messages.split('\n');
+        messages = tail;
+        bool failureLine = line.contains("error:") || line.contains("LLVM ERROR") || line.contains("Assertion");
+        if (failureLine) {
+            summary = line.trim();
+            break;
+        }
+    }
+    if (!summary.empty()) {
+        diagnostics << "Warning: recovered Bisheng on compilation failure: " << summary << "\n";
+    }
 }
 
 bool retryWithoutScheduler(
@@ -144,7 +162,7 @@ bool retryWithoutScheduler(
     // After an on failure there is no stack report to compare, so a successful
     // off compile is sufficient and does not need resource-reporting support.
     if (!compile(false, keepOn, offObject, offLog, retryDiagnostics)) {
-        diagnostics << (keepOn ? "Warning: Bisheng scheduler auto retry failed; keeping on.\n"
+        diagnostics << (keepOn ? "Warning: Bisheng scheduler auto: retry failed; keeping on.\n"
                                : "Error: Bisheng scheduler auto: both on and off compilation failed.\n")
                     << "Bisheng off compilation diagnostics:\n" << retryErrors;
         return keepOn;
@@ -161,6 +179,15 @@ bool retryWithoutScheduler(
 }
 } // namespace
 
+mlir::pto::BishengSchedulerMode mlir::pto::getBishengSchedulerModeForTarget(
+    BishengSchedulerMode mode, bool vectorTarget)
+{
+    if (vectorTarget || mode == BishengSchedulerMode::On) {
+        return mode;
+    }
+    return BishengSchedulerMode::Off;
+}
+
 bool mlir::pto::compileWithBishengScheduler(
     BishengSchedulerMode mode, llvm::StringRef objectPath, llvm::StringRef logPath, CompileBishengVariant compile,
     llvm::raw_ostream& diagnostics)
@@ -174,7 +201,9 @@ bool mlir::pto::compileWithBishengScheduler(
     if (!compile(true, true, objectPath, logPath, onDiagnostics)) {
         diagnostics << "Warning: Bisheng scheduler auto: on compilation failed; retrying off.\n";
         bool recovered = retryWithoutScheduler(nullptr, objectPath, compile, diagnostics);
-        if (!recovered) {
+        if (recovered) {
+            reportRecoveredFailure(onMessages, diagnostics);
+        } else {
             diagnostics << "Bisheng on compilation diagnostics:\n" << onMessages;
         }
         return recovered;
@@ -182,8 +211,10 @@ bool mlir::pto::compileWithBishengScheduler(
     diagnostics << onMessages;
     auto on = readStackUsage(logPath);
     if (!on) {
-        diagnostics << "Bisheng scheduler auto: SIMD VF stack report unavailable; "
-                       "keeping on.\n";
+        diagnostics << "Warning: Bisheng scheduler auto: SIMD VF stack report unavailable; "
+                       "keeping on, so auto behaves like --bisheng-vec-misched=on and no "
+                       "stack size is compared. Check that this Bisheng toolchain can emit "
+                       "SIMD VF stack reports with -mllvm --cce-res-usage.\n";
         return true;
     }
     if (on->total == 0) {

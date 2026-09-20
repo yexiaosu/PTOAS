@@ -131,8 +131,8 @@ initializeCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
   // Register classes are not interchangeable: consuming a vector while
   // producing a predicate still opens a new predicate live range. Treating
   // any release as relief can hoist live-out masks across a pressure peak.
-  for (auto [index, introduced] : llvm::enumerate(pressure.introduced)) {
-    if (introduced > 0 && pressure.released[index] == 0) {
+  for (auto [introduced, released] : llvm::zip_equal(pressure.introduced, pressure.released)) {
+    if (introduced > 0 && released == 0) {
       candidate.opensPressureFrontier = true;
       break;
     }

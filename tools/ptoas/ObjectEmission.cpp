@@ -569,13 +569,13 @@ static bool compileDeviceLLVMToObject(
             variantArgs.append({"-mllvm", "--cce-aicore-vec-misched=0"});
         }
         if (reportUsage) {
-            variantArgs.push_back("--cce-res-usage");
+            variantArgs.append({"-mllvm", "--cce-res-usage"});
         }
         variantArgs.append({"-c", "-x", "ir", "-", "-o", object.str()});
         return runCommandWithStderr(bishengPath, variantArgs, log, diagnostics, "device LLVM compilation", llPath);
     };
     // The vector scheduler policy never retries cube compilation.
-    auto mode = targetCPU.ends_with("-vec") ? schedulerMode : mlir::pto::BishengSchedulerMode::Off;
+    auto mode = mlir::pto::getBishengSchedulerModeForTarget(schedulerMode, targetCPU.ends_with("-vec"));
     return mlir::pto::compileWithBishengScheduler(mode, outObjPath, stderrPath, compile, diagOS);
 }
 
