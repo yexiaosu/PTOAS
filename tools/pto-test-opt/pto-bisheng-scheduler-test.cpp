@@ -18,6 +18,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
+#include <vector>
 
 using mlir::pto::BishengSchedulerMode;
 
@@ -186,57 +187,86 @@ bool runScenario(const Scenario& scenario)
     }
     return passed;
 }
-} // namespace
 
-int main()
-{
+// Report fixtures shared by every row of the scenario table.
+struct Reports {
     std::string zero = report("kernel.vector.thread", "0");
     std::string spill = report("kernel.vector.thread", "128");
     std::string larger = report("kernel.vector.thread", "256");
     std::string scalar = "[BISHENG] Function properties for outer: Stack size: "
                          "4096 bytes, Used register number: 20\n";
-    std::string minimal = "[BISHENG] SIMD VF Function properties for kernel.vector.thread: Stack size: 0 bytes";
-    Scenario scenarios[] = {
-        {"stack-only report", minimal, spill, 1},
-        {"stack-only off report", spill, minimal, 2, true},
-        {"unknown trailing fields", minimal + ", FutureField: 42\n", spill, 1},
-        {"missing bytes unit", "[BISHENG] SIMD VF Function properties for kernel: Stack size: 0", zero, 1},
-        {"invalid bytes suffix", minimal + "garbage", zero, 1},
-        {"zero skips retry", zero + scalar, spill, 1},
-        {"smaller selects off", spill, zero, 2, true},
-        {"equal keeps on", spill, spill, 2},
-        {"larger keeps on", spill, larger, 2},
-        {"deduplicate reports", spill + spill, spill, 2},
-        {"sum unique VFs", spill + report("other", "256"), larger + report("other", "0"), 2, true},
-        {"different VF set", spill, report("different", "0"), 2},
-        {"missing off VF", spill + report("other", "256"), zero, 2},
-        {"missing on report", scalar, zero, 1},
-        {"missing off report", spill, scalar, 2},
-        {"conflicting duplicate", spill + zero, zero, 1},
-        {"malformed on", report("kernel", "unknown"), zero, 1},
-        {"malformed off", spill, report("kernel.vector.thread", "-1"), 2},
-        {"value overflow", report("kernel", "18446744073709551616"), zero, 1},
-        {"sum overflow", report("kernel", "18446744073709551615") + spill, zero, 1},
-        {"retry failure keeps on", spill, zero, 2, false, true},
-        {"on failure selects off", spill, zero, 2, true, false, true},
-        {"on failure ignores larger off stack", zero, larger, 2, true, false, true},
+    std::string minimal =
+        "[BISHENG] SIMD VF Function properties for kernel.vector.thread: Stack size: 0 bytes";
+};
+
+// One row per selection path: the on/off reports, the expected callback count and the failure flags.
+std::vector<Scenario> buildScenarios(const Reports& reports)
+{
+    return {
+        {"stack-only report", reports.minimal, reports.spill, 1},
+        {"stack-only off report", reports.spill, reports.minimal, 2, true},
+        {"unknown trailing fields", reports.minimal + ", FutureField: 42\n", reports.spill, 1},
+        {"missing bytes unit", "[BISHENG] SIMD VF Function properties for kernel: Stack size: 0",
+         reports.zero, 1},
+        {"invalid bytes suffix", reports.minimal + "garbage", reports.zero, 1},
+        {"zero skips retry", reports.zero + reports.scalar, reports.spill, 1},
+        {"smaller selects off", reports.spill, reports.zero, 2, true},
+        {"equal keeps on", reports.spill, reports.spill, 2},
+        {"larger keeps on", reports.spill, reports.larger, 2},
+        {"deduplicate reports", reports.spill + reports.spill, reports.spill, 2},
+        {"sum unique VFs", reports.spill + report("other", "256"), reports.larger + report("other", "0"), 2, true},
+        {"different VF set", reports.spill, report("different", "0"), 2},
+        {"missing off VF", reports.spill + report("other", "256"), reports.zero, 2},
+        {"missing on report", reports.scalar, reports.zero, 1},
+        {"missing off report", reports.spill, reports.scalar, 2},
+        {"conflicting duplicate", reports.spill + reports.zero, reports.zero, 1},
+        {"malformed on", report("kernel", "unknown"), reports.zero, 1},
+        {"malformed off", reports.spill, report("kernel.vector.thread", "-1"), 2},
+        {"value overflow", report("kernel", "18446744073709551616"), reports.zero, 1},
+        {"sum overflow", report("kernel", "18446744073709551615") + reports.spill, reports.zero, 1},
+        {"retry failure keeps on", reports.spill, reports.zero, 2, false, true},
+        {"on failure selects off", reports.spill, reports.zero, 2, true, false, true},
+        {"on failure ignores larger off stack", reports.zero, reports.larger, 2, true, false, true},
         {"on failure needs no off report", "", "", 2, true, false, true},
         {"on failure ignores malformed reports", "invalid", "invalid", 2, true, false, true},
-        {"both failures propagate", spill, zero, 2, false, true, true, BishengSchedulerMode::Auto, false},
-        {"explicit on", spill, zero, 1, false, false, false, BishengSchedulerMode::On},
-        {"explicit off", spill, zero, 1, true, false, false, BishengSchedulerMode::Off},
-        {"explicit on failure does not retry", spill, zero, 1, false, false, true, BishengSchedulerMode::On, false},
-        {"explicit off failure does not retry", spill, zero, 1, true, true, false, BishengSchedulerMode::Off, false},
+        {"both failures propagate", reports.spill, reports.zero, 2, false, true, true, BishengSchedulerMode::Auto,
+         false},
+        {"explicit on", reports.spill, reports.zero, 1, false, false, false, BishengSchedulerMode::On},
+        {"explicit off", reports.spill, reports.zero, 1, true, false, false, BishengSchedulerMode::Off},
+        {"explicit on failure does not retry", reports.spill, reports.zero, 1, false, false, true,
+         BishengSchedulerMode::On, false},
+        {"explicit off failure does not retry", reports.spill, reports.zero, 1, true, true, false,
+         BishengSchedulerMode::Off, false},
     };
+}
+
+bool runScenarios(const std::vector<Scenario>& scenarios)
+{
     bool passed = true;
     for (const Scenario& scenario : scenarios) {
         passed &= runScenario(scenario);
     }
+    return passed;
+}
+
+// Only auto degrades to off on a cube target; explicit selections are honored as requested.
+bool checkTargetModeMatrix()
+{
+    bool passed = true;
     for (auto mode : {BishengSchedulerMode::Auto, BishengSchedulerMode::On, BishengSchedulerMode::Off}) {
         auto cubeMode = mode == BishengSchedulerMode::On ? mode : BishengSchedulerMode::Off;
         passed &= mlir::pto::getBishengSchedulerModeForTarget(mode, true) == mode;
         passed &= mlir::pto::getBishengSchedulerModeForTarget(mode, false) == cubeMode;
     }
+    return passed;
+}
+} // namespace
+
+int main()
+{
+    Reports reports;
+    bool passed = runScenarios(buildScenarios(reports));
+    passed &= checkTargetModeMatrix();
     if (!passed) {
         return 1;
     }
